@@ -7,3 +7,6 @@ src-tauri/target/
 .env.local
 temp_*
 test-*.png
+diff-*.cjs
+check-*.cjs
+_exe_*
