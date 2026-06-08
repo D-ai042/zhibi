@@ -5,11 +5,13 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:all": "node scripts/auto-git.cjs & vite",
     "build": "vite build",
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "tauri:build": "tauri build",
+    "git:watch": "node scripts/auto-git.cjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.4.0",
