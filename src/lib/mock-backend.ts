@@ -250,7 +250,7 @@ async function realAiComplete(req: AiRequest, apiKey: string, baseUrl: string, m
   ];
 
   try {
-    const url = `${baseUrl.replace(/\/+$/, "")}/v1/chat/completions`;
+    const url = `${baseUrl.replace(/\/+$/, "").replace(/\/v1$/, "")}/v1/chat/completions`;
     const resp = await fetch(url, {
       method: "POST",
       headers: {
@@ -318,12 +318,14 @@ export async function mockAiCompleteStream(
     "Pro/Qwen2.5-7B-Instruct": "硅基流动", "Pro/deepseek-ai/DeepSeek-V3": "硅基流动",
     "mimo-v2.5-pro": "小米", "mimo-v2.5": "小米", "mimo-v2-flash": "小米",
   };
-  let provider = modelToProvider[currentModel] || "";
-  if (!provider && s.apiConfig.provider_models) {
+  // 1. 优先查 provider_models（自定义厂商），再回退到静态内置映射
+  let provider = "";
+  if (s.apiConfig.provider_models) {
     for (const [p, models] of Object.entries(s.apiConfig.provider_models)) {
       if (models.includes(currentModel)) { provider = p; break; }
     }
   }
+  if (!provider) provider = modelToProvider[currentModel] || "";
   const effectiveKey = s.apiConfig.provider_keys?.[provider] || s.apiConfig.api_key || "";
   const effectiveBaseUrl = s.apiConfig.provider_base_urls?.[provider] || s.apiConfig.api_base_url || "";
 
@@ -363,7 +365,7 @@ export async function realAiCompleteStream(
     { role: "user", content: (extra.user_message as string) ?? "" },
   ];
 
-  const url = `${baseUrl.replace(/\/+$/, "")}/v1/chat/completions`;
+  const url = `${baseUrl.replace(/\/+$/, "").replace(/\/v1$/, "")}/v1/chat/completions`;
   // thinking 参数仅 DeepSeek 支持，其他模型发过去会导致 400
   const useThinking = model.startsWith("deepseek");
   const body: Record<string, unknown> = { model, messages, stream: true };
@@ -803,12 +805,14 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
         "Pro/Qwen2.5-7B-Instruct": "硅基流动", "Pro/deepseek-ai/DeepSeek-V3": "硅基流动",
         "mimo-v2.5-pro": "小米", "mimo-v2.5": "小米", "mimo-v2-flash": "小米",
       };
-      let provider = modelToProvider[currentModel] || "";
-      if (!provider && s.apiConfig.provider_models) {
+      // 1. 优先查 provider_models（自定义厂商），再回退到静态内置映射
+      let provider = "";
+      if (s.apiConfig.provider_models) {
         for (const [p, models] of Object.entries(s.apiConfig.provider_models)) {
           if (models.includes(currentModel)) { provider = p; break; }
         }
       }
+      if (!provider) provider = modelToProvider[currentModel] || "";
       const effectiveKey = s.apiConfig.provider_keys[provider] || s.apiConfig.api_key;
       const effectiveBaseUrl = s.apiConfig.provider_base_urls[provider] || s.apiConfig.api_base_url;
 

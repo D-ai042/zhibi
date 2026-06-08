@@ -126,13 +126,14 @@ export const api = {
         "Pro/Qwen2.5-7B-Instruct": "硅基流动", "Pro/deepseek-ai/DeepSeek-V3": "硅基流动",
         "mimo-v2.5-pro": "小米", "mimo-v2.5": "小米", "mimo-v2-flash": "小米",
       };
-      let provider = modelToProvider[currentModel] || "";
-      // 如果静态映射找不到，尝试从 provider_models 反向查找
-      if (!provider && config.provider_models) {
+      // 1. 优先查 provider_models（自定义厂商），再回退到静态内置映射
+      let provider = "";
+      if (config.provider_models) {
         for (const [p, models] of Object.entries(config.provider_models)) {
           if (models.includes(currentModel)) { provider = p; break; }
         }
       }
+      if (!provider) provider = modelToProvider[currentModel] || "";
       const effectiveKey = config.provider_keys[provider] || "";
       const effectiveBaseUrl = config.provider_base_urls[provider] || config.api_base_url;
       if (effectiveKey && effectiveBaseUrl) {

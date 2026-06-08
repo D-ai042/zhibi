@@ -360,9 +360,8 @@ export async function buildProjectContext(input: ContextEngineInput): Promise<Co
     // 直接从 plot-chapters（写作台卷章树）找当前章节，确保能找到
     const plotChapter = findChapterFromPlotChapters(projectId, chapterId);
     // 同时从 api 加载完整的章节列表（用于统计总章数等）
-    const [chapters, volumes, allCharacters, allWorldTerms, styleGuide, storyBible, allEdges] = await Promise.all([
+    const [chapters, allCharacters, allWorldTerms, styleGuide, storyBible, allEdges] = await Promise.all([
         api.listChapters(projectId),
-        api.listVolumes(projectId),
         api.listCharacters(projectId),
         api.listWorldTerms(projectId),
         loadStyleGuide(projectId),
@@ -370,10 +369,9 @@ export async function buildProjectContext(input: ContextEngineInput): Promise<Co
         api.listRelationshipEdges(projectId).catch(() => [] as RelationshipEdge[]),
     ]);
 
-    // 以 plot-chapters 为准构建 currentChapter，保证章节编号和内容一致
+    // 以 plot-chapters 为准构建 currentChapter
     const currentChapter = plotChapter ? { id: plotChapter.id, number: plotChapter.number, title: plotChapter.title, volume_id: "" } as Chapter : chapters.find((c) => c.id === chapterId);
-    const currentVolume = currentChapter ? volumes.find((v) => v.id === currentChapter.volume_id) : null;
-    const volumeName = plotChapter?.volumeName || currentVolume?.title || "";
+    const volumeName = plotChapter?.volumeName || "";
     const recentSummaries = await loadRecentSummaries(projectId, currentChapter);
 
     // P0: 世界观背景

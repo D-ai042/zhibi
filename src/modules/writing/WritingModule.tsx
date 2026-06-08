@@ -692,7 +692,7 @@ export function WritingModule() {
         }
     }, [pid, selectedChapter, editingContent]);
 
-    const handleAiWriteChapter = useCallback(async (wordCount: number, plotDirection: string) => {
+    const handleAiWriteChapter = useCallback(async (wordCount: number, plotDirection: string, refIds?: string[]) => {
         if (!pid || !selectedChapter) return;
         // 防止并发调用：如果上一次 AI 写作还在进行中则忽略
         if (aiWritingRef.current) return;
@@ -1158,37 +1158,41 @@ export function WritingModule() {
                                 </h1>
                                 <p className="text-xs text-slate-400">{selectedVolume?.title || ""}</p>
                             </div>
-                            <div className="flex flex-col">
-                                <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-2 relative">
                                 {aiError && (
                                     <span className="text-xs text-red-500">{aiError}</span>
                                 )}
                                 <button
                                     type="button"
-                                    className="flex items-center justify-center gap-1.5 rounded-md bg-violet-600 w-[72px] py-1.5 text-xs text-white hover:bg-violet-700 disabled:opacity-50"
+                                    className="relative flex items-center gap-1.5 rounded-md bg-violet-600 px-3 py-1.5 text-xs text-white hover:bg-violet-700 disabled:opacity-50"
                                     onClick={() => setWriteDlg({ wordCount: 2000, plotDirection: "" })}
                                     disabled={!selectedChapter || aiWriting}
                                 >
                                     <Sparkles className="h-3.5 w-3.5" />
                                     {aiWriting ? "AI 写作中..." : "AI写文"}
+                                    <span className="absolute top-full left-1/2 -translate-x-1/2 mt-0.5 text-[9px] text-gray-500 whitespace-nowrap">大纲生成初稿</span>
                                 </button>
+                                {/* 去 AI 味按钮 */}
                                 <button
                                     type="button"
                                     onClick={handleHumanize}
                                     disabled={!selectedChapter || !editingContent.trim() || humanizing}
-                                    className="flex items-center justify-center gap-1.5 rounded-md bg-emerald-600 w-[72px] py-1.5 text-xs text-white hover:bg-emerald-700 disabled:opacity-50"
+                                    className="relative flex items-center gap-1.5 rounded-md bg-emerald-600 px-3 py-1.5 text-xs text-white hover:bg-emerald-700 disabled:opacity-50"
                                 >
                                     <Sparkles className="h-3.5 w-3.5" />
                                     {humanizing ? "处理中..." : "AI去味"}
+                                    <span className="absolute top-full left-1/2 -translate-x-1/2 mt-0.5 text-[9px] text-gray-500 whitespace-nowrap">语气自然化</span>
                                 </button>
+                                {/* AI精修按钮 */}
                                 <button
                                     type="button"
                                     onClick={handlePolish}
                                     disabled={!selectedChapter || !editingContent.trim() || polishing}
-                                    className="flex items-center justify-center gap-1.5 rounded-md bg-amber-600 w-[72px] py-1.5 text-xs text-white hover:bg-amber-700 disabled:opacity-50"
+                                    className="relative flex items-center gap-1.5 rounded-md bg-amber-600 px-3 py-1.5 text-xs text-white hover:bg-amber-700 disabled:opacity-50"
                                 >
                                     <Sparkles className="h-3.5 w-3.5" />
                                     {polishing ? "精修中..." : "AI精修"}
+                                    <span className="absolute top-full left-1/2 -translate-x-1/2 mt-0.5 text-[9px] text-gray-500 whitespace-nowrap">精简+段落优化</span>
                                 </button>
                                 <button
                                     type="button"
@@ -1209,7 +1213,7 @@ export function WritingModule() {
                                     <Redo2 className="h-3.5 w-3.5" />
                                 </button>
                                 <button onClick={saveContent}
-                                    className={`rounded-lg px-4 py-1.5 text-xs text-white ${isDirty ? "bg-amber-500 hover:bg-amber-600" : "bg-slate-300 cursor-default"}`}>
+                                    className={`rounded-lg px-4 py-1.5 text-sm text-white ${isDirty ? "bg-amber-500 hover:bg-amber-600" : "bg-slate-300 cursor-default"}`}>
                                     保存
                                 </button>
                                 {/* 定稿按钮（保存 + 更新记忆 + 快照） */}
@@ -1296,12 +1300,6 @@ export function WritingModule() {
                                 }} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50" title="自动排版段落缩进">
                                     <AlignLeft className="h-3.5 w-3.5" />
                                 </button>
-                            </div>
-                            {/* AI按钮下方小字标注 */}
-                            <div className="flex items-center gap-2 pl-0.5 mt-0.5">
-                                <div className="w-[72px] text-center text-[8px] text-slate-700 leading-none">大纲生成初稿</div>
-                                <div className="w-[72px] text-center text-[8px] text-slate-700 leading-none">语气自然化</div>
-                                <div className="w-[72px] text-center text-[8px] text-slate-700 leading-none">精简+段落优化</div>
                             </div>
                         </div>
                         <div className="relative flex-1 min-h-0">

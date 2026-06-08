@@ -409,16 +409,20 @@ function parseWorldTermUpdateBatch(content: string): { title: string; fields: Re
 
 /**
  * 解析 AI 回复中的剧情走向段落创建指令（---PLOT_SEGMENTS--- 块）
+ * 支持 create_segment（段落）、create_edge（连线）、create_beat（细纲）、update_beat（修改细纲）、delete_beat（删除细纲）
  */
 function parsePlotSegments(content: string): {
   segments: { type: "bright" | "dark"; title: string; characters: string; location: string; time: string; chapters: string; event: string }[];
   edges: { sourceTitle: string; targetTitle: string }[];
+  beats: { segmentTitle: string; beat: { id?: string; title: string; characters: string; location: string; time: string; event: string; chapters: string } }[];
+  updateBeats: { segmentTitle: string; beatNumber: number; fields: Partial<{ title: string; characters: string; location: string; time: string; event: string; chapters: string }> }[];
+  deleteBeats: { segmentTitle: string; beatNumber: number }[];
 } {
   const m = content.match(/---PLOT_SEGMENTS---\s*([\s\S]*?)\s*---END_PLOT_SEGMENTS---/);
-  if (!m) return { segments: [], edges: [] };
+  if (!m) return { segments: [], edges: [], beats: [], updateBeats: [], deleteBeats: [] };
   try {
     const arr = JSON.parse(m[1]);
-    if (!Array.isArray(arr)) return { segments: [], edges: [] };
+    if (!Array.isArray(arr)) return { segments: [], edges: [], beats: [], updateBeats: [], deleteBeats: [] };
     const segments = arr
       .filter((a: any) => a.action === "create_segment" && a.segment)
       .map((a: any) => ({
@@ -433,8 +437,48 @@ function parsePlotSegments(content: string): {
     const edges = arr
       .filter((a: any) => a.action === "create_edge" && a.edge)
       .map((a: any) => ({ sourceTitle: a.edge.sourceTitle, targetTitle: a.edge.targetTitle }));
-    return { segments, edges };
-  } catch { return { segments: [], edges: [] }; }
+    const beats = arr
+      .filter((a: any) => a.action === "create_beat" && a.beat && a.segmentTitle)
+      .map((a: any) => ({
+        segmentTitle: a.segmentTitle,
+        beat: {
+          title: (a.beat.title || "").slice(0, 40),
+          characters: a.beat.characters || "",
+          location: a.beat.location || "",
+          time: a.beat.time || "",
+          event: a.beat.event || "",
+          chapters: a.beat.chapters || "",
+        },
+      }));
+    const updateBeats = arr
+      .filter((a: any) => a.action === "update_beat" && a.segmentTitle && a.beatNumber)
+      .map((a: any) => ({
+        segmentTitle: a.segmentTitle,
+        beatNumber: a.beatNumber,
+        fields: a.fields || {},
+      }));
+    const deleteBeats = arr
+      .filter((a: any) => a.action === "delete_beat" && a.segmentTitle && a.beatNumber)
+      .map((a: any) => ({ segmentTitle: a.segmentTitle, beatNumber: a.beatNumber }));
+    return { segments, edges, beats, updateBeats, deleteBeats };
+  } catch { return { segments: [], edges: [], beats: [], updateBeats: [], deleteBeats: [] }; }
+}
+
+/** 解析 AI 回复中的卷章创建指令（---CHAPTERS--- 块） */
+function parseChapters(content: string): { volumeTitle: string; number: number; title: string }[] {
+  const m = content.match(/---CHAPTERS---\s*([\s\S]*?)\s*---END_CHAPTERS---/);
+  if (!m) return [];
+  try {
+    const arr = JSON.parse(m[1]);
+    if (!Array.isArray(arr)) return [];
+    return arr
+      .filter((a: any) => a.action === "create_chapter" && a.chapter)
+      .map((a: any) => ({
+        volumeTitle: a.chapter.volumeTitle || "",
+        number: a.chapter.number || 1,
+        title: (a.chapter.title || "").slice(0, 50),
+      }));
+  } catch { return []; }
 }
 
 export function AiChatPanel() {
@@ -461,6 +505,8 @@ export function AiChatPanel() {
   const [pendingRemoveEdges, setPendingRemoveEdges] = useState<{ sourceName: string; targetName: string }[]>([]);
   const [pendingPlotSegments, setPendingPlotSegments] = useState<{ type: "bright" | "dark"; title: string; characters: string; location: string; time: string; chapters: string; event: string }[]>([]);
   const [pendingPlotEdges, setPendingPlotEdges] = useState<{ sourceTitle: string; targetTitle: string }[]>([]);
+  const [pendingPlotBeats, setPendingPlotBeats] = useState<{ segmentTitle: string; beat: { title: string; characters: string; location: string; time: string; event: string; chapters: string } }[]>([]);
+  const [pendingChapters, setPendingChapters] = useState<{ volumeTitle: string; number: number; title: string }[]>([]);
   const [memoryTab, setMemoryTab] = useState(false);
   const [memoryEntries, setMemoryEntries] = useState<MemoryEntry[]>([]);
   const [sttLoading, setSttLoading] = useState(false);
@@ -782,22 +828,38 @@ export function AiChatPanel() {
     }]);
   }, [pendingChars, pendingCharEdges, pendingRemoveEdges, appendChatMessages]);
 
-  /** 剧情段落：将待确认的段落插入到剧情走向画布 */
+  /** 剧情段落：将待确认的段落/细纲插入到剧情走向画布 */
   const handlePlotInsert = useCallback(async () => {
-    if (!currentProject || pendingPlotSegments.length === 0) return;
+    if (!currentProject) return;
     const pid = currentProject.id;
     const existing = JSON.parse(localStorage.getItem("plot-segments-" + pid) || "[]");
     const nameMap = new Map<string, string>();
     for (const s of existing) nameMap.set(s.title, s.id);
 
+    // 1. 创建段落
     for (const seg of pendingPlotSegments) {
       const id = uuid();
       nameMap.set(seg.title, id);
-      existing.push({ id, project_id: pid, ...seg });
+      existing.push({ id, project_id: pid, ...seg, beats: [] });
+    }
+
+    // 2. 创建细纲（匹配到已有段落）
+    if (pendingPlotBeats.length > 0) {
+      for (const pb of pendingPlotBeats) {
+        const segId = nameMap.get(pb.segmentTitle);
+        if (segId) {
+          const seg = existing.find((s: any) => s.id === segId);
+          if (seg) {
+            if (!seg.beats) seg.beats = [];
+            const maxNum = seg.beats.reduce((max: number, b: any) => Math.max(max, b.number || 0), 0);
+            seg.beats.push({ id: uuid(), number: maxNum + 1, ...pb.beat });
+          }
+        }
+      }
     }
     localStorage.setItem("plot-segments-" + pid, JSON.stringify(existing));
 
-    // 连线
+    // 3. 连线
     const existingEdges = JSON.parse(localStorage.getItem("plot-edges-" + pid) || "[]");
     for (const ea of pendingPlotEdges) {
       const srcId = nameMap.get(ea.sourceTitle);
@@ -819,13 +881,50 @@ export function AiChatPanel() {
 
     setPendingPlotSegments([]);
     setPendingPlotEdges([]);
+    setPendingPlotBeats([]);
 
+    const parts: string[] = [];
+    if (pendingPlotSegments.length > 0) parts.push(`${pendingPlotSegments.length} 个剧情段落`);
+    if (pendingPlotBeats.length > 0) parts.push(`${pendingPlotBeats.length} 个细纲`);
+    if (pendingPlotEdges.length > 0) parts.push(`${pendingPlotEdges.length} 条连线`);
     appendChatMessages([{
       id: uuid(), role: "system",
-      content: `📋 已创建 ${pendingPlotSegments.length} 个剧情段落（${pendingPlotSegments.filter(s => s.type === "bright").length} 明线 + ${pendingPlotSegments.filter(s => s.type === "dark").length} 暗线）${pendingPlotEdges.length > 0 ? ` + ${pendingPlotEdges.length} 条连线` : ""}，刷新画布查看。`,
+      content: `📋 已创建 ${parts.join(" + ")}，刷新画布查看。`,
       created_at: new Date().toISOString(),
     }]);
-  }, [currentProject, pendingPlotSegments, pendingPlotEdges, appendChatMessages]);
+  }, [currentProject, pendingPlotSegments, pendingPlotEdges, pendingPlotBeats, appendChatMessages]);
+
+  /** 卷章：将待确认的章节插入到写作台 */
+  const handleChapterInsert = useCallback(async () => {
+    if (!currentProject || pendingChapters.length === 0) return;
+    const pid = currentProject.id;
+    const segs = JSON.parse(localStorage.getItem("plot-segments-" + pid) || "[]");
+    const existing = JSON.parse(localStorage.getItem("plot-chapters-" + pid) || "[]");
+    let created = 0;
+    for (const pc of pendingChapters) {
+      const seg = segs.find((s: any) => s.title === pc.volumeTitle && s.type === "bright");
+      if (!seg) continue;
+      // 检查是否已存在同号章节
+      if (existing.some((c: any) => c.volumeSegmentId === seg.id && c.number === pc.number)) continue;
+      existing.push({
+        id: uuid(), volumeSegmentId: seg.id,
+        number: pc.number, title: pc.title,
+        content: "",
+      });
+      created++;
+    }
+    localStorage.setItem("plot-chapters-" + pid, JSON.stringify(existing));
+    setPendingChapters([]);
+    const store = useAppStore.getState();
+    store.bumpChapter();
+    if (created > 0) {
+      appendChatMessages([{
+        id: uuid(), role: "system",
+        content: `📖 已创建 ${created} 个章节，前往写作台查看。`,
+        created_at: new Date().toISOString(),
+      }]);
+    }
+  }, [currentProject, pendingChapters, appendChatMessages]);
 
   /** 插入文本：将 AI 回复文本插入到写作台编辑器 */
   const handleTextInsert = useCallback(() => {
@@ -1041,6 +1140,8 @@ export function AiChatPanel() {
     setPendingCharEdges([]);
     setPendingPlotSegments([]);
     setPendingPlotEdges([]);
+    setPendingPlotBeats([]);
+    setPendingChapters([]);
 
     const store = useAppStore.getState();
     const streamId = uuid();
@@ -1052,6 +1153,24 @@ export function AiChatPanel() {
         sentFiles.length > 0
           ? `\n用户上传了 ${sentFiles.length} 个文本文件作为参考资料：${sentFiles.map((f) => f.name).join("、")}。`
           : "";
+
+      // 剧情走向 / 写作台：传递当前段落和细纲数据给 AI
+      let segmentsContext = "";
+      if (currentProject && (activeModule === "outline" || activeModule === "writing")) {
+        try {
+          const segs = JSON.parse(localStorage.getItem("plot-segments-" + currentProject.id) || "[]");
+          if (segs.length > 0) {
+            const segList = segs.map((s: any) =>
+              `「${s.title}」(${s.type === "bright" ? "明线" : "暗线"},` +
+              `章节:${s.chapters || "—"},细纲:${(s.beats?.length || 0)}个)` +
+              ((s.beats?.length || 0) > 0
+                ? `[${s.beats.map((b: any) => `#${b.number} ${b.title}`).join("; ")}]`
+                : "")
+            ).join("\n");
+            segmentsContext = `\n\n当前项目剧情走向数据：\n${segList}\n`;
+          }
+        } catch { /* ignore */ }
+      }
 
       // 通过上下文引擎加载项目数据上下文（模块感知 v2.0）
       let projectContext = "";
@@ -1246,26 +1365,35 @@ export function AiChatPanel() {
                   : activeModule === "outline" && outlineSection === "plot-direction"
                     ? `\n【剧情走向 — 重要！】` +
                     `用户正在剧情走向画布上工作。明线是故事表层发展，暗线是隐藏的伏笔与阴谋。\n\n` +
-                    `当用户要求创建剧情段落时，请用以下格式输出：\n` +
+                    `当用户要求创建、修改或删除剧情段落和细纲时，请用以下格式输出：\n` +
                     "```\n---PLOT_SEGMENTS---\n[{\"action\":\"create_segment\",\"segment\":{\"type\":\"bright\",\"title\":\"少年入世\",\"characters\":\"叶玄\",\"time\":\"天元纪元205年\",\"chapters\":\"1-90\",\"event\":\"叶玄拜入九霄宗开始修炼之路\"}},\n" +
                     " {\"action\":\"create_segment\",\"segment\":{\"type\":\"dark\",\"title\":\"暗流涌动\",\"characters\":\"慕容云\",\"time\":\"天元纪元205年\",\"chapters\":\"1-90\",\"event\":\"暗影盟暗中观察九霄宗动向\"}},\n" +
+                    " {\"action\":\"create_beat\",\"segmentTitle\":\"少年入世\",\"beat\":{\"title\":\"拜入山门\",\"characters\":\"叶玄\",\"event\":\"叶玄通过入门试炼成为外门弟子\"}},\n" +
+                    " {\"action\":\"update_beat\",\"segmentTitle\":\"少年入世\",\"beatNumber\":3,\"fields\":{\"title\":\"修改后的名称\",\"event\":\"修改后的事件描述\"}},\n" +
+                    " {\"action\":\"delete_beat\",\"segmentTitle\":\"少年入世\",\"beatNumber\":5},\n" +
                     " {\"action\":\"create_edge\",\"edge\":{\"sourceTitle\":\"少年入世\",\"targetTitle\":\"初露锋芒\"}}]\n---END_PLOT_SEGMENTS---\n```\n" +
                     `规则：\n` +
-                    `- 每个段落生成一个 create_segment，type=bright(明线)或dark(暗线)\n` +
-                    `- title 必填，chapters 必须填写章节区间（如 "1-90"）\n` +
-                    `- time 填写故事内时间（纪元/年份/时代，如 "天元纪元205年"）\n` +
-                    `- characters/event 可选但建议填完整\n` +
-                    `- 段落之间的先后关系用 create_edge 连线（sourceTitle→targetTitle）\n` +
-                    `- 明线在上方，暗线在下方，分别独立排序\n` +
-                    `- 在 ---PLOT_SEGMENTS--- 之前用自然语言描述剧情走向\n`
+                    `- create_segment: 创建段落（type=bright/dark），title/chapters 必填\n` +
+                    `- create_beat: 在已有段落下创建细纲，segmentTitle 指定段落标题\n` +
+                    `- update_beat: 修改已有细纲的字段（只传需要改的字段），beatNumber 是细纲序号\n` +
+                    `- delete_beat: 删除细纲，beatNumber 是细纲序号\n` +
+                    `- create_edge: 段落之间连线\n` +
+                    `- 用户当前剧情走向中的段落列表在对话开始时会列出，你可以据此引用段落标题和细纲序号。\n` +
+                    `\n当用户要求创建章节时，请用以下格式输出：\n` +
+                    "```\n---CHAPTERS---\n[{\"action\":\"create_chapter\",\"chapter\":{\"volumeTitle\":\"少年入世\",\"number\":1,\"title\":\"初入九霄\"}},\n" +
+                    " {\"action\":\"create_chapter\",\"chapter\":{\"volumeTitle\":\"少年入世\",\"number\":2,\"title\":\"拜见师尊\"}}]\n---END_CHAPTERS---\n```\n" +
+                    `规则：\n` +
+                    `- volumeTitle 对应明线段落的标题（卷名）\n` +
+                    `- number 章节号（从1开始递增）\n` +
+                    `- title 章节标题\n`
                     : ""
               ) +
               `\n【重要规则】你当前正在「${activeModule === "outline" ? OUTLINE_SECTION_LABEL[outlineSection] : MODULE_LABEL[activeModule]}」模块中工作。\n` +
               `- 只允许输出当前模块对应的块模板，绝对不能输出其他模块的块模板。\n` +
-              `- 当前模块：${activeModule === "outline" && outlineSection === "worldview" ? "只能输出 ---WORLD_TERMS--- 和 ---WORLD_TERM_UPDATE--- 块" : activeModule === "outline" && outlineSection === "characters" ? "只能输出 ---CHARACTERS--- 和 ---CHARACTER_UPDATE--- 块" : activeModule === "outline" && outlineSection === "plot-direction" ? "只能输出 ---PLOT_SEGMENTS--- 块" : "不需要输出任何块模板"}\n` +
+              `- 当前模块：${activeModule === "outline" && outlineSection === "worldview" ? "只能输出 ---WORLD_TERMS--- 和 ---WORLD_TERM_UPDATE--- 块" : activeModule === "outline" && outlineSection === "characters" ? "只能输出 ---CHARACTERS--- 和 ---CHARACTER_UPDATE--- 块" : activeModule === "outline" && outlineSection === "plot-direction" ? "只能输出 ---PLOT_SEGMENTS--- 和 ---CHAPTERS--- 块" : "只能输出 ---CHAPTERS--- 块（创建章节）"}\n` +
               `- 即使对话历史中有其他模块的块模板示例，也不要模仿输出。\n` +
               `- 你可以自然地讨论所有项目数据（世界观、角色、剧情等），但创建操作只能用当前模块的格式。\n` +
-              fileContextHint,
+              fileContextHint + segmentsContext,
             history: (() => {
               const engine = memoryEngineRef.current;
               if (engine) {
@@ -1564,15 +1692,76 @@ export function AiChatPanel() {
       // ====== 剧情走向段落：解析 ---PLOT_SEGMENTS--- 块（仅剧情走向模块，存为待确认） ======
       if (activeModule === "outline" && outlineSection === "plot-direction") {
         const plotBatch = parsePlotSegments(filteredAiContent);
-        if (plotBatch.segments.length > 0) {
-          setPendingPlotSegments(prev => [...prev, ...plotBatch.segments]);
-          setPendingPlotEdges(prev => [...prev, ...plotBatch.edges]);
+        if (plotBatch.segments.length > 0 || plotBatch.beats.length > 0) {
+          if (plotBatch.segments.length > 0) setPendingPlotSegments(prev => [...prev, ...plotBatch.segments]);
+          if (plotBatch.edges.length > 0) setPendingPlotEdges(prev => [...prev, ...plotBatch.edges]);
+          if (plotBatch.beats.length > 0) setPendingPlotBeats(prev => [...prev, ...plotBatch.beats]);
           displayContent = displayContent
             .replace(/---PLOT_SEGMENTS---[\s\S]*?---END_PLOT_SEGMENTS---/g, "")
             .replace(/```(?:json)?\s*[\s\S]*?```/g, "")
             .trim();
           if (!displayContent) {
-            displayContent = `📋 已解析 ${plotBatch.segments.length} 个剧情段落（${plotBatch.segments.filter(s => s.type === "bright").length} 明线 + ${plotBatch.segments.filter(s => s.type === "dark").length} 暗线）${plotBatch.edges.length > 0 ? ` + ${plotBatch.edges.length} 条连线` : ""}，点击下方「插入」确认。`;
+            const parts: string[] = [];
+            if (plotBatch.segments.length > 0) parts.push(`${plotBatch.segments.length} 个剧情段落`);
+            if (plotBatch.beats.length > 0) parts.push(`${plotBatch.beats.length} 个细纲`);
+            if (plotBatch.edges.length > 0) parts.push(`${plotBatch.edges.length} 条连线`);
+            displayContent = `📋 已解析 ${parts.join(" + ")}，点击下方「插入」确认。`;
+          }
+        }
+
+        // ====== 细纲更新/删除：立即执行（无需待确认） ======
+        if (plotBatch.updateBeats.length > 0 || plotBatch.deleteBeats.length > 0) {
+          const pid = currentProject!.id;
+          const segs = JSON.parse(localStorage.getItem("plot-segments-" + pid) || "[]");
+          let updatedInfo: string[] = [];
+
+          for (const ub of plotBatch.updateBeats) {
+            const seg = segs.find((s: any) => s.title === ub.segmentTitle);
+            if (seg && seg.beats) {
+              const beat = seg.beats.find((b: any) => b.number === ub.beatNumber);
+              if (beat) {
+                Object.assign(beat, ub.fields);
+                updatedInfo.push(`「${ub.segmentTitle}」#${ub.beatNumber}`);
+              }
+            }
+          }
+
+          for (const db of plotBatch.deleteBeats) {
+            const seg = segs.find((s: any) => s.title === db.segmentTitle);
+            if (seg && seg.beats) {
+              const before = seg.beats.length;
+              seg.beats = seg.beats.filter((b: any) => b.number !== db.beatNumber);
+              if (seg.beats.length < before) {
+                updatedInfo.push(`删除「${db.segmentTitle}」#${db.beatNumber}`);
+              }
+            }
+          }
+
+          if (updatedInfo.length > 0) {
+            localStorage.setItem("plot-segments-" + pid, JSON.stringify(segs));
+            useAppStore.getState().bumpPlot();
+            displayContent = displayContent
+              .replace(/---PLOT_SEGMENTS---[\s\S]*?---END_PLOT_SEGMENTS---/g, "")
+              .replace(/```(?:json)?\s*[\s\S]*?```/g, "")
+              .trim();
+            if (!displayContent) {
+              displayContent = `✅ 已更新细纲：${updatedInfo.join("、")}`;
+            }
+          }
+        }
+      }
+
+      // ====== 卷章：解析 ---CHAPTERS--- 块 ======
+      if (currentProject) {
+        const chaps = parseChapters(filteredAiContent);
+        if (chaps.length > 0) {
+          setPendingChapters(prev => [...prev, ...chaps]);
+          displayContent = displayContent
+            .replace(/---CHAPTERS---[\s\S]*?---END_CHAPTERS---/g, "")
+            .replace(/```(?:json)?\s*[\s\S]*?```/g, "")
+            .trim();
+          if (!displayContent) {
+            displayContent = `📖 已解析 ${chaps.length} 个章节，点击下方「插入」确认。`;
           }
         }
       }
@@ -1972,8 +2161,9 @@ export function AiChatPanel() {
           <span>
             {pendingTerms.length > 0 ? "待插入词条："
               : pendingChars.length > 0 ? "待插入角色："
-                : pendingPlotSegments.length > 0 ? "待插入剧情段落："
-                  : "对最后一条 AI 回复操作："}
+                : pendingPlotSegments.length > 0 || pendingPlotBeats.length > 0 ? "待插入剧情段落/细纲："
+                  : pendingChapters.length > 0 ? "待创建章节："
+                    : "对最后一条 AI 回复操作："}
           </span>
         </div>
         <div className="flex items-center gap-1">
@@ -1995,12 +2185,20 @@ export function AiChatPanel() {
                 : `应用 ${pendingCharEdges.length} 条关系`}
             </button>
           )}
-          {/* 剧情段落插入按钮 */}
-          {pendingPlotSegments.length > 0 && (
+          {/* 剧情段落/细纲插入按钮 */}
+          {(pendingPlotSegments.length > 0 || pendingPlotBeats.length > 0) && (
             <button type="button" title="插入到剧情走向画布" onClick={handlePlotInsert} disabled={loading}
               className="inline-flex items-center gap-1 rounded-md border border-violet-200 bg-violet-50 px-2 py-1 text-[11px] text-violet-700 hover:bg-violet-100">
               <ClipboardPlus className="h-3 w-3" />
-              插入 {pendingPlotSegments.length} 个剧情段落
+              插入 {pendingPlotSegments.length + pendingPlotBeats.length} 项
+            </button>
+          )}
+          {/* 章节插入按钮 */}
+          {pendingChapters.length > 0 && (
+            <button type="button" title="创建到写作台" onClick={handleChapterInsert} disabled={loading}
+              className="inline-flex items-center gap-1 rounded-md border border-indigo-200 bg-indigo-50 px-2 py-1 text-[11px] text-indigo-700 hover:bg-indigo-100">
+              <ClipboardPlus className="h-3 w-3" />
+              创建 {pendingChapters.length} 个章节
             </button>
           )}
           {/* 选取写作台章节到 AI（仅写作台模块） */}

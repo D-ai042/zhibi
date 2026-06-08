@@ -1,59 +1,83 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useAppStore } from "@/stores/app-store";
-import { FileText, BookOpen, BarChart3, Clock, Target } from "lucide-react";
+import { FileText, BookOpen, BarChart3, Users, Globe2, ListTree, Eye } from "lucide-react";
+
+/** 从写作台的 localStorage 中读取含正文内容的章节列表 */
+function loadPlotChapters(pid: string): { id: string; content: string }[] {
+    try {
+        return JSON.parse(localStorage.getItem("plot-chapters-" + pid) || "[]");
+    } catch { return []; }
+}
+
+/** 从剧情走向读取段落和细纲 */
+function loadSegments(pid: string): { type: string; beats?: any[] }[] {
+    try {
+        return JSON.parse(localStorage.getItem("plot-segments-" + pid) || "[]");
+    } catch { return []; }
+}
 
 export function WritingStatsPanel() {
     const { currentProject } = useAppStore();
     const [stats, setStats] = useState({
+        brightVolumes: 0,
+        darkSegments: 0,
+        beats: 0,
         chapters: 0,
         finalChapters: 0,
         totalWords: 0,
-        volumes: 0,
         characters: 0,
         worldTerms: 0,
-        plotEvents: 0,
     });
 
     useEffect(() => {
         if (!currentProject) return;
         const pid = currentProject.id;
-        api.listChapters(pid).then(chaps => {
-            api.listVolumes(pid).then(vols => {
-                api.listCharacters(pid).then(chars => {
-                    api.listWorldTerms(pid).then(terms => {
-                        api.listTimelineNodes(pid).then(nodes => {
-                            setStats({
-                                chapters: chaps.length,
-                                finalChapters: chaps.filter(c => c.status === "final").length,
-                                totalWords: chaps.reduce((s, c) => s + c.word_count, 0),
-                                volumes: vols.length,
-                                characters: chars.length,
-                                worldTerms: terms.length,
-                                plotEvents: nodes.length,
-                            });
-                        });
-                    });
-                });
+        (async () => {
+            const [chars, terms] = await Promise.all([
+                api.listCharacters(pid),
+                api.listWorldTerms(pid),
+            ]);
+            // 从写作台 localStorage 加载章节
+            const plotChapters = loadPlotChapters(pid);
+            // 从剧情走向 localStorage 加载段落/细纲
+            const segs = loadSegments(pid);
+            const bright = segs.filter(s => s.type === "bright").length;
+            const dark = segs.filter(s => s.type === "dark").length;
+            let totalBeats = 0;
+            for (const s of segs) {
+                if (s.beats) totalBeats += s.beats.length;
+            }
+            let realWords = 0;
+            for (const pc of plotChapters) {
+                if (pc.content) {
+                    realWords += pc.content.replace(/\s/g, "").length;
+                }
+            }
+            setStats({
+                brightVolumes: bright,
+                darkSegments: dark,
+                beats: totalBeats,
+                chapters: plotChapters.length,
+                finalChapters: 0, // 暂时不依赖 API chapters
+                totalWords: realWords,
+                characters: chars.length,
+                worldTerms: terms.length,
             });
-        });
+        })();
     }, [currentProject]);
 
     if (!currentProject) return null;
 
     const cards = [
-        { icon: BookOpen, label: "卷", value: stats.volumes, color: "text-blue-600", bg: "bg-blue-50" },
-        { icon: FileText, label: "章节", value: `${stats.finalChapters}/${stats.chapters}`, sub: "定稿/总数", color: "text-amber-600", bg: "bg-amber-50" },
+        { icon: BookOpen, label: "卷", value: stats.brightVolumes, color: "text-blue-600", bg: "bg-blue-50" },
+        { icon: Eye, label: "暗线", value: stats.darkSegments, color: "text-purple-600", bg: "bg-purple-50" },
         { icon: BarChart3, label: "总字数", value: stats.totalWords.toLocaleString(), sub: "字", color: "text-emerald-600", bg: "bg-emerald-50" },
-        { icon: Target, label: "角色", value: stats.characters, color: "text-violet-600", bg: "bg-violet-50" },
-        { icon: Clock, label: "世界观词条", value: stats.worldTerms, color: "text-rose-600", bg: "bg-rose-50" },
-        { icon: BarChart3, label: "剧情节点", value: stats.plotEvents, color: "text-cyan-600", bg: "bg-cyan-50" },
+        { icon: ListTree, label: "细纲", value: stats.beats, color: "text-amber-600", bg: "bg-amber-50" },
+        { icon: Users, label: "角色", value: stats.characters, color: "text-violet-600", bg: "bg-violet-50" },
+        { icon: Globe2, label: "世界观词条", value: stats.worldTerms, color: "text-rose-600", bg: "bg-rose-50" },
     ];
 
-    // 估算完成度
-    const completion = stats.chapters > 0
-        ? Math.round((stats.finalChapters / stats.chapters) * 100)
-        : 0;
     const avgWordsPerChapter = stats.chapters > 0
         ? Math.round(stats.totalWords / stats.chapters)
         : 0;
@@ -77,27 +101,27 @@ export function WritingStatsPanel() {
                 ))}
             </div>
 
-            {/* 完成度 */}
+            {/* 完成度 - 按卷/细纲进度 */}
             <div className="mt-6 rounded-xl border bg-white p-5">
-                <h3 className="mb-3 text-sm font-semibold text-slate-700">章节完成度</h3>
+                <h3 className="mb-3 text-sm font-semibold text-slate-700">写作进度</h3>
                 <div className="flex items-baseline gap-3">
-                    <span className="text-3xl font-bold text-amber-600">{completion}%</span>
-                    <span className="text-sm text-slate-500">
-                        {stats.finalChapters} / {stats.chapters} 章已定稿
-                    </span>
+                    <span className="text-3xl font-bold text-amber-600">{stats.totalWords.toLocaleString()}</span>
+                    <span className="text-sm text-slate-500">总字数</span>
                 </div>
-                <div className="mt-3 h-3 rounded-full bg-slate-100">
-                    <div className="h-3 rounded-full bg-amber-500 transition-all" style={{ width: `${completion}%` }} />
+                <div className="mt-3 space-y-2">
+                    <div className="flex items-center justify-between text-xs text-slate-500">
+                        <span>{stats.brightVolumes} 卷 · {stats.chapters} 章</span>
+                        <span>{stats.beats} 个细纲</span>
+                    </div>
+                    {stats.chapters > 0 && (
+                        <p className="text-xs text-slate-400">平均每章 {avgWordsPerChapter.toLocaleString()} 字</p>
+                    )}
                 </div>
-                <p className="mt-2 text-xs text-slate-400">
-                    平均每章 {avgWordsPerChapter.toLocaleString()} 字
-                    {stats.totalWords > 0 && ` · 全书进度 ${completion}%`}
-                </p>
             </div>
 
-            {/* @侧边提示 */}
+            {/* 提示 */}
             <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-slate-600">
-                💡 在「大纲」中完善世界观、角色和剧情走向，在「写作台」中按卷章写作，在「灵感」中记录写作灵感
+                💡 在「大纲」中完善世界观、角色和剧情走向，在「写作台」中按卷章写作
             </div>
         </div>
     );

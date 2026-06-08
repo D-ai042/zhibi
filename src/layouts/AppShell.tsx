@@ -381,7 +381,18 @@ export function AppShell({ children }: AppShellProps) {
               title="切换 AI 模型"
             >
               <span className="max-w-[120px] truncate">
-                {AI_MODELS.find(m => m.value === apiConfig?.api_model)?.label || apiConfig?.api_model || "deepseek-chat"}
+                {(() => {
+                  const model = apiConfig?.api_model;
+                  if (!model) return "deepseek-chat";
+                  // 先查是否是自定义 provider 的模型
+                  if (apiConfig?.provider_models) {
+                    for (const [provider, models] of Object.entries(apiConfig.provider_models)) {
+                      if (models.includes(model)) return model;
+                    }
+                  }
+                  // 再查内置模型列表
+                  return AI_MODELS.find(m => m.value === model)?.label || model;
+                })()}
               </span>
               <ChevronDown size={12} />
             </button>
