@@ -1158,7 +1158,7 @@ export function WritingModule() {
                                 </h1>
                                 <p className="text-xs text-slate-400">{selectedVolume?.title || ""}</p>
                             </div>
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-end gap-2">
                                 {aiError && (
                                     <span className="text-xs text-red-500">{aiError}</span>
                                 )}
