@@ -500,7 +500,7 @@ ${sample}
                                     <Sparkles size={12} />
                                     结构分析
                                 </summary>
-                                <pre className="whitespace-pre-wrap px-4 pb-3 pt-1 text-xs leading-relaxed text-slate-600">{selected.structureAnalysis}</pre>
+                                <pre className="whitespace-pre-wrap px-4 pb-3 pt-1 text-xs leading-relaxed text-slate-600 max-h-[75vh] overflow-y-auto">{selected.structureAnalysis}</pre>
                             </details>
                         )}
                         {selected.type === "image" ? (
