@@ -1,0 +1,177 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "dev-server",
+			"type": "shell",
+			"command": "npm",
+			"args": [
+				"run",
+				"dev"
+			]
+		},
+		{
+			"label": "dev-server",
+			"type": "shell",
+			"command": "cmd",
+			"args": [
+				"/c",
+				"npm run dev"
+			]
+		},
+		{
+			"label": "dev-server",
+			"type": "shell",
+			"command": "cmd.exe",
+			"args": [
+				"/c",
+				"where npm.cmd"
+			]
+		},
+		{
+			"label": "check-npm",
+			"type": "shell",
+			"command": "where",
+			"args": [
+				"npm.cmd"
+			]
+		},
+		{
+			"label": "check-node",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"-v"
+			]
+		},
+		{
+			"label": "dev-server",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"node_modules/vite/bin/vite.js"
+			]
+		},
+		{
+			"label": "start-vite",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"-e",
+				"console.log('hello')"
+			]
+		},
+		{
+			"label": "start-vite",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"node_modules/vite/bin/vite.js"
+			]
+		},
+		{
+			"label": "vite-dev-server-1420",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"node_modules/vite/bin/vite.js",
+				"--host"
+			]
+		},
+		{
+			"label": "restart-vite",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"node_modules/vite/bin/vite.js",
+				"--host",
+				"--port",
+				"1421"
+			]
+		},
+		{
+			"label": "install-mammoth",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"-e",
+				"console.log('installing...')"
+			]
+		},
+		{
+			"label": "install-dep",
+			"type": "shell",
+			"command": "cmd.exe",
+			"args": [
+				"/c",
+				"cd /d F:\\Projects\\ai-novel-writer && call npm install mammoth@1.8.0"
+			]
+		},
+		{
+			"label": "restart-vite",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"node_modules/vite/bin/vite.js",
+				"--host",
+				"--port",
+				"1422"
+			]
+		},
+		{
+			"label": "vite-1423",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"node_modules/vite/bin/vite.js",
+				"--host",
+				"--port",
+				"1423"
+			]
+		},
+		{
+			"label": "vite-1425",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"node_modules/vite/bin/vite.js",
+				"--host",
+				"--port",
+				"1425"
+			]
+		},
+		{
+			"label": "vite-1426",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"node_modules/vite/bin/vite.js",
+				"--host",
+				"--port",
+				"1426"
+			]
+		},
+		{
+			"label": "vite-1427",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"node_modules/vite/bin/vite.js",
+				"--host",
+				"--port",
+				"1427"
+			]
+		},
+		{
+			"label": "vite-1430",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"node_modules/vite/bin/vite.js",
+				"--host",
+				"--port",
+				"1430"
+			]
+		}
+	]
+}

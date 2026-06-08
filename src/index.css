@@ -1,0 +1,81 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  color: #1a1a2e;
+  background: #f5f6fa;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  overflow: hidden;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+.sel-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  right: 0;
+  pointer-events: none;
+  padding: 1.5rem;
+  font-size: 1rem;
+  line-height: 1.625;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-y: overlay;
+  overflow-x: hidden;
+  color: transparent;
+  scrollbar-width: none;
+}
+
+.sel-overlay::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.sel-overlay span.mark-highlight {
+  background: transparent;
+  color: inherit;
+  text-decoration-line: underline;
+  text-decoration-style: wavy;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  text-decoration-color: #dc2626;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+.locked-border {
+  border: 2px solid #d4a017 !important;
+  box-shadow: 0 0 0 1px rgba(212, 160, 23, 0.3);
+}
+
+.plot-bright-bar {
+  background: linear-gradient(90deg, #dbeafe, #93c5fd);
+}
+
+.plot-dark-bar {
+  background: linear-gradient(90deg, #4c1d95, #7c3aed);
+}
+
+.ai-pending-bg {
+  background-color: #f3e8ff;
+}
+
+.annotation-author {
+  border-left: 3px solid #3b82f6;
+  padding-left: 8px;
+}
+
+.annotation-ai {
+  border-left: 3px solid #a855f7;
+  padding-left: 8px;
+}
