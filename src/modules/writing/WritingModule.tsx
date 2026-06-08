@@ -232,7 +232,6 @@ export function WritingModule() {
     const [aiDialog, setAiDialog] = useState<{ start: number; end: number; text: string; mouseX: number; mouseY: number } | null>(null);
     // AI 写本章弹窗（点击按钮后 — 字数/剧情方向）
     const [writeDlg, setWriteDlg] = useState<{ wordCount: number; plotDirection: string } | null>(null);
-    const [polishing, setPolishing] = useState(false);
     // 最近一次 AI 写作的参数（用于退回重写）
     const lastWriteParamsRef = useRef<{ wordCount: number; plotDirection: string } | null>(null);
     // 修订感知：stale 检测
@@ -583,6 +582,28 @@ export function WritingModule() {
     const [aiWriting, setAiWriting] = useState(false);
     const [aiError, setAiError] = useState("");
     const [humanizing, setHumanizing] = useState(false);
+    const [polishing, setPolishing] = useState(false);
+
+    // ===== 精修规则（去AI味 + 段落优化） =====
+    const POLISH_RULES = `你是资深文学编辑，专门给AI生成的小说去AI味。你的工作是做减法，不是做加法。
+
+你的任务：
+读完一章AI生成的小说，输出润色后的版本。只删不改——删冗余、简啰嗦、去模板化。
+
+具体做法：
+1. 破折号「——」每千字最多保留2处，超出部分：句中换逗号，句末换句号，纯情绪破折号直接删除
+2. 省略号「……」或「...」每千字最多保留1处，超出换句号
+3. 「不是……而是……」句式全章最多保留2处，超出改为简单陈述或删除
+4. 模糊词「仿佛」「似乎」「宛如」「好像」「犹如」每千字最多保留2处，超出直接删除修饰词
+5. 「淡淡/微微/轻轻/缓缓/默默/静静」修饰「说/道/笑道/叹道」时，每千字最多保留2处，超出只保留「说」或「道」
+6. 同一件事用不同说法重复描述两遍以上的，只留最直接的那一遍
+7. 动作已经表达了情绪时，删掉后续的情绪解释文字（人已经摔杯子了就不写"他很愤怒"）
+8. 对话已经传达了信息，就删掉对话后面画蛇添足的情绪总结
+9. 感官描写（视觉/听觉/嗅觉/触觉）同时堆叠3种以上的，保留最核心的1-2种
+10. 连续3句以上以同一人称开头的，合并或调整句式
+11. 删除所有AI提示词痕迹——任何"根据""按照""依据""参考"起头的元叙述、任何对前文/前章/设定的复盘口吻——直接整句删除
+
+铁律：不增加任何新内容、新描写、新情节、新对话。不改变角色名、情节走向。只做减法。`;
 
     const HUMANIZER_RULES = `你是文字编辑，专门去除 AI 生成文本的痕迹，使文字听起来更自然、更有人味。
 

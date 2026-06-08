@@ -579,24 +579,30 @@ export function AiChatPanel() {
   }, [memoryBump]);
 
   // AI 写本章后识别到新角色 → 合并到待确认列表
-  useEffect(() => {
-    if (!currentProject?.id || pendingAiCharsBump <= 0) return;
+  // 注意：不从 localStorage 删除数据，只标记为已读取。
+  // 保证模块切换后重新挂载时仍能恢复 pending 状态。
+  const loadedRef = useRef(false);
+  const loadPending = useCallback(() => {
+    if (!currentProject?.id || loadedRef.current) return;
     try {
       const raw = localStorage.getItem(`ai-pending-chars-${currentProject.id}`);
       if (!raw) return;
       const data = JSON.parse(raw);
-      if (!data.chars?.length && !data.edges?.length) return;
-      // 合并到本地 pending 状态
-      if (data.chars?.length > 0) {
-        setPendingChars(prev => [...prev, ...data.chars]);
-      }
-      if (data.edges?.length > 0) {
-        setPendingCharEdges(prev => [...prev, ...data.edges]);
-      }
-      // 清除已读取的数据
-      localStorage.removeItem(`ai-pending-chars-${currentProject.id}`);
+      if (data.chars?.length > 0) setPendingChars(prev => [...prev, ...data.chars]);
+      if (data.edges?.length > 0) setPendingCharEdges(prev => [...prev, ...data.edges]);
+      loadedRef.current = true;
     } catch { /* ignore */ }
-  }, [pendingAiCharsBump, currentProject?.id]);
+  }, [currentProject?.id]);
+
+  // 挂载时检查
+  useEffect(() => { loadPending(); }, [loadPending]);
+
+  // bump 触发刷新（不需要删除 localStorage，已有 loadPending 兜底）
+  useEffect(() => {
+    if (!currentProject?.id || pendingAiCharsBump <= 0) return;
+    loadedRef.current = false; // 重置，让 loadPending 下次能重新读取
+    loadPending();
+  }, [pendingAiCharsBump, currentProject?.id, loadPending]);
 
   /** 读取上传的文件（支持文本 + .docx） */
   const handleFileSelect = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -756,14 +762,39 @@ export function AiChatPanel() {
     const nameMap = new Map<string, string>();
     for (const ec of existingChars) nameMap.set(ec.name, ec.id);
 
+    // 计算新角色的布局位置：根据已有角色疏密找空位
+    const occupied = new Set(existingChars.map(c => `${Math.round(c.layout_x / 100)},${Math.round(c.layout_y / 100)}`));
+    // 生成一个从中心螺旋扩散的位置序列
+    function* spiralGrid(): Generator<{ x: number; y: number }> {
+      let x = 0, y = 0, step = 1;
+      while (true) {
+        for (let i = 0; i < step; i++) { yield { x: x * 100, y: y * 100 }; x++; }
+        for (let i = 0; i < step; i++) { yield { x: x * 100, y: y * 100 }; y--; }
+        step++;
+        for (let i = 0; i < step; i++) { yield { x: x * 100, y: y * 100 }; x--; }
+        for (let i = 0; i < step; i++) { yield { x: x * 100, y: y * 100 }; y++; }
+        step++;
+      }
+    }
+    // 找第一个未被占据的格子
+    let posGen: Generator<{ x: number; y: number }>;
+    let nextPos: IteratorResult<{ x: number; y: number }>;
+    posGen = spiralGrid();
+    const findNextPos = () => {
+      do { nextPos = posGen.next(); } while (occupied.has(`${Math.round(nextPos.value.x / 100)},${Math.round(nextPos.value.y / 100)}`));
+      occupied.add(`${Math.round(nextPos.value.x / 100)},${Math.round(nextPos.value.y / 100)}`);
+      return nextPos.value;
+    };
+
     for (const ch of pendingChars) {
       const id = uuid();
       nameMap.set(ch.name, id);
+      const { x, y } = findNextPos();
       const c: Character = {
         id, project_id: curProject.id, name: ch.name, faction: ch.faction,
         weight: 5, desire: "", fear: "", flaw: "", arc: "",
         voice_style: "", ending_node_id: null, avatar_path: null,
-        layout_x: 0, layout_y: 0, is_locked: false,
+        layout_x: x, layout_y: y, is_locked: false,
         gender: ch.gender ?? "", age: ch.age ?? "", race: ch.race ?? "",
         appearance: ch.appearance ?? "", personality: ch.personality ?? "",
         background: ch.background ?? "", ability: ch.ability ?? "",
@@ -812,6 +843,9 @@ export function AiChatPanel() {
     setPendingChars([]);
     setPendingCharEdges([]);
     setPendingRemoveEdges([]);
+    // 清理 localStorage 和 loadedRef，防止下次挂载时重复读取
+    localStorage.removeItem(`ai-pending-chars-${curProject.id}`);
+    loadedRef.current = false;
 
     // 自动导航到人物关系星图
     store.navigateTo("outline");

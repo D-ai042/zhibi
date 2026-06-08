@@ -190,7 +190,7 @@ export async function buildModuleContext(input: ChatContextInput): Promise<strin
         const volumeName = plotChapter?.volumeName || "";
         const recentSummaries = await loadRecentSummaries(projectId, currentChapter);
 
-        const p1 = assembleP1(projectId, recentSummaries);
+        const p1 = assembleP1(projectId, recentSummaries, currentChapter?.number);
         const p2 = assembleP2(styleGuide, projectId);
         const p3 = assembleP3(currentChapter, volumeName);
         const p4 = assembleP4(allCharacters, currentChapter?.number || 1, allEdges);
@@ -375,7 +375,7 @@ export async function buildProjectContext(input: ContextEngineInput): Promise<Co
     // P0: 世界观背景
     const p0 = assembleP0(projectId, styleGuide, storyBible, allWorldTerms);
     // P1: 剧情走向 + 前情摘要
-    const p1 = assembleP1(projectId, recentSummaries);
+    const p1 = assembleP1(projectId, recentSummaries, currentChapter?.number);
     // P2: 风格指南 + 角色语言
     const p2 = assembleP2(styleGuide, projectId);
     // P3: 全书结构
@@ -498,16 +498,50 @@ function assembleP0(projectId: string, _styleGuide: StyleGuide | null, storyBibl
 
 // ===== P1：剧情走向 + 前情摘要 =====
 
-function assembleP1(projectId: string, recentSummaries: ChapterSummary[]): string {
+function assembleP1(projectId: string, recentSummaries: ChapterSummary[], currentChapterNumber?: number): string {
     const parts: string[] = ["━━━━ P1 · 剧情走向与前情摘要 ━━━━"];
     try {
         const segs = JSON.parse(localStorage.getItem(`plot-segments-${projectId}`) || "[]") as any[];
+        const chaps = JSON.parse(localStorage.getItem(`plot-chapters-${projectId}`) || "[]") as any[];
         if (segs.length > 0) {
+            // 如果知道当前章节号，找到它所属的卷（bright segment）
+            let currentVolId = "";
+            if (currentChapterNumber) {
+                const currentChap = chaps.find((c: any) => c.number === currentChapterNumber);
+                if (currentChap) currentVolId = currentChap.volumeSegmentId;
+            }
+
             const bright = segs.filter((s: any) => s.type === "bright");
             const dark = segs.filter((s: any) => s.type === "dark");
-            if (bright.length > 0) {
-                parts.push("【明线】");
-                for (const s of bright) parts.push(`· 「${s.title}」${s.event ? `：${s.event}` : ""}${s.chapters ? `\n   章节范围：${s.chapters}` : ""}`);
+
+            // 当前卷：完整信息（含细纲）
+            if (currentVolId) {
+                const vol = bright.find((s: any) => s.id === currentVolId);
+                if (vol) {
+                    parts.push(`【当前卷 — ${vol.title}】`);
+                    const beats = vol.beats || [];
+                    if (beats.length > 0) {
+                        for (const b of beats) {
+                            const pieces = [`· #${b.number} ${b.title}`];
+                            if (b.characters) pieces.push(`[${b.characters}]`);
+                            if (b.event) pieces.push(`：${b.event}`);
+                            parts.push(pieces.join(""));
+                        }
+                    } else {
+                        parts.push(`· ${vol.event || "（暂无细纲）"}`);
+                    }
+                    parts.push("");
+                }
+            }
+
+            // 其他卷：只列标题（不加载细纲）
+            const otherBright = currentVolId ? bright.filter((s: any) => s.id !== currentVolId) : bright;
+            if (otherBright.length > 0) {
+                if (currentVolId) parts.push("【其他卷】");
+                else parts.push("【明线】");
+                for (const s of otherBright) {
+                    parts.push(`· 「${s.title}」${s.chapters ? `（章节范围：${s.chapters}）` : ""}`);
+                }
             }
             if (dark.length > 0) {
                 parts.push("【暗线】");
