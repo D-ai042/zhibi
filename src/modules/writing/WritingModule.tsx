@@ -1162,38 +1162,44 @@ export function WritingModule() {
                                 {aiError && (
                                     <span className="text-xs text-red-500">{aiError}</span>
                                 )}
-                                <button
-                                    type="button"
-                                    className="flex items-center gap-1.5 rounded-md bg-violet-600 px-3 py-1.5 text-xs text-white hover:bg-violet-700 disabled:opacity-50"
-                                    onClick={() => setWriteDlg({ wordCount: 2000, plotDirection: "" })}
-                                    disabled={!selectedChapter || aiWriting}
-                                >
-                                    <Sparkles className="h-3.5 w-3.5" />
-                                    {aiWriting ? "AI 写作中..." : "AI写文"}
-                                </button>
-                                <div className="text-[9px] text-slate-600 leading-tight text-center">大纲生成初稿</div>
+                                <div className="flex flex-col items-center gap-1 pt-1">
+                                    <button
+                                        type="button"
+                                        className="flex items-center gap-1.5 rounded-md bg-violet-600 px-3 py-1.5 text-xs text-white hover:bg-violet-700 disabled:opacity-50"
+                                        onClick={() => setWriteDlg({ wordCount: 2000, plotDirection: "" })}
+                                        disabled={!selectedChapter || aiWriting}
+                                    >
+                                        <Sparkles className="h-3.5 w-3.5" />
+                                        {aiWriting ? "AI 写作中..." : "AI写文"}
+                                    </button>
+                                    <div className="text-[8px] text-slate-500 leading-none mt-0.5">大纲生成初稿</div>
+                                </div>
                                 {/* 去 AI 味按钮 */}
-                                <button
-                                    type="button"
-                                    onClick={handleHumanize}
-                                    disabled={!selectedChapter || !editingContent.trim() || humanizing}
-                                    className="flex items-center gap-1.5 rounded-md bg-emerald-600 px-3 py-1.5 text-xs text-white hover:bg-emerald-700 disabled:opacity-50"
-                                >
-                                    <Sparkles className="h-3.5 w-3.5" />
-                                    {humanizing ? "处理中..." : "AI去味"}
-                                </button>
-                                <div className="text-[9px] text-slate-600 leading-tight text-center">语气自然化</div>
+                                <div className="flex flex-col items-center gap-1 pt-1">
+                                    <button
+                                        type="button"
+                                        onClick={handleHumanize}
+                                        disabled={!selectedChapter || !editingContent.trim() || humanizing}
+                                        className="flex items-center gap-1.5 rounded-md bg-emerald-600 px-3 py-1.5 text-xs text-white hover:bg-emerald-700 disabled:opacity-50"
+                                    >
+                                        <Sparkles className="h-3.5 w-3.5" />
+                                        {humanizing ? "处理中..." : "AI去味"}
+                                    </button>
+                                    <div className="text-[8px] text-slate-500 leading-none mt-0.5">语气自然化</div>
+                                </div>
                                 {/* AI精修按钮 */}
-                                <button
-                                    type="button"
-                                    onClick={handlePolish}
-                                    disabled={!selectedChapter || !editingContent.trim() || polishing}
-                                    className="flex items-center gap-1.5 rounded-md bg-amber-600 px-3 py-1.5 text-xs text-white hover:bg-amber-700 disabled:opacity-50"
-                                >
-                                    <Sparkles className="h-3.5 w-3.5" />
-                                    {polishing ? "精修中..." : "AI精修"}
-                                </button>
-                                <div className="text-[9px] text-slate-600 leading-tight text-center">精简+段落优化</div>
+                                <div className="flex flex-col items-center gap-1 pt-1">
+                                    <button
+                                        type="button"
+                                        onClick={handlePolish}
+                                        disabled={!selectedChapter || !editingContent.trim() || polishing}
+                                        className="flex items-center gap-1.5 rounded-md bg-amber-600 px-3 py-1.5 text-xs text-white hover:bg-amber-700 disabled:opacity-50"
+                                    >
+                                        <Sparkles className="h-3.5 w-3.5" />
+                                        {polishing ? "精修中..." : "AI精修"}
+                                    </button>
+                                    <div className="text-[8px] text-slate-500 leading-none mt-0.5">精简+段落优化</div>
+                                </div>
                                 <button
                                     type="button"
                                     onClick={handleUndo}
