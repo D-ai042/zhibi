@@ -5,3 +5,5 @@ src-tauri/target/
 .DS_Store
 .env
 .env.local
+temp_*
+test-*.png
