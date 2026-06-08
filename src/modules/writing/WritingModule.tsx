@@ -232,6 +232,7 @@ export function WritingModule() {
     const [aiDialog, setAiDialog] = useState<{ start: number; end: number; text: string; mouseX: number; mouseY: number } | null>(null);
     // AI 写本章弹窗（点击按钮后 — 字数/剧情方向）
     const [writeDlg, setWriteDlg] = useState<{ wordCount: number; plotDirection: string } | null>(null);
+    const [polishing, setPolishing] = useState(false);
     // 最近一次 AI 写作的参数（用于退回重写）
     const lastWriteParamsRef = useRef<{ wordCount: number; plotDirection: string } | null>(null);
     // 修订感知：stale 检测
@@ -616,6 +617,44 @@ export function WritingModule() {
 
 直接输出改写后的完整文本，不要带分析和说明。`;
 
+    // ===== AI精修 =====
+    const handlePolish = useCallback(async () => {
+        if (!pid || !selectedChapter || !editingContent.trim()) return;
+        setPolishing(true);
+        useAppStore.getState().setAutosaveStatus("正在精修...");
+        try {
+            const res = await api.aiComplete({
+                action: "chat",
+                entity_type: "chapter",
+                entity_id: selectedChapter.id,
+                extra: {
+                    system_hint: POLISH_RULES,
+                    user_message: `请对以下文本做精修（去AI味 + 段落优化）：\n\n${editingContent}`,
+                    history: [],
+                },
+            });
+            if (res.content && !res.error) {
+                pushUndo(editingContent);
+                setEditingContent(res.content);
+                const tid = setTimeout(() => syncEditorHTML(res.content), 0);
+                timeoutIdsRef.current.push(tid);
+                setChapters(prev => {
+                    const upd = prev.map(c => c.id === selectedChapter.id ? { ...c, content: res.content } : c);
+                    saveChapters(pid, upd);
+                    return upd;
+                });
+                useAppStore.getState().setAutosaveStatus("✅ 精修完成");
+            } else {
+                useAppStore.getState().setAutosaveStatus("⚠ 精修失败：" + (res.error || "未知错误"));
+            }
+        } catch (e: any) {
+            useAppStore.getState().setAutosaveStatus("⚠ 请求失败");
+            console.error("polish failed:", e);
+        } finally {
+            setPolishing(false);
+        }
+    }, [pid, selectedChapter, editingContent]);
+
     const handleHumanize = useCallback(async () => {
         if (!pid || !selectedChapter || !editingContent.trim()) return;
         setHumanizing(true);
@@ -670,11 +709,47 @@ export function WritingModule() {
                 userIntent: undefined,
             });
 
+            // 构建参考上下文（勾选的灵感/素材）
+            let contextStr = "";
+            if (refIds && refIds.length > 0) {
+                const inspIds = refIds.filter(r => r.startsWith("insp:")).map(r => r.slice(5));
+                if (inspIds.length > 0) {
+                    const allCards = JSON.parse(localStorage.getItem(`inspiration-cards-${pid}`) || "[]");
+                    const selected = allCards.filter((c: any) => inspIds.includes(c.id));
+                    if (selected.length > 0) {
+                        contextStr += "\n【灵感参考】\n";
+                        for (const c of selected) {
+                            contextStr += `- ${c.title || "无标题"}：${(c.content || "").slice(0, 300)}\n`;
+                        }
+                        contextStr += "\n";
+                    }
+                }
+                const matIds = refIds.filter(r => r.startsWith("mat:")).map(r => r.slice(4));
+                if (matIds.length > 0) {
+                    const allItems = JSON.parse(localStorage.getItem(`material-items-${pid}`) || "[]");
+                    const selected = allItems.filter((i: any) => matIds.includes(i.id) && (i.type === "text" || i.content));
+                    if (selected.length > 0) {
+                        contextStr += "\n【素材库参考】\n";
+                        for (const t of selected) {
+                            contextStr += `\n──── ${t.name || "未命名"} ────\n`;
+                            if (t.structureAnalysis) {
+                                contextStr += `【结构分析】\n${t.structureAnalysis}\n\n`;
+                            }
+                            contextStr += `【原文】\n${t.content}\n`;
+                        }
+                        contextStr += "\n";
+                    }
+                }
+            }
+
             // 组装带字数+剧情方向的 user_message
             let userMsg = `请写第${selectedChapter.number}章「${selectedChapter.title}」。`;
             userMsg += `\n\n字数要求：约 ${wordCount} 字。`;
             if (plotDirection) {
                 userMsg += `\n\n剧情方向：\n${plotDirection}`;
+            }
+            if (contextStr) {
+                userMsg += `\n\n参考素材：\n${contextStr}`;
             }
             userMsg += `\n\n根据以上上下文，写出本章正文。`;
 
@@ -1094,7 +1169,7 @@ export function WritingModule() {
                                     disabled={!selectedChapter || aiWriting}
                                 >
                                     <Sparkles className="h-3.5 w-3.5" />
-                                    {aiWriting ? "AI 写作中..." : "AI 写本章"}
+                                    {aiWriting ? "AI 写作中..." : <>AI写文 <span className="text-[10px] text-white/70 ml-0.5 font-normal">大纲生成初稿</span></>}
                                 </button>
                                 {/* 去 AI 味按钮 */}
                                 <button
@@ -1104,7 +1179,17 @@ export function WritingModule() {
                                     className="flex items-center gap-1.5 rounded-md bg-emerald-600 px-3 py-1.5 text-xs text-white hover:bg-emerald-700 disabled:opacity-50"
                                 >
                                     <Sparkles className="h-3.5 w-3.5" />
-                                    {humanizing ? "处理中..." : "去 AI 味"}
+                                    {humanizing ? "处理中..." : <>AI去味 <span className="text-[10px] text-white/70 ml-0.5 font-normal">语气自然化</span></>}
+                                </button>
+                                {/* AI精修按钮 */}
+                                <button
+                                    type="button"
+                                    onClick={handlePolish}
+                                    disabled={!selectedChapter || !editingContent.trim() || polishing}
+                                    className="flex items-center gap-1.5 rounded-md bg-amber-600 px-3 py-1.5 text-xs text-white hover:bg-amber-700 disabled:opacity-50"
+                                >
+                                    <Sparkles className="h-3.5 w-3.5" />
+                                    {polishing ? "精修中..." : <>AI精修 <span className="text-[10px] text-white/70 ml-0.5 font-normal">精简+段落优化</span></>}
                                 </button>
                                 <button
                                     type="button"
@@ -1292,8 +1377,8 @@ export function WritingModule() {
                 <AiWriteChapterDialog
                     chapterNumber={selectedChapter.number}
                     chapterTitle={selectedChapter.title}
-                    onConfirm={(wordCount, plotDirection) => {
-                        handleAiWriteChapter(wordCount, plotDirection);
+                    onConfirm={(wordCount, plotDirection, refIds) => {
+                        handleAiWriteChapter(wordCount, plotDirection, refIds);
                     }}
                     onClose={() => setWriteDlg(null)}
                 />
