@@ -273,10 +273,10 @@ export function CharactersModule() {
       edgeMap.get(key)!.rels.push(e);
     }
     setEdges([...edgeMap.entries()].map(([key, { rels }]) => {
-      const e = rels[0];
+      const e = rels[rels.length - 1]; // 取最新一条关系
       const color = e.is_secret ? "#8b5cf6" : e.relation_type === "敌对" ? "#ef4444" : e.relation_type === "爱慕" ? "#ec4899" : e.relation_type === "师徒" ? "#3b82f6" : "#94a3b8";
       const [src, tgt] = key.split("::");
-      const label = rels.map(r => r.relation_type).join("·");
+      const label = e.relation_type;
       return {
         id: e.id, source: src, target: tgt,
         type: "customEdge",
