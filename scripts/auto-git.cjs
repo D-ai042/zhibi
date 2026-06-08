@@ -13,8 +13,6 @@ const { execSync } = require("child_process");
 const ROOT = path.resolve(__dirname, "..");
 const WATCH_DIRS = [
     path.join(ROOT, "src"),
-    ROOT, // 也监控根目录下的 .gitignore、package.json 等配置文件
-];
 
 // 防抖：文件停止变化后等待 5 秒再提交
 const DEBOUNCE_MS = 5000;
