@@ -481,6 +481,14 @@ export function CharactersModule() {
   const onConnect = useCallback(async (conn: Connection) => {
     pushSnapshot();
     if (!currentProject || !conn.source || !conn.target) return;
+    // 检查两个角色之间是否已有连线，有则不再新增
+    const existing = await api.listRelationshipEdges(currentProject.id);
+    const dup = existing.some(
+      (e) =>
+        (e.source_id === conn.source && e.target_id === conn.target) ||
+        (e.source_id === conn.target && e.target_id === conn.source)
+    );
+    if (dup) return;
     const edge: RelationshipEdge = {
       id: uuid(), project_id: currentProject.id,
       source_id: conn.source, target_id: conn.target,
