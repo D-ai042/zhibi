@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAppStore } from "@/stores/app-store";
 import {
-    FileText, Trash2, File as FileIcon, Plus, Image as ImageIcon,
+    FileText, Trash2, File as FileIcon, Plus, Image as ImageIcon, Sparkles,
     FileUp, Folder, FolderPlus, GripVertical, ChevronRight, ChevronDown
 } from "lucide-react";
 import { uuid } from "@/lib/uuid";
@@ -28,6 +28,7 @@ interface MaterialItem {
     fileType?: string;
     fileSize?: number;
     createdAt: string;
+    structureAnalysis?: string;  // AI 分析的情节骨架
 }
 
 // ===== localStorage =====
@@ -63,6 +64,7 @@ export function MaterialModule() {
     const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
     const [dragState, setDragState] = useState<DragState>({ over: false, groupTarget: null });
     const [uploading, setUploading] = useState(false);
+    const [analyzingId, setAnalyzingId] = useState<string | null>(null);
     const [newName, setNewName] = useState("");
     const [renamingId, setRenamingId] = useState<string | null>(null);
     const [renamingGroupId, setRenamingGroupId] = useState<string | null>(null);
@@ -177,6 +179,66 @@ export function MaterialModule() {
         if (!sel || sel.type === "image") return;
         persist(groups, items.map(i => i.id === selectedId ? { ...i, content: editingContent } : i));
     }, [pid, selectedId, editingContent, groups, items, persist]);
+
+    // ===== 结构分析（AI 提取情节骨架） =====
+    const analyzeStructure = useCallback(async (item: MaterialItem) => {
+        if (!pid) return;
+        if (!item.content || item.content.length < 500) {
+            alert("素材内容不足 500 字，无法分析结构");
+            return;
+        }
+        setAnalyzingId(item.id);
+        try {
+            const { api } = await import("@/lib/api");
+            const sample = item.content.slice(0, 8000);
+            const res = await api.aiComplete({
+                action: "chat",
+                entity_type: "beats",
+                entity_id: pid,
+                extra: {
+                    system_hint: `你是资深小说结构分析师。你的任务是把一段小说/素材拆解为情节骨架——场景链+每场景的情节动作+情绪曲线。
+不分析文笔、不评价好坏，只提取"这一段发生了什么事，怎么发生的"。输出纯文本。`,
+                    user_message: `分析以下素材的故事结构：
+
+${sample}
+
+请输出以下格式的文本（不要JSON，不要标记）：
+
+【场景链】
+场景1：场景名称
+  情节功能：
+  核心动作：
+  情绪基调：
+
+场景2：
+  ...
+
+【情绪曲线】
+开篇：
+低谷：
+高潮：
+收尾：
+
+【爽点机制】
+
+【推荐用法】`,
+                    history: [],
+                },
+            });
+            if (res.content && !res.error) {
+                const analysis = res.content.trim();
+                const updatedItems = items.map(i => i.id === item.id ? { ...i, structureAnalysis: analysis } : i);
+                persist(groups, updatedItems);
+                // 注意：不覆盖 editingContent —— 编辑区始终保留原文，分析结果只展示在结构分析折叠区
+            } else {
+                alert("分析失败：" + (res.error || "未知错误"));
+            }
+        } catch (e: any) {
+            alert("分析失败：" + (e.message || "未知错误"));
+        } finally {
+            setAnalyzingId(null);
+        }
+    }, [pid, groups, items, selectedId, persist]);
 
     // ===== 文件上传（无大小限制） =====
     const processFiles = useCallback(async (files: FileList | File[], targetGroup: string | null) => {
@@ -417,10 +479,30 @@ export function MaterialModule() {
                                 </select>
                             </div>
                             {selected.type !== "image" && (
-                                <button onClick={saveContent}
-                                    className="rounded-lg bg-amber-500 px-4 py-1.5 text-sm text-white hover:bg-amber-600">保存</button>
+                                <div className="flex items-center gap-2">
+                                    <button onClick={() => analyzeStructure(selected)} disabled={analyzingId === selected.id}
+                                        className="flex items-center gap-1 rounded-lg border border-slate-200 px-3 py-1.5 text-xs text-slate-500 hover:border-amber-400 hover:text-amber-600 disabled:opacity-50">
+                                        <Sparkles size={12} />
+                                        {analyzingId === selected.id ? "分析中…" : (selected.structureAnalysis ? "重新分析" : "分析结构")}
+                                    </button>
+                                    <button onClick={saveContent}
+                                        className="rounded-lg bg-amber-500 px-4 py-1.5 text-sm text-white hover:bg-amber-600">保存</button>
+                                </div>
                             )}
                         </div>
+                        {/* 结构分析折叠区 */}
+                        {selected.structureAnalysis && (
+                            <details className="border-b bg-amber-50/50 group">
+                                <summary className="flex cursor-pointer items-center gap-1.5 px-4 py-2 text-xs font-medium text-amber-700 select-none hover:bg-amber-50">
+                                    <svg className="size-3 shrink-0 transition-transform group-open:rotate-90" viewBox="0 0 16 16" fill="currentColor">
+                                        <path d="M6 3l5 5-5 5z" />
+                                    </svg>
+                                    <Sparkles size={12} />
+                                    结构分析
+                                </summary>
+                                <pre className="whitespace-pre-wrap px-4 pb-3 pt-1 text-xs leading-relaxed text-slate-600">{selected.structureAnalysis}</pre>
+                            </details>
+                        )}
                         {selected.type === "image" ? (
                             <div className="flex flex-1 items-start justify-center overflow-auto bg-slate-50 p-6">
                                 <img src={selected.content} alt={selected.name}
