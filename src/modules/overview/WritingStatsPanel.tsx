@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useAppStore } from "@/stores/app-store";
-import { FileText, BookOpen, BarChart3, Users, Globe2, ListTree, Eye } from "lucide-react";
+import { BookOpen, BarChart3, Users, Globe2, ListTree, Eye } from "lucide-react";
 
 /** 从写作台的 localStorage 中读取含正文内容的章节列表 */
 function loadPlotChapters(pid: string): { id: string; content: string }[] {

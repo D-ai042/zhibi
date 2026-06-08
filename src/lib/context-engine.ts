@@ -181,15 +181,13 @@ export async function buildModuleContext(input: ChatContextInput): Promise<strin
     } else if (mod === "writing" && chapterId) {
         // 写作台：完整 P0-P4 + 本章正文
         const plotChapter = findChapterFromPlotChapters(projectId, chapterId);
-        const [chapters, volumes] = await Promise.all([
+        const [chapters] = await Promise.all([
             api.listChapters(projectId),
-            api.listVolumes(projectId),
         ]);
         const currentChapter = plotChapter
             ? { id: plotChapter.id, number: plotChapter.number, title: plotChapter.title, volume_id: "" } as Chapter
             : chapters.find((c) => c.id === chapterId);
-        const currentVolume = currentChapter ? volumes.find((v) => v.id === currentChapter.volume_id) : null;
-        const volumeName = plotChapter?.volumeName || currentVolume?.title || "";
+        const volumeName = plotChapter?.volumeName || "";
         const recentSummaries = await loadRecentSummaries(projectId, currentChapter);
 
         const p1 = assembleP1(projectId, recentSummaries);

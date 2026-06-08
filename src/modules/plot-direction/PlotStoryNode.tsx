@@ -40,9 +40,8 @@ const BRIGHT = { bg: "#f0f9ff", border: "#7dd3fc", text: "#0c4a6e", label: "#036
 const DARK = { bg: "#f5f3ff", border: "#c4b5fd", text: "#1e1b4b", label: "#6d28d9", tag: "🌑 暗线", tagBg: "#ede9fe", tagColor: "#6d28d9" };
 
 /** 单个细纲卡片 — 样式同段落卡片，去掉明线标签 */
-function BeatCard({ beat, index, onUpdate, onDelete }: {
+function BeatCard({ beat, onUpdate, onDelete }: {
     beat: PlotBeat;
-    index: number;
     onUpdate: (b: PlotBeat) => void;
     onDelete: (id: string) => void;
 }) {
@@ -96,7 +95,7 @@ function BeatCard({ beat, index, onUpdate, onDelete }: {
 
             {/* 头部：序号靠左 · 标题居中 · 关闭靠右 */}
             <div style={{ padding: "6px 8px 2px", display: "flex", alignItems: "center", gap: 2 }}>
-                <span style={{ fontSize: 10, fontWeight: 700, color: "#94a3b8", flexShrink: 0, width: 16, textAlign: "left" }}>{index}</span>
+                <span style={{ fontSize: 10, fontWeight: 700, color: "#94a3b8", flexShrink: 0, width: 16, textAlign: "left" }}>{beat.number}</span>
                 {editingBeat ? (
                     <input ref={beatInputRef} value={beatDraft} onChange={e => setBeatDraft(e.target.value)}
                         onBlur={commitBeat} onKeyDown={e => { if (e.key === "Enter") commitBeat(); if (e.key === "Escape") { setBeatDraft(beat.title); setEditingBeat(false); } }}
@@ -222,7 +221,8 @@ function PlotStoryNode({ data, selected }: NodeProps<PlotStoryNodeData>) {
     ];
 
     const addBeat = () => {
-        const newBeat: PlotBeat = { id: uuid(), number: beats.length + 1, title: "新细纲", characters: "", location: "", time: "", event: "", chapters: "" };
+        const nextNum = beats.reduce((max, b) => Math.max(max, b.number || 0), 0) + 1;
+        const newBeat: PlotBeat = { id: uuid(), number: nextNum, title: "新细纲", characters: "", location: "", time: "", event: "", chapters: "" };
         onUpdate({ ...segment, beats: [...beats, newBeat] });
         if (!expanded) setExpanded(true);
     };
@@ -244,7 +244,7 @@ function PlotStoryNode({ data, selected }: NodeProps<PlotStoryNodeData>) {
                 >
                     <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 200px)", gap: 6, padding: "0 2px" }}>
                         {beats.map((beat, idx) => (
-                            <BeatCard key={beat.id} beat={beat} index={idx + 1} onUpdate={updateBeat} onDelete={deleteBeat} />
+                            <BeatCard key={beat.id} beat={beat} onUpdate={updateBeat} onDelete={deleteBeat} />
                         ))}
                     </div>
                     <button
