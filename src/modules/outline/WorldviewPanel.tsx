@@ -434,7 +434,7 @@ export function WorldviewPanel() {
     if (dirty) saveEdges(currentProject.id, rawEdges);
     setEdges(rawEdges);
     setWorldviewGroups(saved.map(g => ({ id: g.id, name: g.name, x: g.x, y: g.y, locked: g.locked })));
-  }, [currentProject, handleUpdate, handleSelect, setNodes, setEdges, computeLayout, setWorldviewGroups, nodes]);
+  }, [currentProject, handleUpdate, handleSelect, setNodes, setEdges, setWorldviewGroups]);
   loadRef.current = load;
 
   // Toggle editing flag on node data when editingTermId changes
@@ -475,7 +475,7 @@ export function WorldviewPanel() {
           if (ct) {
             const nx = ct.layout_x + dx;
             const ny = ct.layout_y + dy;
-            api.saveNodeLayout("world_term", cid, nx, ny).catch(() => { });
+            api.saveNodeLayout("world_term", cid, nx, ny).catch(e => console.error("saveNodeLayout failed:", e));
             setTerms(p => p.map(t => t.id === cid ? { ...t, layout_x: nx, layout_y: ny } : t));
           }
         }
@@ -750,7 +750,7 @@ export function WorldviewPanel() {
     setWorldviewGroups(p => [...p.filter(gr => !oldGroupIds.has(gr.id)), { id: gid, name, x: gx, y: gy, locked: false }]);
     // 同步所有子节点的绝对坐标到 DB
     for (const n of [...selectedTerms, ...nodes.filter(n => subChildIds.has(n.id))]) {
-      api.saveNodeLayout("world_term", n.id, n.position.x, n.position.y).catch(() => { });
+      api.saveNodeLayout("world_term", n.id, n.position.x, n.position.y).catch(e => console.error("saveNodeLayout failed:", e));
       setTerms(p => p.map(t => t.id === n.id ? { ...t, layout_x: n.position.x, layout_y: n.position.y } : t));
     }
     setSelIds([]); setShowDlg(false);
@@ -782,7 +782,7 @@ export function WorldviewPanel() {
         if (p) {
           const ax = p.position.x + n.position.x;
           const ay = p.position.y + n.position.y;
-          api.saveNodeLayout("world_term", n.id, ax, ay).catch(() => { });
+          api.saveNodeLayout("world_term", n.id, ax, ay).catch(e => console.error("saveNodeLayout failed:", e));
           setTerms(prev => prev.map(t => t.id === n.id ? { ...t, layout_x: ax, layout_y: ay } : t));
           return { ...n, parentId: undefined, extent: undefined, draggable: true, position: { x: ax, y: ay } };
         }

@@ -12,7 +12,6 @@ import { useAppStore } from "@/stores/app-store";
 import { MemoryEngine } from "@/lib/memory-engine";
 import type { ChatMessage, Character, MemoryEntry, WorldTerm } from "@/types";
 import { MODULE_LABEL, OUTLINE_SECTION_LABEL } from "@/types";
-import { uuid } from "@/lib/uuid";
 
 /** 上传的文本文件 */
 interface UploadedFile {
@@ -1215,19 +1214,20 @@ export function AiChatPanel() {
                   `1. 从对话中提取所有角色名称和所属派系\n` +
                   `2. 推断角色之间的关系（师徒/敌对/爱慕/朋友/同盟/亲属/...）\n` +
                   `3. 用以下格式输出：\n` +
-                  "```\n---CHARACTERS---\n[{\"action\":\"create_character\",\"character\":{\"name\":\"叶玄\",\"faction\":\"九霄宗\"}},\n" +
-                  " {\"action\":\"create_character\",\"character\":{\"name\":\"曲凌霜\",\"faction\":\"长霄峰\"}},\n" +
+                  "```\n---CHARACTERS---\n[{\"action\":\"create_character\",\"character\":{\"name\":\"叶玄\",\"faction\":\"九霄宗\",\"gender\":\"男\",\"age\":\"18\",\"race\":\"人族\",\"appearance\":\"清秀少年，黑衣佩剑\",\"personality\":\"坚韧隐忍，重情护短\",\"background\":\"九霄宗外门弟子\",\"ability\":\"基础剑法\",\"style\":\"低调务实\"}},\n" +
+                  " {\"action\":\"create_character\",\"character\":{\"name\":\"曲凌霜\",\"faction\":\"长霄峰\",\"gender\":\"女\",\"age\":\"20\",\"race\":\"人族\",\"appearance\":\"银白长发，冰蓝眼眸\",\"personality\":\"冷若冰霜\",\"background\":\"九霄宗内门首席\",\"ability\":\"冰心剑诀\"}},\n" +
                   " {\"action\":\"create_relationship\",\"edge\":{\"sourceName\":\"叶玄\",\"targetName\":\"曲凌霜\",\"relation_type\":\"师徒\",\"strength\":8}}]\n---END_CHARACTERS---\n```\n" +
                   `规则：\n` +
                   `- 每个角色生成一个 create_character，name 必填\n` +
+                  `- 可填字段：name(姓名)、faction(派系)、gender(性别 male/female/other)、age(年龄)、race(种族)、appearance(外在形象)、personality(内在性格)、background(背景经历)、ability(能力)、style(行事风格)、interests(兴趣爱好)\n` +
                   `- 有关联的角色用 create_relationship 连线\n` +
                   `- relation_type：师徒/敌对/爱慕/朋友/同盟/亲属/其他\n` +
                   `- strength 1-10 表示关系紧密程度\n` +
                   `- 在 ---CHARACTERS--- 之前用自然语言简述角色和关系\n\n` +
                   `【完善角色卡 — 重要！】\n` +
                   `当用户要求完善某个角色的信息时，请用以下格式输出更新内容：\n` +
-                  "```\n---CHARACTER_UPDATE---\n[{\"name\":\"曲凌霜\",\"fields\":{\"race\":\"人族\",\"appearance\":\"银白长发，冰蓝眼眸...\",\"personality\":\"冷若冰霜...\",\"background\":\"九霄宗内门首席...\",\"ability\":\"冰心剑诀·第六重...\",\"style\":\"凌厉果决...\",\"interests\":\"独处、抚琴...\"}}]\n---END_CHARACTER_UPDATE---\n```\n" +
-                  `可更新的字段：race(种族)、appearance(外在形象)、personality(内在性格)、background(背景经历)、ability(能力)、style(行事风格)、interests(兴趣爱好)\n` +
+                  "```\n---CHARACTER_UPDATE---\n[{\"name\":\"曲凌霜\",\"fields\":{\"gender\":\"女\",\"age\":\"20\",\"race\":\"人族\",\"appearance\":\"银白长发，冰蓝眼眸...\",\"personality\":\"冷若冰霜...\",\"background\":\"九霄宗内门首席...\",\"ability\":\"冰心剑诀·第六重...\",\"style\":\"凌厉果决...\",\"interests\":\"独处、抚琴...\"}}]\n---END_CHARACTER_UPDATE---\n```\n" +
+                  `可更新的字段：gender(性别)、age(年龄)、race(种族)、appearance(外在形象)、personality(内在性格)、background(背景经历)、ability(能力)、style(行事风格)、interests(兴趣爱好)、faction(派系)、desire(渴望)、fear(恐惧)、flaw(缺陷)、arc(弧光)\n` +
                   `- 每次可以更新一个或多个角色\n` +
                   `- 只填需要修改的字段，其他字段不传\n` +
                   `- 在 ---CHARACTER_UPDATE--- 之前用自然语言描述角色信息\n`
@@ -1519,7 +1519,7 @@ export function AiChatPanel() {
         const charUpdates = parseCharacterUpdate(filteredAiContent);
         if (charUpdates.length > 0 && currentProject) {
           const allChars = await api.listCharacters(currentProject.id);
-          const fields = ["race", "appearance", "personality", "background", "ability", "style", "interests"];
+          const fields = ["gender", "age", "race", "appearance", "personality", "background", "ability", "style", "interests", "faction", "desire", "fear", "flaw", "arc"];
           const updatedNames: string[] = [];
           for (const cu of charUpdates) {
             const target = allChars.find((c: any) => c.name === cu.name);
@@ -1687,7 +1687,7 @@ export function AiChatPanel() {
                 {editingMsgId === m.id ? (
                   <div className="rounded-2xl px-3 py-2 bg-violet-600">
                     <textarea
-                      className="w-full resize-none rounded-lg border border-violet-400 bg-violet-700 px-2 py-1 text-sm text-white placeholder-violet-300 outline-none"
+                      className="w-full resize rounded-lg border border-violet-400 bg-violet-700 px-2 py-1 text-sm text-white placeholder-violet-300 outline-none"
                       value={editingContent}
                       onChange={e => setEditingContent(e.target.value)}
                       onKeyDown={e => {
@@ -1703,12 +1703,16 @@ export function AiChatPanel() {
                       rows={Math.min(editingContent.split('\n').length + 1, 10)}
                       autoFocus
                     />
-                    <div className="mt-1 flex items-center justify-end gap-1 text-[10px] text-violet-300">
-                      Enter 确认 · Esc 取消 · Shift+Enter 换行
+                    <div className="mt-1 flex items-center justify-end gap-1.5 text-[10px] text-violet-300">
+                      <button type="button" onClick={() => { setEditingMsgId(null); setEditingContent(''); }}
+                        className="rounded border border-violet-400/30 px-2 py-0.5 text-violet-300 hover:bg-violet-500 hover:text-white">取消</button>
+                      <button type="button" onClick={() => handleConfirmEdit(m.id)}
+                        className="rounded bg-violet-500 px-2 py-0.5 text-white hover:bg-violet-400">确认</button>
+                      <span className="text-violet-400/60">Shift+Enter 换行</span>
                     </div>
                   </div>
                 ) : (
-                  <div className="rounded-2xl px-3 py-2 text-sm whitespace-pre-wrap bg-violet-600 text-white">
+                  <div className="rounded-2xl px-3 py-2 text-sm whitespace-pre-wrap bg-violet-600 text-white resize overflow-auto" style={{ minWidth: 120, minHeight: 36, maxWidth: 500 }}>
                     {m.content}
                   </div>
                 )}
@@ -2049,7 +2053,7 @@ export function AiChatPanel() {
 
         <div className="flex gap-2">
           <textarea
-            className="min-h-[48px] max-h-[200px] flex-1 resize-y rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-violet-400"
+            className="min-h-[48px] max-h-[300px] flex-1 resize rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-violet-400"
             placeholder={
               hasAttachments
                 ? "输入对上传资料的描述或要求…（留空则直接发送文件内容）"
