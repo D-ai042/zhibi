@@ -738,16 +738,27 @@ export function AiChatPanel() {
       for (const e of toRemove) await api.deleteRelationshipEdge(e.id);
     }
 
-    // 新增关系
+    // 新增关系（若已有连线则更新关系类型，不新增）
     for (const ea of pendingCharEdges) {
       const srcId = nameMap.get(ea.sourceName);
       const tgtId = nameMap.get(ea.targetName);
       if (srcId && tgtId) {
-        await api.saveRelationshipEdge({
-          id: uuid(), project_id: curProject.id,
-          source_id: srcId, target_id: tgtId,
-          relation_type: ea.relation_type, strength: ea.strength, is_secret: false,
-        });
+        const dup = existingEdges.find(
+          (e) =>
+            (e.source_id === srcId && e.target_id === tgtId) ||
+            (e.source_id === tgtId && e.target_id === srcId)
+        );
+        if (dup) {
+          // 已有连线 → 更新关系类型
+          await api.saveRelationshipEdge({ ...dup, relation_type: ea.relation_type });
+        } else {
+          // 无连线 → 新增
+          await api.saveRelationshipEdge({
+            id: uuid(), project_id: curProject.id,
+            source_id: srcId, target_id: tgtId,
+            relation_type: ea.relation_type, strength: ea.strength, is_secret: false,
+          });
+        }
       }
     }
 
