@@ -204,6 +204,13 @@ export function AiWritingDialog({
         setResult("");
     }, [result, fullText, selectionStart, selectionEnd, selectedText, action, onReplace]);
 
+    // Escape 键关闭
+    useEffect(() => {
+        const h = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+        window.addEventListener("keydown", h);
+        return () => window.removeEventListener("keydown", h);
+    }, [onClose]);
+
     // 自动生成（切换 action 时）
     useEffect(() => {
         setResult("");

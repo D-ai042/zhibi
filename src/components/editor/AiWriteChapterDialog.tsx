@@ -56,10 +56,19 @@ export function AiWriteChapterDialog({
         return () => document.removeEventListener('mousedown', handler);
     }, [showRefDropdown]);
 
+    // Escape 键关闭
+    useEffect(() => {
+        const h = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+        window.addEventListener("keydown", h);
+        return () => window.removeEventListener("keydown", h);
+    }, [onClose]);
+
+    const canConfirm = wordCount > 0 || (useCustom && parseInt(customWordCount) > 0);
     const handleConfirm = useCallback(() => {
+        if (!canConfirm) return;
         const finalWordCount = useCustom ? (parseInt(customWordCount) || 2000) : wordCount;
         onConfirm(finalWordCount, plotDirection.trim(), Array.from(refSet));
-    }, [wordCount, plotDirection, customWordCount, useCustom, onConfirm, refSet]);
+    }, [wordCount, plotDirection, customWordCount, useCustom, onConfirm, refSet, canConfirm]);
 
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" onClick={onClose}>
@@ -191,7 +200,7 @@ export function AiWriteChapterDialog({
                     <button onClick={onClose} className="rounded-lg border px-4 py-2 text-sm hover:bg-slate-50">
                         取消
                     </button>
-                    <button onClick={handleConfirm} className="flex items-center gap-1.5 rounded-lg bg-violet-600 px-4 py-2 text-sm text-white hover:bg-violet-700">
+                    <button onClick={handleConfirm} disabled={!canConfirm} className="flex items-center gap-1.5 rounded-lg bg-violet-600 px-4 py-2 text-sm text-white hover:bg-violet-700 disabled:opacity-50">
                         <Sparkles className="h-4 w-4" />
                         开始写作
                     </button>

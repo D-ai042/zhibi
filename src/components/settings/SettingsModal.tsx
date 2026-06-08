@@ -65,6 +65,14 @@ export function SettingsModal() {
     return m[name] || "";
   }
 
+  // Escape 键关闭
+  useEffect(() => {
+    if (!settingsOpen) return;
+    const h = (e: KeyboardEvent) => { if (e.key === "Escape") setSettingsOpen(false); };
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, [settingsOpen, setSettingsOpen]);
+
   useEffect(() => {
     if (settingsOpen && apiConfig) {
       setKeys(apiConfig.provider_keys || {});
