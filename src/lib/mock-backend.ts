@@ -894,6 +894,13 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
     case "export_zip":
       return "mock-export.zip" as T;
 
+    case "save_export_file": {
+      // 浏览器环境不支持写入本地文件，此命令仅在 Tauri 下通过 invoke 直接调用
+      const { filePath } = args as { filePath: string };
+      console.warn("[mock] save_export_file 在浏览器中不可用，目标路径:", filePath);
+      return filePath as T;
+    }
+
     case "export_project": {
       const pid = args?.projectId as string;
       if (!pid) throw new Error("缺少 projectId");

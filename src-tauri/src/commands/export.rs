@@ -6,14 +6,20 @@ use zip::write::SimpleFileOptions;
 use zip::ZipWriter;
 
 #[tauri::command]
-pub fn export_zip(project_id: String, _state: State<'_, DbState>) -> Result<String, String> {
+pub fn export_zip(project_id: String, file_path: Option<String>, _state: State<'_, DbState>) -> Result<String, String> {
     let db_path = projects_dir().join(&project_id).join("project.db");
     if !db_path.exists() {
         return Err("项目数据库不存在".into());
     }
-    let out_dir = projects_dir().join(&project_id).join("export");
-    std::fs::create_dir_all(&out_dir).map_err(|e| e.to_string())?;
-    let zip_path = out_dir.join("project-export.zip");
+
+    // 如果用户通过对话框选择了路径，就用那个；否则用默认路径
+    let zip_path = if let Some(ref fp) = file_path {
+        std::path::PathBuf::from(fp)
+    } else {
+        let out_dir = projects_dir().join(&project_id).join("export");
+        std::fs::create_dir_all(&out_dir).map_err(|e| e.to_string())?;
+        out_dir.join("project-export.zip")
+    };
 
     let file = File::create(&zip_path).map_err(|e| e.to_string())?;
     let mut zip = ZipWriter::new(file);

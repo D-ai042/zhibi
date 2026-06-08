@@ -291,30 +291,37 @@ function buildChaptersDoc(data: ExportData): Document {
 async function downloadDoc(doc: Document, filename: string, projectId?: string) {
     const blob = await Packer.toBlob(doc);
 
-    // Tauri 模式：弹出保存对话框让用户选择位置
-    if (projectId && typeof window !== "undefined" &&
-        !!(window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__) {
-        try {
-            const { save } = await import("@tauri-apps/plugin-dialog");
-            const filePath = await save({
-                defaultPath: filename,
-                filters: [{ name: "Word 文档", extensions: ["docx"] }],
-            });
-            if (!filePath) return; // 用户取消
-            const arrayBuffer = await blob.arrayBuffer();
-            const bytes = new Uint8Array(arrayBuffer);
-            let binary = "";
-            for (let i = 0; i < bytes.length; i++) {
-                binary += String.fromCharCode(bytes[i]);
-            }
-            const base64 = btoa(binary);
-            const { api } = await import("@/lib/api");
-            await api.saveExportFile(projectId, filename, base64, filePath);
-            alert(`文档已导出：${filePath}`);
-        } catch (e) {
-            alert(`导出失败: ${e instanceof Error ? e.message : String(e)}`);
+    // 优先尝试 Tauri 原生保存对话框
+    try {
+        const { save } = await import("@tauri-apps/plugin-dialog");
+        const { invoke } = await import("@tauri-apps/api/core");
+
+        const filePath = await save({
+            defaultPath: filename,
+            filters: [{ name: "Word 文档", extensions: ["docx"] }],
+        });
+        if (!filePath) return; // 用户取消
+
+        // blob → base64
+        const arrayBuffer = await blob.arrayBuffer();
+        const bytes = new Uint8Array(arrayBuffer);
+        let binary = "";
+        for (let i = 0; i < bytes.length; i++) {
+            binary += String.fromCharCode(bytes[i]);
         }
+        const base64 = btoa(binary);
+
+        // 直接调用 Rust 后端写入文件（不走 mock）
+        await invoke("save_export_file", {
+            projectId: projectId || "",
+            filename,
+            dataBase64: base64,
+            filePath,
+        });
+        alert(`文档已导出：${filePath}`);
         return;
+    } catch {
+        // Tauri 不可用时（浏览器环境），降级到浏览器下载
     }
 
     // 浏览器模式：标准下载

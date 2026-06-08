@@ -637,17 +637,48 @@ function DataMigration() {
   }, []);
 
   /** 导出全部数据为 JSON 文件 */
-  const handleExport = useCallback(() => {
+  const handleExport = useCallback(async () => {
     const data = {
       version: "1.0",
       exportedAt: new Date().toISOString(),
       keys: collectKeys(),
     };
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const jsonStr = JSON.stringify(data, null, 2);
+    const defaultFilename = `执笔数据备份_${new Date().toLocaleDateString("zh-CN").replace(/\//g, "-")}.json`;
+
+    // 优先尝试 Tauri 原生保存对话框
+    try {
+      const { save } = await import("@tauri-apps/plugin-dialog");
+      const { invoke } = await import("@tauri-apps/api/core");
+
+      const filePath = await save({
+        defaultPath: defaultFilename,
+        filters: [{ name: "JSON 文件", extensions: ["json"] }],
+      });
+      if (!filePath) return; // 用户取消
+
+      // JSON 字符串 → base64
+      const base64 = btoa(unescape(encodeURIComponent(jsonStr)));
+
+      await invoke("save_export_file", {
+        projectId: "",
+        filename: defaultFilename,
+        dataBase64: base64,
+        filePath,
+      });
+      setMsg(`✅ 数据已导出：${filePath}`);
+      setTimeout(() => setMsg(""), 3000);
+      return;
+    } catch {
+      // Tauri 不可用，降级到浏览器下载
+    }
+
+    // 浏览器降级
+    const blob = new Blob([jsonStr], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `执笔数据备份_${new Date().toLocaleDateString("zh-CN").replace(/\//g, "-")}.json`;
+    a.download = defaultFilename;
     a.click();
     URL.revokeObjectURL(url);
     setMsg("✅ 数据已导出");
