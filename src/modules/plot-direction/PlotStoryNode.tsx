@@ -139,7 +139,7 @@ function BeatCard({ beat, onUpdate, onDelete }: {
                                 onClick={e => e.stopPropagation()}
                             />
                         ) : (
-                            <span style={{ color: "#475569", cursor: "pointer", flex: 1 }} onClick={() => startEdit(f.key, (beat as any)[f.key] || "")}>
+                            <span style={{ color: "#475569", cursor: "pointer", flex: 1 }} onClick={e => { e.stopPropagation(); startEdit(f.key, (beat as any)[f.key] || ""); }}>
                                 {(beat as any)[f.key] || "—"}
                             </span>
                         )}
@@ -158,7 +158,7 @@ function BeatCard({ beat, onUpdate, onDelete }: {
                             onClick={e => e.stopPropagation()}
                         />
                     ) : (
-                        <div style={{ color: "#64748b", fontSize: 10, lineHeight: 1.4, marginTop: 1, cursor: "pointer" }} onClick={() => startEdit("event", beat.event)}>
+                        <div style={{ color: "#64748b", fontSize: 10, lineHeight: 1.4, marginTop: 1, cursor: "pointer" }} onClick={e => { e.stopPropagation(); startEdit("event", beat.event); }}>
                             {beat.event || "—"}
                         </div>
                     )}
@@ -379,7 +379,7 @@ function PlotStoryNode({ data, selected }: NodeProps<PlotStoryNodeData>) {
                                     )}
                                 </div>
                             ) : (
-                                <span style={{ color: "#475569", cursor: "pointer", flex: 1 }} onClick={() => startEdit(f.key, (segment as any)[f.key])}>
+                                <span style={{ color: "#475569", cursor: "pointer", flex: 1 }} onClick={e => { e.stopPropagation(); startEdit(f.key, (segment as any)[f.key] || ""); }}>
                                     {(segment as any)[f.key] || "—"}
                                 </span>
                             )}
@@ -399,7 +399,7 @@ function PlotStoryNode({ data, selected }: NodeProps<PlotStoryNodeData>) {
                                 onClick={e => e.stopPropagation()}
                             />
                         ) : (
-                            <div style={{ color: "#64748b", fontSize: 11, lineHeight: 1.5, marginTop: 2, cursor: "pointer" }} onClick={() => startEdit("event", segment.event)}>
+                            <div style={{ color: "#64748b", fontSize: 11, lineHeight: 1.5, marginTop: 2, cursor: "pointer" }} onClick={e => { e.stopPropagation(); startEdit("event", segment.event); }}>
                                 {segment.event || "—"}
                             </div>
                         )}
