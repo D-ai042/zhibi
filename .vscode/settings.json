@@ -1,0 +1,8 @@
+{
+	"files.autoSave": "afterDelay",
+	"files.autoSaveDelay": 1000,
+	"workbench.localHistory.enabled": true,
+	"workbench.localHistory.maxFileSize": 51200,
+	"workbench.localHistory.maxFileEntries": 50,
+	"explorer.confirmDelete": false
+}
