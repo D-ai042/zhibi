@@ -65,34 +65,46 @@ function doCommit() {
   }
 }
 
-function onFileChange(eventType, filename) {
-  if (!filename) return;
-  // 排除 node_modules、.git 和临时文件
-  if (
-    filename.includes("node_modules") ||
-    filename.includes(".git") ||
-    filename.startsWith("temp_") ||
-    filename.startsWith("_exe_") ||
-    filename.endsWith(".cjs")
-  )
-    return;
+function onFileChange(watchDir) {
+  return function (eventType, filename) {
+    if (!filename) return;
+    // 排除 node_modules、.git 和临时文件
+    if (
+      filename.includes("node_modules") ||
+      filename.includes(".git") ||
+      filename.startsWith("temp_") ||
+      filename.startsWith("_exe_") ||
+      filename.startsWith("diff-") ||
+      filename.startsWith("check-") ||
+      filename.endsWith(".cjs")
+    )
+      return;
 
-  const fullPath = path.resolve(process.cwd(), filename);
-  // 只监听 src/ 下的文件
-  if (!fullPath.startsWith(WATCH_DIRS[0])) return;
+    // filename 是相对于 watchDir 的路径
+    const fullPath = path.join(watchDir, filename);
+    // 只监控 src/ 和根目录的配置文件
+    if (
+      !fullPath.startsWith(path.join(ROOT, "src")) &&
+      fullPath !== path.join(ROOT, ".gitignore") &&
+      fullPath !== path.join(ROOT, "package.json")
+    )
+      return;
 
-  pendingFiles.add(filename);
+    // 使用相对路径记录
+    const relPath = path.relative(ROOT, fullPath);
+    pendingFiles.add(relPath);
 
-  // 重置防抖定时器
-  if (timer) clearTimeout(timer);
-  timer = setTimeout(doCommit, DEBOUNCE_MS);
+    // 重置防抖定时器
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(doCommit, DEBOUNCE_MS);
+  };
 }
 
 // 启动监听
 console.log("[auto-git] 🔍 正在监听 src/ 文件变化...");
 for (const dir of WATCH_DIRS) {
   if (fs.existsSync(dir)) {
-    fs.watch(dir, { recursive: true }, onFileChange);
+    fs.watch(dir, { recursive: true }, onFileChange(dir));
   }
 }
 
