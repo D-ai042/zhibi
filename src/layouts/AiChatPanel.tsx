@@ -12,6 +12,7 @@ import { useAppStore } from "@/stores/app-store";
 import { MemoryEngine } from "@/lib/memory-engine";
 import type { ChatMessage, Character, MemoryEntry, WorldTerm } from "@/types";
 import { MODULE_LABEL, OUTLINE_SECTION_LABEL } from "@/types";
+import { uuid } from "@/lib/uuid";
 
 /** 上传的文本文件 */
 interface UploadedFile {
