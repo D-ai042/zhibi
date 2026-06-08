@@ -1169,8 +1169,9 @@ export function WritingModule() {
                                     disabled={!selectedChapter || aiWriting}
                                 >
                                     <Sparkles className="h-3.5 w-3.5" />
-                                    {aiWriting ? "AI 写作中..." : <>AI写文 <span className="text-[10px] text-white/70 ml-0.5 font-normal">大纲生成初稿</span></>}
+                                    {aiWriting ? "AI 写作中..." : "AI写文"}
                                 </button>
+                                <div className="text-[9px] text-slate-600 leading-tight text-center">大纲生成初稿</div>
                                 {/* 去 AI 味按钮 */}
                                 <button
                                     type="button"
@@ -1179,8 +1180,9 @@ export function WritingModule() {
                                     className="flex items-center gap-1.5 rounded-md bg-emerald-600 px-3 py-1.5 text-xs text-white hover:bg-emerald-700 disabled:opacity-50"
                                 >
                                     <Sparkles className="h-3.5 w-3.5" />
-                                    {humanizing ? "处理中..." : <>AI去味 <span className="text-[10px] text-white/70 ml-0.5 font-normal">语气自然化</span></>}
+                                    {humanizing ? "处理中..." : "AI去味"}
                                 </button>
+                                <div className="text-[9px] text-slate-600 leading-tight text-center">语气自然化</div>
                                 {/* AI精修按钮 */}
                                 <button
                                     type="button"
@@ -1189,8 +1191,9 @@ export function WritingModule() {
                                     className="flex items-center gap-1.5 rounded-md bg-amber-600 px-3 py-1.5 text-xs text-white hover:bg-amber-700 disabled:opacity-50"
                                 >
                                     <Sparkles className="h-3.5 w-3.5" />
-                                    {polishing ? "精修中..." : <>AI精修 <span className="text-[10px] text-white/70 ml-0.5 font-normal">精简+段落优化</span></>}
+                                    {polishing ? "精修中..." : "AI精修"}
                                 </button>
+                                <div className="text-[9px] text-slate-600 leading-tight text-center">精简+段落优化</div>
                                 <button
                                     type="button"
                                     onClick={handleUndo}
