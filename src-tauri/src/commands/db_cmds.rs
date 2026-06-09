@@ -972,30 +972,36 @@ pub fn export_project(project_id: String, state: State<'_, DbState>) -> Result<V
 }
 
 #[tauri::command]
-pub fn get_setting(key: String, state: State<'_, DbState>) -> Result<Option<String>, String> {
-    with_conn(&state, |conn| {
-        let mut stmt = conn.prepare("SELECT value FROM app_settings WHERE key=?1")?;
-        let mut rows = stmt.query(params![key])?;
-        if let Some(row) = rows.next()? {
-            let val: String = row.get(0)?;
-            Ok(Some(val))
-        } else {
-            Ok(None)
-        }
-    })
-    .map_err(|e| e.to_string())
+pub fn get_setting(key: String, _state: State<'_, DbState>) -> Result<Option<String>, String> {
+    let conn = open_or_create_settings_db();
+    let mut stmt = conn.prepare("SELECT value FROM app_settings WHERE key=?1").map_err(|e| e.to_string())?;
+    let mut rows = stmt.query(params![key]).map_err(|e| e.to_string())?;
+    if let Some(row) = rows.next().map_err(|e| e.to_string())? {
+        Ok(Some(row.get::<_, String>(0).map_err(|e| e.to_string())?))
+    } else {
+        Ok(None)
+    }
 }
 
 #[tauri::command]
-pub fn set_setting(key: String, value: String, state: State<'_, DbState>) -> Result<(), String> {
-    with_conn(&state, |conn| {
-        conn.execute(
-            "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?1, ?2)",
-            params![key, value],
-        )?;
-        Ok(())
-    })
-    .map_err(|e| e.to_string())
+pub fn set_setting(key: String, value: String, _state: State<'_, DbState>) -> Result<(), String> {
+    let conn = open_or_create_settings_db();
+    conn.execute(
+        "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?1, ?2)",
+        params![key, value],
+    ).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn open_or_create_settings_db() -> rusqlite::Connection {
+    let dir = crate::db::projects_dir();
+    std::fs::create_dir_all(&dir).ok();
+    let path = dir.join("settings.db");
+    let conn = rusqlite::Connection::open(&path).expect("open settings.db");
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);"
+    ).ok();
+    conn
 }
 
 // ===== v2.0: 风格指南/故事铁则/章节摘要 =====

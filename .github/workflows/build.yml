@@ -81,7 +81,7 @@ jobs:
             -H "Accept: application/vnd.github+json" \
             -d "{\"name\":\"$NEW_NAME\"}"
 
-      # 生成 updater 用的 latest.json 签名（Windows only，避免多平台覆盖）
+      # 生成 updater 用的 latest.json（Windows only，避免多平台覆盖）
       - name: 生成并上传 latest.json (用于自动更新)
         if: matrix.label == 'win'
         shell: bash
@@ -90,29 +90,7 @@ jobs:
         run: |
           TAG="${{ github.ref_name }}"
           VERSION="${TAG#v}"
-          cat > latest.json << EOF
-{
-  "version": "${VERSION}",
-  "notes": "新版本 ${TAG}",
-  "pub_date": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
-  "platforms": {
-    "windows-x86_64": {
-      "signature": "",
-      "url": "https://ghfast.top/github.com/D-ai042/zhibi/releases/download/${TAG}/执笔-v${TAG}-win.exe"
-    },
-    "darwin-x86_64": {
-      "signature": "",
-      "url": "https://ghfast.top/github.com/D-ai042/zhibi/releases/download/${TAG}/执笔-v${TAG}-mac-intel.dmg"
-    },
-    "darwin-aarch64": {
-      "signature": "",
-      "url": "https://ghfast.top/github.com/D-ai042/zhibi/releases/download/${TAG}/执笔-v${TAG}-mac-arm.dmg"
-    },
-    "linux-x86_64": {
-      "signature": "",
-      "url": "https://ghfast.top/github.com/D-ai042/zhibi/releases/download/${TAG}/执笔-v${TAG}-linux.AppImage"
-    }
-  }
-}
-EOF
+          printf '{"version":"%s","notes":"%s","pub_date":"%s","platforms":{"windows-x86_64":{"signature":"","url":"https://ghfast.top/github.com/D-ai042/zhibi/releases/download/%s/zhibi-writer_%s_x64-setup.exe"},"darwin-x86_64":{"signature":"","url":"https://ghfast.top/github.com/D-ai042/zhibi/releases/download/%s/zhibi-writer_%s_x64_en-US.dmg"},"darwin-aarch64":{"signature":"","url":"https://ghfast.top/github.com/D-ai042/zhibi/releases/download/%s/zhibi-writer_%s_x64_en-US.dmg"},"linux-x86_64":{"signature":"","url":"https://ghfast.top/github.com/D-ai042/zhibi/releases/download/%s/zhibi-writer_%s_amd64.AppImage"}}}\n' \
+            "$VERSION" "$TAG" "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$TAG" "$VERSION" "$TAG" "$VERSION" "$TAG" "$VERSION" "$TAG" "$VERSION" \
+            > latest.json
           gh release upload "$TAG" latest.json --clobber

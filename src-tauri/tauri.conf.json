@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "执笔",
+  "productName": "zhibi-writer",
   "version": "0.1.0",
   "identifier": "com.zhibi.writer",
   "build": {
@@ -30,6 +30,7 @@
     "active": true,
     "targets": [
       "nsis",
+      "msi",
       "dmg",
       "appimage"
     ],
