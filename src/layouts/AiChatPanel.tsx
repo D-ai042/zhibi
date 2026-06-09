@@ -1334,14 +1334,14 @@ export function AiChatPanel() {
                     `当用户要求创建、修改或删除剧情段落和细纲时，请用以下格式输出：\n` +
                     "```\n---PLOT_SEGMENTS---\n[{\"action\":\"create_segment\",\"segment\":{\"type\":\"bright\",\"title\":\"少年入世\",\"characters\":\"叶玄\",\"time\":\"天元纪元205年\",\"chapters\":\"1-90\",\"event\":\"叶玄拜入九霄宗开始修炼之路\"}},\n" +
                     " {\"action\":\"create_segment\",\"segment\":{\"type\":\"dark\",\"title\":\"暗流涌动\",\"characters\":\"慕容云\",\"time\":\"天元纪元205年\",\"chapters\":\"1-90\",\"event\":\"暗影盟暗中观察九霄宗动向\"}},\n" +
-                    " {\"action\":\"create_beat\",\"segmentTitle\":\"少年入世\",\"beat\":{\"title\":\"拜入山门\",\"characters\":\"叶玄\",\"event\":\"叶玄通过入门试炼成为外门弟子\"}},\n" +
-                    " {\"action\":\"update_beat\",\"segmentTitle\":\"少年入世\",\"beatNumber\":3,\"fields\":{\"title\":\"修改后的名称\",\"event\":\"修改后的事件描述\"}},\n" +
+                    " {\"action\":\"create_beat\",\"segmentTitle\":\"少年入世\",\"beat\":{\"title\":\"拜入山门\",\"characters\":\"叶玄\",\"chapters\":\"1-5\",\"time\":\"天元纪元205年\",\"location\":\"九霄宗山门\",\"event\":\"叶玄通过入门试炼成为外门弟子\"}},\n" +
+                    " {\"action\":\"update_beat\",\"segmentTitle\":\"少年入世\",\"beatNumber\":3,\"fields\":{\"title\":\"修改后的名称\",\"characters\":\"新增角色\",\"chapters\":\"3-8\",\"time\":\"天元纪元206年\",\"event\":\"修改后的事件描述\"}},\n" +
                     " {\"action\":\"delete_beat\",\"segmentTitle\":\"少年入世\",\"beatNumber\":5},\n" +
                     " {\"action\":\"create_edge\",\"edge\":{\"sourceTitle\":\"少年入世\",\"targetTitle\":\"初露锋芒\"}}]\n---END_PLOT_SEGMENTS---\n```\n" +
                     `规则：\n` +
                     `- create_segment: 创建段落（type=bright/dark），title/chapters 必填\n` +
-                    `- create_beat: 在已有段落下创建细纲，segmentTitle 指定段落标题\n` +
-                    `- update_beat: 修改已有细纲的字段（只传需要改的字段），beatNumber 是细纲序号\n` +
+                    `- create_beat: 在已有段落下创建细纲，segmentTitle 指定段落标题。细纲字段：title(名称)、characters(人物)、chapters(章节范围)、time(时间)、location(地点)、event(事件)\n` +
+                    `- update_beat: 修改细纲的任意字段（只传需要改的字段），beatNumber 是细纲序号。可更新字段同上\n` +
                     `- delete_beat: 删除细纲，beatNumber 是细纲序号\n` +
                     `- create_edge: 段落之间连线\n` +
                     `- 用户当前剧情走向中的段落列表在对话开始时会列出，你可以据此引用段落标题和细纲序号。\n` +

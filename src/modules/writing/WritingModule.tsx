@@ -343,7 +343,7 @@ export function WritingModule() {
         return ch.title;
     }
 
-    // ===== 从剧情走向构建卷结构 =====
+    // ===== 从剧情走向构建卷结构（按连线拓扑排序） =====
     const volumes = useMemo(() => {
         if (!pid) return [];
         const segs = loadSegments(pid);
@@ -351,17 +351,21 @@ export function WritingModule() {
         const bright = segs.filter(s => s.type === "bright");
         const dark = segs.filter(s => s.type === "dark");
 
-        return bright.map(b => {
+        const brightMap = new Map(bright.map(b => [b.id, b]));
+        const idMap = new Map(segs.map(s => [s.id, s]));
+
+        const sortedIds = getSortedBrightIds(pid);
+
+        return sortedIds.map(id => {
+            const b = brightMap.get(id)!;
             const connectedDarkIds = new Set<string>();
             for (const e of edges) {
                 if (e.sourceHandle === "bottom" && e.targetHandle === "top") {
-                    const src = segs.find(s => s.id === e.source);
-                    const tgt = segs.find(s => s.id === e.target);
+                    const src = idMap.get(e.source); const tgt = idMap.get(e.target);
                     if (src?.id === b.id && tgt?.type === "dark") connectedDarkIds.add(tgt.id);
                     if (tgt?.id === b.id && src?.type === "dark") connectedDarkIds.add(src.id);
                 } else if (!e.sourceHandle && !e.targetHandle) {
-                    const src = segs.find(s => s.id === e.source);
-                    const tgt = segs.find(s => s.id === e.target);
+                    const src = idMap.get(e.source); const tgt = idMap.get(e.target);
                     if (src?.id === b.id && tgt?.type === "dark") connectedDarkIds.add(tgt.id);
                     if (tgt?.id === b.id && src?.type === "dark") connectedDarkIds.add(src.id);
                 }
@@ -376,6 +380,51 @@ export function WritingModule() {
             };
         });
     }, [pid]);
+
+    // 根据连线关系对明线段落做拓扑排序，返回排序后的 ID 列表
+    function getSortedBrightIds(projectId: string): string[] {
+        const segs = loadSegments(projectId);
+        const edges = loadEdges(projectId);
+        const bright = segs.filter(s => s.type === "bright");
+        if (!bright.length) return [];
+
+        const brightIds = new Set(bright.map(b => b.id));
+        const inDegree = new Map<string, number>();
+        const adj = new Map<string, string[]>();
+
+        for (const b of bright) { inDegree.set(b.id, 0); adj.set(b.id, []); }
+
+        for (const e of edges) {
+            if (brightIds.has(e.source) && brightIds.has(e.target)) {
+                adj.get(e.source)?.push(e.target);
+                inDegree.set(e.target, (inDegree.get(e.target) || 0) + 1);
+            }
+        }
+
+        const queue: string[] = [];
+        const sorted: string[] = [];
+
+        for (const [id, deg] of inDegree) { if (deg === 0) queue.push(id); }
+
+        while (queue.length > 0) {
+            queue.sort((a, b) => bright.findIndex(x => x.id === a) - bright.findIndex(x => x.id === b));
+            const id = queue.shift()!;
+            sorted.push(id);
+            for (const next of adj.get(id) || []) {
+                const newDeg = (inDegree.get(next) || 1) - 1;
+                inDegree.set(next, newDeg);
+                if (newDeg === 0) queue.push(next);
+            }
+        }
+
+        // 补上未参与连线的段落到末尾（保持原始顺序）
+        if (sorted.length < bright.length) {
+            const sortedSet = new Set(sorted);
+            for (const b of bright) { if (!sortedSet.has(b.id)) sorted.push(b.id); }
+        }
+
+        return sorted;
+    }
 
     // ===== 加载章节（含旧数据迁移） =====
     useEffect(() => {
@@ -399,8 +448,9 @@ export function WritingModule() {
         const filtered = migrated.filter(ch => validVolumeIds.has(ch.volumeSegmentId));
         if (filtered.length < migrated.length) changed = true;
 
+        const sortedBright = getSortedBrightIds(pid);
         const volumeOrder = new Map<string, number>();
-        bright.forEach((b, i) => { volumeOrder.set(b.id, i); });
+        sortedBright.forEach((id, i) => { volumeOrder.set(id, i); });
 
         const sorted = [...filtered].sort((a, b) => {
             const oa = volumeOrder.get(a.volumeSegmentId) ?? 999;

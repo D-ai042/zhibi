@@ -518,37 +518,29 @@ export function AppShell({ children }: AppShellProps) {
 
         <main className="relative min-w-0 flex-1 overflow-hidden">{children}</main>
 
-        {drawerOpen && (
-          <aside className="relative shrink-0 border-l border-slate-200 bg-white" style={{ width: drawerWidth }}>
-            {/* 拖拽手柄 — 左侧边缘 4px 区域 */}
-            <div
-              className={`absolute left-0 top-0 z-20 h-full w-2 cursor-col-resize hover:bg-amber-200/50 transition-colors ${isDragging ? "bg-amber-300/60" : ""}`}
-              style={{ marginLeft: -4 }}
-              onMouseDown={handleDragStart}
-            />
+        <aside
+          className={`relative shrink-0 bg-white transition-all duration-200 ${drawerOpen ? "border-l border-slate-200" : ""}`}
+          style={{ width: drawerOpen ? drawerWidth : 0, overflow: "hidden" }}
+        >
+          <div style={{ width: drawerWidth, height: "100%" }}>
+            {drawerOpen && (
+              <div
+                className={`absolute left-0 top-0 z-20 h-full w-2 cursor-col-resize hover:bg-amber-200/50 transition-colors ${isDragging ? "bg-amber-300/60" : ""}`}
+                style={{ marginLeft: -4 }}
+                onMouseDown={handleDragStart}
+              />
+            )}
             <RightDrawer />
-          </aside>
-        )}
-        {!drawerOpen && (
-          <button
-            type="button"
-            className="absolute top-1/2 z-10 -translate-y-1/2 rounded-l bg-white px-1 py-4 shadow border border-r-0"
-            style={{ right: 0 }}
-            onClick={() => setDrawerOpen(true)}
-          >
-            <ChevronLeft className="h-4 w-4" />
-          </button>
-        )}
-        {drawerOpen && (
-          <button
-            type="button"
-            className="absolute top-1/2 z-10 -translate-y-1/2 rounded-l bg-white px-1 py-4 shadow border border-r-0"
-            style={{ right: drawerWidth }}
-            onClick={() => setDrawerOpen(false)}
-          >
-            <ChevronRight className="h-4 w-4" />
-          </button>
-        )}
+          </div>
+        </aside>
+        <button
+          type="button"
+          className="absolute top-1/2 z-10 -translate-y-1/2 rounded-l bg-white px-1 py-4 shadow border border-r-0"
+          style={{ right: drawerOpen ? drawerWidth : 0 }}
+          onClick={() => setDrawerOpen(!drawerOpen)}
+        >
+          {drawerOpen ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
+        </button>
       </div>
 
       <footer className="flex h-6 shrink-0 items-center gap-4 border-t border-slate-200 bg-white px-4 text-xs text-slate-500">

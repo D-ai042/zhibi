@@ -52,7 +52,7 @@ export class MemoryEngine {
     private saveCompressedIdx(idx: number) { saveJSON(compressedIdxKey(this.projectId), idx); }
 
     /** 按关键词召回短期记忆 */
-    recallShortTerm(keywords: string[], limit = MAX_RECALL): MemoryEntry[] {
+    recallShortTerm(keywords: string[], limit = 5): MemoryEntry[] {
         const entries = this.getShortTerm();
         if (entries.length === 0) return [];
 
@@ -278,6 +278,7 @@ ${text}`;
         const nonSystem = messages.filter(m => m.role !== "system");
         const userMessages = nonSystem.filter(m => m.role === "user");
 
+        const WORKING_ROUNDS = 10;
         // 取最近 WORKING_ROUNDS 轮用户消息 + 对应的 AI 回复
         const workingStart = Math.max(0, userMessages.length - WORKING_ROUNDS);
         const workingUserIds = new Set(
