@@ -53,8 +53,10 @@ jobs:
 
       - name: 构建
         shell: bash
+        env:
+          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
         run: |
-          npm run tauri build 2>&1
+          npm run tauri build -- --target ${{ matrix.target }} 2>&1
 
       - name: 重命名产物
         shell: bash
@@ -62,14 +64,27 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${{ github.ref_name }}"
-          BUNDLE_DIR="src-tauri/target/release/bundle"
+          # --target 参数导致输出在 src-tauri/target/$TARGET/release/bundle 下
+          BUNDLE_DIR="src-tauri/target/${{ matrix.target }}/release/bundle"
+          echo "Looking for artifacts in: $BUNDLE_DIR"
+          ls -la "$BUNDLE_DIR" 2>/dev/null || echo "No bundle dir at $BUNDLE_DIR"
           case "${{ matrix.ext }}" in
-            dmg) SRC=$(find "$BUNDLE_DIR/dmg" -name "*.dmg" | head -1) ;;
-            nsis) SRC=$(find "$BUNDLE_DIR/nsis" -name "*.exe" | head -1) ;;
+            dmg) SRC=$(find "$BUNDLE_DIR" -name "*.dmg" | head -1) ;;
+            nsis) SRC=$(find "$BUNDLE_DIR" -name "*.exe" -o -name "*.msi" | head -1) ;;
           esac
+          if [ -z "$SRC" ]; then
+            echo "No artifact found, checking default bundle path..."
+            BUNDLE_DIR="src-tauri/target/release/bundle"
+            ls -la "$BUNDLE_DIR" 2>/dev/null || echo "No bundle dir there either"
+            case "${{ matrix.ext }}" in
+              dmg) SRC=$(find "$BUNDLE_DIR" -name "*.dmg" | head -1) ;;
+              nsis) SRC=$(find "$BUNDLE_DIR" -name "*.exe" -o -name "*.msi" | head -1) ;;
+            esac
+          fi
+          if [ -z "$SRC" ]; then echo "No artifact found!"; exit 1; fi
           EXT="${SRC##*.}"
-          DST="$BUNDLE_DIR/zhibi-$TAG-${{ matrix.ext }}.$EXT"
-          echo "SRC=$SRC DST=$DST"
-          mv "$SRC" "$DST"
+          DST="zhibi-$TAG-${{ matrix.ext }}.$EXT"
+          echo "Moving $SRC -> $DST"
+          cp "$SRC" "$DST"
           gh release create "$TAG" --title "执笔 $TAG" --notes "自动构建" --latest 2>/dev/null || true
           gh release upload "$TAG" "$DST" --clobber
