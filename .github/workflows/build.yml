@@ -4,6 +4,9 @@ on:
     tags: ['v*']
   workflow_dispatch:  # 允许手动触发
 
+permissions:
+  contents: write  # 允许创建 Release 和上传产物
+
 jobs:
   build:
     strategy:
@@ -28,6 +31,8 @@ jobs:
             rust-target: x86_64-pc-windows-msvc
 
     runs-on: ${{ matrix.os }}
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - uses: actions/checkout@v4
 
