@@ -2,10 +2,10 @@ name: 多平台构建
 on:
   push:
     tags: ['v*']
-  workflow_dispatch:  # 允许手动触发
+  workflow_dispatch:
 
 permissions:
-  contents: write  # 允许创建 Release 和上传产物
+  contents: write
 
 jobs:
   build:
@@ -17,18 +17,22 @@ jobs:
             target: x86_64-unknown-linux-gnu
             ext: AppImage
             rust-target: x86_64-unknown-linux-gnu
+            label: linux
           - os: macos-latest
             target: x86_64-apple-darwin
             ext: dmg
             rust-target: x86_64-apple-darwin
+            label: mac-intel
           - os: macos-latest
             target: aarch64-apple-darwin
             ext: dmg
             rust-target: aarch64-apple-darwin
+            label: mac-arm
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             ext: msi
             rust-target: x86_64-pc-windows-msvc
+            label: win
 
     runs-on: ${{ matrix.os }}
     env:
@@ -54,13 +58,39 @@ jobs:
         run: npm ci
 
       - name: 构建 Tauri
-        uses: tauri-apps/tauri-action@v0
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tagName: ${{ github.ref_name }}
-          releaseName: '执笔 v__VERSION__'
-          releaseBody: '自动构建的 ${{ matrix.os }} 版本'
-          releaseDraft: false
-          prerelease: false
-          args: --target ${{ matrix.rust-target }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          npm run tauri build -- --target ${{ matrix.rust-target }} --bundles ${{ matrix.ext }}
+        shell: bash
+
+      - name: 重命名产物
+        shell: bash
+        run: |
+          BUNDLE_DIR="src-tauri/target/${{ matrix.rust-target }}/release/bundle"
+          case "${{ matrix.ext }}" in
+            dmg)
+              SRC=$(find "$BUNDLE_DIR/dmg" -name "*.dmg" | head -1)
+              DST="$BUNDLE_DIR/执笔-v${{ github.ref_name }}-${{ matrix.label }}.dmg"
+              ;;
+            msi)
+              SRC=$(find "$BUNDLE_DIR/msi" -name "*.msi" | head -1)
+              DST="$BUNDLE_DIR/执笔-v${{ github.ref_name }}-${{ matrix.label }}.msi"
+              ;;
+            AppImage)
+              SRC=$(find "$BUNDLE_DIR/appimage" -name "*.AppImage" | head -1)
+              DST="$BUNDLE_DIR/执笔-v${{ github.ref_name }}-${{ matrix.label }}.AppImage"
+              ;;
+          esac
+          echo "SRC=$SRC"
+          echo "DST=$DST"
+          mv "$SRC" "$DST"
+          echo "ASSET_PATH=$DST" >> $GITHUB_ENV
+
+      - name: 上传到 Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ github.ref_name }}" "$ASSET_PATH" --clobber
