@@ -75,24 +75,22 @@ export function getSync(key: string): string | null {
 }
 
 export function setSync(key: string, value: string): void {
-    if (isTauri()) {
-        console.warn("[storage] 同步写仅在浏览器模式下可用，EXE 模式请用 await set()");
-        localStorage.setItem(key, value);
-        return;
-    }
     localStorage.setItem(key, value);
+    // 在 EXE 模式下异步同步写入 SQLite（fire-and-forget，不阻塞 UI）
+    if (isTauri()) {
+        api.setSetting(key, value).catch(() => {});
+    }
 }
 
 export function removeSync(key: string): void {
-    if (isTauri()) {
-        localStorage.removeItem(key);
-        return;
-    }
     localStorage.removeItem(key);
+    if (isTauri()) {
+        api.setSetting(key, "").catch(() => {});
+    }
 }
 
 export function getJSONSync<T>(key: string, def: T): T {
-    const raw = getSync(key);
+    const raw = localStorage.getItem(key);
     if (!raw) return def;
     try {
         return JSON.parse(raw) as T;

@@ -334,9 +334,8 @@ export async function buildChatContext(projectId: string): Promise<string> {
 /** 从 plot-chapters（写作台卷章树）读取章节，这是章节数据的唯一真实来源 */
 function findChapterFromPlotChapters(projectId: string, chapterId: string): { id: string; number: number; title: string; volumeName: string } | null {
     try {
-        const raw = localStorage.getItem(`plot-chapters-${projectId}`); // -- keep: used for null check, not JSON parse
-        if (!raw) return null;
-        const chapters = JSON.parse(raw);
+        const chapters = getJSONSync(`plot-chapters-${projectId}`, null as any[] | null);
+        if (!chapters) return null;
         const ch = chapters.find((c: any) => c.id === chapterId);
         if (!ch) return null;
         // 从剧情走向中找卷名

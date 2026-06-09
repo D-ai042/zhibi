@@ -37,7 +37,7 @@ function estimateTokens(text: string): number {
 function extractKeywords(text: string): string[] {
     const words = text.match(/[\u4e00-\u9fff]{2,4}/g);
     if (!words) return [text.slice(0, 20)];
-    const skip = new Set(["我们","可以","这个","那个","什么","怎么","但是","因为","所以","如果","虽然","然后","而且","或者","还是","不是","就是","没有","一个","一下","一直","一些","已经","知道","觉得","需要","应该","可能","比较","非常","很多","时候","地方","方式","程度","情况","问题","结果","时候"]);
+    const skip = new Set(["我们", "可以", "这个", "那个", "什么", "怎么", "但是", "因为", "所以", "如果", "虽然", "然后", "而且", "或者", "还是", "不是", "就是", "没有", "一个", "一下", "一直", "一些", "已经", "知道", "觉得", "需要", "应该", "可能", "比较", "非常", "很多", "时候", "地方", "方式", "程度", "情况", "问题", "结果", "时候"]);
     const filtered = words.filter(w => !skip.has(w));
     return Array.from(new Set(filtered)).slice(0, 8);
 }

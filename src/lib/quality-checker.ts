@@ -139,12 +139,12 @@ function checkChapterVersion(projectId: string, chapterNumber: number): QualityC
 
 // ===== 辅助加载 =====
 
-function loadStoryBible(projectId: string): Promise<StoryBible | null> {
-    try { return api.getStoryBible(projectId); } catch { return Promise.resolve(null); }
+async function loadStoryBible(projectId: string): Promise<StoryBible | null> {
+    try { return await api.getStoryBible(projectId); } catch { return null; }
 }
 
-function loadStyleGuide(projectId: string): Promise<StyleGuide | null> {
-    try { return api.getStyleGuide(projectId); } catch { return Promise.resolve(null); }
+async function loadStyleGuide(projectId: string): Promise<StyleGuide | null> {
+    try { return await api.getStyleGuide(projectId); } catch { return null; }
 }
 
 async function loadPrevSummaries(projectId: string, chapterNumber: number): Promise<string> {
