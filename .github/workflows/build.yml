@@ -30,7 +30,7 @@ jobs:
             label: mac-arm
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            ext: msi
+            ext: nsis
             rust-target: x86_64-pc-windows-msvc
             label: win
 
@@ -62,7 +62,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
-          npm run tauri build -- --target ${{ matrix.rust-target }} --bundles ${{ matrix.ext }}
+          npm run tauri build -- --target ${{ matrix.rust-target }}
         shell: bash
 
       - name: 重命名产物
@@ -72,17 +72,16 @@ jobs:
           case "${{ matrix.ext }}" in
             dmg)
               SRC=$(find "$BUNDLE_DIR/dmg" -name "*.dmg" | head -1)
-              DST="$BUNDLE_DIR/执笔-v${{ github.ref_name }}-${{ matrix.label }}.dmg"
               ;;
-            msi)
-              SRC=$(find "$BUNDLE_DIR/msi" -name "*.msi" | head -1)
-              DST="$BUNDLE_DIR/执笔-v${{ github.ref_name }}-${{ matrix.label }}.msi"
+            nsis)
+              SRC=$(find "$BUNDLE_DIR/nsis" -name "*.exe" | head -1)
               ;;
             AppImage)
-              SRC=$(find "$BUNDLE_DIR/appimage" -name "*.AppImage" | head -1)
-              DST="$BUNDLE_DIR/执笔-v${{ github.ref_name }}-${{ matrix.label }}.AppImage"
+              SRC=$(find "$BUNDLE_DIR/appimage" -name "*.AppImage" -o -name "*.appimage" | head -1)
               ;;
           esac
+          EXT="${SRC##*.}"
+          DST="$BUNDLE_DIR/执笔-v${{ github.ref_name }}-${{ matrix.label }}.$EXT"
           echo "SRC=$SRC"
           echo "DST=$DST"
           mv "$SRC" "$DST"

@@ -22,6 +22,12 @@ https://github.com/D-ai042/zhibi
 - **Node.js 20 弃用警告**：加 `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true`
 - **新增文件**：`scripts/gen-icns.py`（Python 版 icns 生成脚本）
 
+### 第三轮：产物重命名 + 工作流重构
+- **去掉 tauri-action**：改为手动 `npm run tauri build` + `gh release upload`
+- **产物重命名**：`_0.1.0_x64.dmg` → `zhibi-mac-intel.dmg` / `zhibi-mac-arm.dmg` / `zhibi-win.msi`
+- **v0.1.2 进一步改进**：新 build.yml 产物名为 `执笔-v0.1.2-mac-intel.dmg` 等格式
+- **v0.1.1 资产已通过 API 改名**：zhibi-mac-arm.dmg, zhibi-mac-intel.dmg, zhibi-win.msi
+
 ### 修改的文件
 | 文件 | 说明 |
 |---|---|

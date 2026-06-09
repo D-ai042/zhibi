@@ -30,7 +30,8 @@
     "active": true,
     "targets": [
       "nsis",
-      "dmg"
+      "dmg",
+      "appimage"
     ],
     "icon": [
       "icons/icon.ico",
