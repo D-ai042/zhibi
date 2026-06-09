@@ -23,14 +23,15 @@ const TC: Record<string, { bg: string; border: string }> = {
   other: { bg: "#f3f4f6", border: "#9ca3af" },
 };
 
-// ==== localStorage ====
+// ==== storage ====
+import { getJSONSync, setJSONSync } from "@/lib/storage";
 function ek(pid: string) { return "worldview-edges-" + pid; }
 function gk(pid: string) { return "worldview-groups-" + pid; }
-function loadEdges(pid: string): Edge[] { try { return JSON.parse(localStorage.getItem(ek(pid)) || "[]"); } catch { return []; } }
-function saveEdges(pid: string, ed: Edge[]) { localStorage.setItem(ek(pid), JSON.stringify(ed)); }
+function loadEdges(pid: string): Edge[] { return getJSONSync(ek(pid), []); }
+function saveEdges(pid: string, ed: Edge[]) { setJSONSync(ek(pid), ed); }
 interface SavedGroup { id: string; name: string; locked: boolean; x: number; y: number; w: number; h: number; bg: string; border: string; childIds: string[] }
-function saveGroups(pid: string, gs: SavedGroup[]) { localStorage.setItem(gk(pid), JSON.stringify(gs)); }
-function loadGroups(pid: string): SavedGroup[] { try { return JSON.parse(localStorage.getItem(gk(pid)) || "[]"); } catch { return []; } }
+function saveGroups(pid: string, gs: SavedGroup[]) { setJSONSync(gk(pid), gs); }
+function loadGroups(pid: string): SavedGroup[] { return getJSONSync(gk(pid), []); }
 
 /**
  * ★ 横平竖直步进连线 — 双模式对称

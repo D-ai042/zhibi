@@ -78,14 +78,14 @@ export function setSync(key: string, value: string): void {
     localStorage.setItem(key, value);
     // 在 EXE 模式下异步同步写入 SQLite（fire-and-forget，不阻塞 UI）
     if (isTauri()) {
-        api.setSetting(key, value).catch(() => {});
+        api.setSetting(key, value).catch(() => { });
     }
 }
 
 export function removeSync(key: string): void {
     localStorage.removeItem(key);
     if (isTauri()) {
-        api.setSetting(key, "").catch(() => {});
+        api.setSetting(key, "").catch(() => { });
     }
 }
 

@@ -998,6 +998,37 @@ pub fn set_setting(key: String, value: String, state: State<'_, DbState>) -> Res
     .map_err(|e| e.to_string())
 }
 
+// ===== v2.0: 风格指南/故事铁则/章节摘要 =====
+
+#[tauri::command]
+pub fn get_style_guide(project_id: String, state: State<'_, DbState>) -> Result<Option<String>, String> {
+    get_setting(format!("novel-workbench-style-{}", project_id), state)
+}
+
+#[tauri::command]
+pub fn save_style_guide(guide: serde_json::Value, state: State<'_, DbState>) -> Result<(), String> {
+    let pid = guide["project_id"].as_str().unwrap_or("");
+    set_setting(format!("novel-workbench-style-{}", pid), guide.to_string(), state)
+}
+
+#[tauri::command]
+pub fn get_story_bible(project_id: String, state: State<'_, DbState>) -> Result<Option<String>, String> {
+    get_setting(format!("novel-workbench-bible-{}", project_id), state)
+}
+
+#[tauri::command]
+pub fn save_story_bible(bible: serde_json::Value, state: State<'_, DbState>) -> Result<(), String> {
+    let pid = bible["project_id"].as_str().unwrap_or("");
+    set_setting(format!("novel-workbench-bible-{}", pid), bible.to_string(), state)
+}
+
+#[tauri::command]
+pub fn get_chapter_summaries(project_id: String, state: State<'_, DbState>) -> Result<Option<String>, String> {
+    let log_key = format!("novel-workbench-log-{}", project_id);
+    let raw = get_setting(log_key, state)?;
+    Ok(raw)
+}
+
 fn read_table(conn: &rusqlite::Connection, sql: &str, params: impl rusqlite::Params) -> Result<Vec<Value>, rusqlite::Error> {
     use rusqlite::types::ValueRef;
     let mut stmt = conn.prepare(sql)?;

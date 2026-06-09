@@ -9,22 +9,15 @@ import { api } from "@/lib/api";
 import { useAppStore } from "@/stores/app-store";
 import PlotStoryNode, { type PlotSegment, type PlotStoryNodeData } from "@/modules/plot-direction/PlotStoryNode";
 import { uuid } from "@/lib/uuid";
+import { getJSONSync, setJSONSync } from "@/lib/storage";
 
-// ===== localStorage =====
+// ===== storage =====
 function sk(pid: string) { return "plot-segments-" + pid; }
 function ek(pid: string) { return "plot-edges-" + pid; }
-function loadSegments(pid: string): PlotSegment[] {
-  try { return JSON.parse(localStorage.getItem(sk(pid)) || "[]"); } catch { return []; }
-}
-function saveSegments(pid: string, segs: PlotSegment[]) {
-  localStorage.setItem(sk(pid), JSON.stringify(segs));
-}
-function loadEdges(pid: string): Edge[] {
-  try { return JSON.parse(localStorage.getItem(ek(pid)) || "[]"); } catch { return []; }
-}
-function saveEdges(pid: string, eds: Edge[]) {
-  localStorage.setItem(ek(pid), JSON.stringify(eds));
-}
+function loadSegments(pid: string): PlotSegment[] { return getJSONSync(sk(pid), []); }
+function saveSegments(pid: string, segs: PlotSegment[]) { setJSONSync(sk(pid), segs); }
+function loadEdges(pid: string): Edge[] { return getJSONSync(ek(pid), []); }
+function saveEdges(pid: string, eds: Edge[]) { setJSONSync(ek(pid), eds); }
 
 // ===== 撤回收缩 =====
 function gk(pid: string) { return "plot-groups-" + pid; }
@@ -40,22 +33,11 @@ const DEFAULT_TIMELINE: TimelineConfig = { startYear: 0, interval: 1, label: "�
 
 // ===== 节点位置持久化 =====
 function pk(pid: string) { return "plot-positions-" + pid; }
-function loadPositions(pid: string): Record<string, { x: number; y: number }> {
-  try { return JSON.parse(localStorage.getItem(pk(pid)) || "{}"); } catch { return {}; }
-}
-function savePositions(pid: string, pos: Record<string, { x: number; y: number }>) {
-  localStorage.setItem(pk(pid), JSON.stringify(pos));
-}
+function loadPositions(pid: string): Record<string, { x: number; y: number }> { return getJSONSync(pk(pid), {}); }
+function savePositions(pid: string, pos: Record<string, { x: number; y: number }>) { setJSONSync(pk(pid), pos); }
 
-function loadTimelineConfig(pid: string): TimelineConfig {
-  try {
-    const raw = localStorage.getItem("plot-timeline-config-" + pid);
-    return raw ? JSON.parse(raw) : { ...DEFAULT_TIMELINE };
-  } catch { return { ...DEFAULT_TIMELINE }; }
-}
-function saveTimelineConfig(pid: string, cfg: TimelineConfig) {
-  localStorage.setItem("plot-timeline-config-" + pid, JSON.stringify(cfg));
-}
+function loadTimelineConfig(pid: string): TimelineConfig { return getJSONSync("plot-timeline-config-" + pid, { ...DEFAULT_TIMELINE }); }
+function saveTimelineConfig(pid: string, cfg: TimelineConfig) { setJSONSync("plot-timeline-config-" + pid, cfg); }
 
 export function PlotDirectionPanel() {
   const { currentProject, plotBump } = useAppStore();
@@ -98,9 +80,9 @@ export function PlotDirectionPanel() {
     if (!currentProject) return;
     try {
       const { segs, eds, pos } = JSON.parse(snapshotStr);
-      localStorage.setItem(sk(currentProject.id), segs);
-      localStorage.setItem(ek(currentProject.id), eds);
-      if (pos) localStorage.setItem(pk(currentProject.id), pos);
+      setJSONSync(sk(currentProject.id), JSON.parse(segs));
+      setJSONSync(ek(currentProject.id), JSON.parse(eds));
+      if (pos) setJSONSync(pk(currentProject.id), JSON.parse(pos));
       const parsedSegs = JSON.parse(segs);
       const parsedEds = JSON.parse(eds);
       const parsedPos = pos ? JSON.parse(pos) : {};

@@ -10,6 +10,7 @@ import type { QualityCheckItem } from "@/lib/quality-checker";
 import { AiWritingDialog } from "@/components/editor/AiWritingDialog";
 import { AiWriteChapterDialog } from "@/components/editor/AiWriteChapterDialog";
 import { renderMarkdown } from "@/lib/markdown";
+import { getJSONSync, setJSONSync } from "@/lib/storage";
 import type { ChapterSummary, BeatCard } from "@/types";
 import { uuid } from "@/lib/uuid";
 
@@ -22,39 +23,25 @@ interface PlotChapter {
     content: string;
 }
 
-// ===== localStorage =====
-function ck(pid: string) { return "plot-chapters-" + pid; }
-function sk(pid: string) { return "plot-segments-" + pid; }
-function ek(pid: string) { return "plot-edges-" + pid; }
-
 interface PlotSegment {
     id: string; project_id: string; type: "bright" | "dark";
     title: string; characters: string; location: string; time: string; event: string;
 }
 
-function loadChapters(pid: string): PlotChapter[] {
-    try { return JSON.parse(localStorage.getItem(ck(pid)) || "[]"); } catch { return []; }
-}
-function saveChapters(pid: string, chs: PlotChapter[]) {
-    localStorage.setItem(ck(pid), JSON.stringify(chs));
-}
-function loadSegments(pid: string): PlotSegment[] {
-    try { return JSON.parse(localStorage.getItem(sk(pid)) || "[]"); } catch { return []; }
-}
-function loadEdges(pid: string): { source: string; target: string; sourceHandle?: string; targetHandle?: string }[] {
-    try { return JSON.parse(localStorage.getItem(ek(pid)) || "[]"); } catch { return []; }
-}
+function loadChapters(pid: string): PlotChapter[] { return getJSONSync(`plot-chapters-${pid}`, []); }
+function saveChapters(pid: string, chs: PlotChapter[]) { setJSONSync(`plot-chapters-${pid}`, chs); }
+function loadSegments(pid: string): PlotSegment[] { return getJSONSync(`plot-segments-${pid}`, []); }
+function loadEdges(pid: string): { source: string; target: string; sourceHandle?: string; targetHandle?: string }[] { return getJSONSync(`plot-edges-${pid}`, []); }
 
 /** 保存时更新章节版本（用于修订感知的脏链检测） */
 function bumpSavedChapterVersion(projectId: string, chapterNumber: number) {
     try {
         const key = `novel-workbench-log-${projectId}`;
-        const raw = localStorage.getItem(key);
-        if (!raw) return;
-        const store = JSON.parse(raw);
+        const store = getJSONSync(key, {} as any);
+        if (!store) return;
         store.chapterVersions = store.chapterVersions || {};
         store.chapterVersions[String(chapterNumber)] = (store.chapterVersions[String(chapterNumber)] || 0) + 1;
-        localStorage.setItem(key, JSON.stringify(store));
+        setJSONSync(key, store);
     } catch { /* ignore */ }
 }
 
@@ -66,9 +53,7 @@ const colLabel: Record<string, string> = {
 /** 检测有哪些后续章节的摘要基于旧版本 */
 function detectStaleAhead(projectId: string, currentChapterNumber: number): { count: number; chapters: string; fromChapter: number } {
     try {
-        const raw = localStorage.getItem(`novel-workbench-log-${projectId}`);
-        if (!raw) return { count: 0, chapters: "", fromChapter: 0 };
-        const store = JSON.parse(raw);
+        const store = getJSONSync(`novel-workbench-log-${projectId}`, {} as any);
         const deps = store.dependencies || [];
         // 找所有依赖了当前章节及之前章节的 stale 记录
         const stale = deps.filter((d: any) => {
@@ -177,11 +162,7 @@ async function aiExtractNewCharacters(projectId: string, chapterNumber: number, 
                 }));
 
             if (chars.length > 0 || edges.length > 0) {
-                localStorage.setItem(`ai-pending-chars-${projectId}`, JSON.stringify({
-                    chars,
-                    edges,
-                    timestamp: new Date().toISOString(),
-                }));
+                setJSONSync(`ai-pending-chars-${projectId}`, { chars, edges, timestamp: new Date().toISOString() });
                 useAppStore.getState().bumpPendingAiChars();
 
                 const names = chars.map((c: any) => c.name).join("、");
@@ -335,7 +316,7 @@ export function WritingModule() {
         try {
             const projectId = currentProject?.id;
             if (projectId) {
-                const saved = localStorage.getItem("writing-sidebar-width-" + projectId);
+                const saved = localStorage.getItem("writing-sidebar-width-" + projectId); // UI prefs, small, keep in localStorage
                 if (saved) return Math.max(200, Math.min(600, Number(saved)));
             }
         } catch { /* ignore */ }
@@ -481,9 +462,8 @@ export function WritingModule() {
             setCtxSummaries(summaries.filter(s => s.chapter_number < chapterNumber && s.chapter_number >= chapterNumber - 5).sort((a, b) => a.chapter_number - b.chapter_number));
             setCtxBeatCards(beatCards);
             try {
-                const raw = localStorage.getItem(`novel-workbench-log-${projectId}`);
-                if (raw) {
-                    const store = JSON.parse(raw);
+                const store = getJSONSync(`novel-workbench-log-${projectId}`, {} as any);
+                if (store) {
                     const states = store.characterStates || [];
                     const active = states.filter((s: any) => s.last_active_chapter >= chapterNumber - 10);
                     setCtxCharacters(active.map((s: any) => ({ name: s.character_name, status: s.current_status })));

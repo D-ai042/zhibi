@@ -13,22 +13,19 @@ import CustomEdge from "./CustomEdge";
 import CharGroupNode from "./CharGroupNode";
 import { useUndoRedo } from "./useUndoRedo";
 import { uuid } from "@/lib/uuid";
+import { getJSONSync, setJSONSync } from "@/lib/storage";
 
 const STORAGE_KEY = "novel-workbench-mock";
 
-// ===== 编组数据（与世界观完全一致，仅样式不同） =====
+// ===== 编组数据 =====
 interface SavedGroup {
   id: string; name: string; locked: boolean;
   x: number; y: number; w: number; h: number;
   bg: string; border: string; childIds: string[];
 }
 function gk(pid: string) { return "char-groups-" + pid; }
-function loadGroups(pid: string): SavedGroup[] {
-  try { return JSON.parse(localStorage.getItem(gk(pid)) || "[]"); } catch { return []; }
-}
-function saveGroups(pid: string, gs: SavedGroup[]) {
-  localStorage.setItem(gk(pid), JSON.stringify(gs));
-}
+function loadGroups(pid: string): SavedGroup[] { return getJSONSync(gk(pid), []); }
+function saveGroups(pid: string, gs: SavedGroup[]) { setJSONSync(gk(pid), gs); }
 const GROUP_COLORS = ["#8b5cf6", "#ec4899", "#f97316", "#10b981", "#3b82f6", "#ef4444", "#14b8a6", "#f59e0b"];
 
 /** 从关系列表构建 ReactFlow 边（不碰节点位置） */

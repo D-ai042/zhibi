@@ -5,6 +5,7 @@ import {
     FileUp, Folder, FolderPlus, GripVertical, ChevronRight, ChevronDown
 } from "lucide-react";
 import { uuid } from "@/lib/uuid";
+import { getJSONSync, setJSONSync } from "@/lib/storage";
 
 // ===== 支持上传的文件类型 =====
 const TEXT_EXTS = [".txt", ".md", ".json", ".csv", ".yaml", ".yml", ".xml", ".html", ".htm", ".css", ".js", ".ts", ".py", ".java", ".c", ".cpp", ".h", ".rs", ".go", ".rb", ".sh", ".bat", ".ps1", ".env", ".cfg", ".ini", ".toml", ".tex", ".rtf", ".log"];
@@ -22,23 +23,19 @@ interface MaterialGroup {
 interface MaterialItem {
     id: string;
     name: string;
-    content: string;      // 文本内容 / base64 dataUrl
+    content: string;
     type: "text" | "upload" | "image";
     groupId: string | null;
     fileType?: string;
     fileSize?: number;
     createdAt: string;
-    structureAnalysis?: string;  // AI 分析的情节骨架
+    structureAnalysis?: string;
 }
 
-// ===== localStorage =====
+// ===== storage =====
 function storageKey(pid: string, kind: string) { return `material-${kind}-${pid}`; }
-function load<T>(pid: string, kind: string, def: T): T {
-    try { return JSON.parse(localStorage.getItem(storageKey(pid, kind)) || "null") ?? def; } catch { return def; }
-}
-function save<T>(pid: string, kind: string, data: T) {
-    localStorage.setItem(storageKey(pid, kind), JSON.stringify(data));
-}
+function load<T>(pid: string, kind: string, def: T): T { return getJSONSync(storageKey(pid, kind), def); }
+function save<T>(pid: string, kind: string, data: T) { setJSONSync(storageKey(pid, kind), data); }
 
 function fmtSize(bytes: number): string {
     if (bytes < 1024) return bytes + " B";

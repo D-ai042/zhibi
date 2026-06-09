@@ -11,18 +11,15 @@
 import type { ChatMessage, MemoryEntry, LongTermMemory } from "@/types";
 import { uuid } from "@/lib/uuid";
 import { api } from "./api";
+import { getJSONSync, setJSONSync } from "./storage";
 
 // ===== 常量 =====
 
 function shortTermKey(pid: string) { return `novel-workbench-memory-short-${pid}`; }
 function longTermKey(pid: string) { return `novel-workbench-memory-long-${pid}`; }
 function compressedIdxKey(pid: string) { return `novel-workbench-compressed-idx-${pid}`; }
-function loadJSONSync<T>(key: string, def: T): T {
-    try { const r = localStorage.getItem(key); return r ? JSON.parse(r) : def; } catch { return def; }
-}
-function saveJSON(key: string, data: unknown) {
-    try { localStorage.setItem(key, JSON.stringify(data)); } catch { /* */ }
-}
+function loadJSONSync<T>(key: string, def: T): T { return getJSONSync(key, def); }
+function saveJSON(key: string, data: unknown) { setJSONSync(key, data); }
 function estimateTokens(text: string): number {
     let t = 0;
     for (const ch of text) {
