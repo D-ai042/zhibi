@@ -11,7 +11,7 @@ import { api, isTauri } from "./api";
 
 /** 生成带项目 ID 的存储键：prefix-{pid} */
 export function projectKey(prefix: string, projectId: string): string {
-  return `${prefix}-${projectId}`;
+    return `${prefix}-${projectId}`;
 }
 
 // ===== 底层读写 =====
@@ -20,87 +20,87 @@ export function projectKey(prefix: string, projectId: string): string {
  * 读取值：EXE 模式走 Tauri invoke → SQLite，浏览器模式走 localStorage
  */
 export async function get(key: string): Promise<string | null> {
-  if (isTauri()) {
-    return api.getSetting(key);
-  }
-  return localStorage.getItem(key);
+    if (isTauri()) {
+        return api.getSetting(key);
+    }
+    return localStorage.getItem(key);
 }
 
 /**
  * 写入值：EXE 模式走 Tauri invoke → SQLite，浏览器模式走 localStorage
  */
 export async function set(key: string, value: string): Promise<void> {
-  if (isTauri()) {
-    return api.setSetting(key, value);
-  }
-  localStorage.setItem(key, value);
-  return;
+    if (isTauri()) {
+        return api.setSetting(key, value);
+    }
+    localStorage.setItem(key, value);
+    return;
 }
 
 /**
  * 删除值
  */
 export async function remove(key: string): Promise<void> {
-  if (isTauri()) {
-    return api.setSetting(key, "");
-  }
-  localStorage.removeItem(key);
-  return;
+    if (isTauri()) {
+        return api.setSetting(key, "");
+    }
+    localStorage.removeItem(key);
+    return;
 }
 
 // ===== JSON 便捷读写 =====
 
 export async function getJSON<T>(key: string, def: T): Promise<T> {
-  const raw = await get(key);
-  if (!raw) return def;
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
-    return def;
-  }
+    const raw = await get(key);
+    if (!raw) return def;
+    try {
+        return JSON.parse(raw) as T;
+    } catch {
+        return def;
+    }
 }
 
 export async function setJSON(key: string, value: unknown): Promise<void> {
-  return set(key, JSON.stringify(value));
+    return set(key, JSON.stringify(value));
 }
 
 // ===== 同步版（仅浏览器模式可用，EXE 模式会报错） =====
 
 export function getSync(key: string): string | null {
-  if (isTauri()) {
-    console.warn("[storage] 同步读仅在浏览器模式下可用，EXE 模式请用 await get()");
+    if (isTauri()) {
+        console.warn("[storage] 同步读仅在浏览器模式下可用，EXE 模式请用 await get()");
+        return localStorage.getItem(key);
+    }
     return localStorage.getItem(key);
-  }
-  return localStorage.getItem(key);
 }
 
 export function setSync(key: string, value: string): void {
-  if (isTauri()) {
-    console.warn("[storage] 同步写仅在浏览器模式下可用，EXE 模式请用 await set()");
+    if (isTauri()) {
+        console.warn("[storage] 同步写仅在浏览器模式下可用，EXE 模式请用 await set()");
+        localStorage.setItem(key, value);
+        return;
+    }
     localStorage.setItem(key, value);
-    return;
-  }
-  localStorage.setItem(key, value);
 }
 
 export function removeSync(key: string): void {
-  if (isTauri()) {
+    if (isTauri()) {
+        localStorage.removeItem(key);
+        return;
+    }
     localStorage.removeItem(key);
-    return;
-  }
-  localStorage.removeItem(key);
 }
 
 export function getJSONSync<T>(key: string, def: T): T {
-  const raw = getSync(key);
-  if (!raw) return def;
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
-    return def;
-  }
+    const raw = getSync(key);
+    if (!raw) return def;
+    try {
+        return JSON.parse(raw) as T;
+    } catch {
+        return def;
+    }
 }
 
 export function setJSONSync(key: string, value: unknown): void {
-  setSync(key, JSON.stringify(value));
+    setSync(key, JSON.stringify(value));
 }

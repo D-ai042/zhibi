@@ -11,6 +11,7 @@
 import { uuid } from "@/lib/uuid";
 
 import { api } from "./api";
+import { getJSONSync, setJSONSync, setJSON } from "./storage";
 import type {
     Chapter,
     ChapterSummary,
@@ -44,10 +45,28 @@ export interface MemoryUpdateResult {
 
 // ===== 辅助：从内容中提取角色名 =====
 
-const KNOWN_CHARACTERS = ["陈拾一", "祝楹", "曲凌霜", "离玄", "神霄真人", "陈念", "许长老"];
+let _knownCharactersCache: string[] | null = null;
+let _lastCacheTime = 0;
 
-function extractCharacterNamesFromContent(content: string): string[] {
-    return KNOWN_CHARACTERS.filter((name) => content.includes(name));
+async function loadKnownCharacters(projectId: string): Promise<string[]> {
+    // 缓存 10 秒，避免频繁调用
+    const now = Date.now();
+    if (_knownCharactersCache && now - _lastCacheTime < 10000) {
+        return _knownCharactersCache;
+    }
+    try {
+        const chars = await api.listCharacters(projectId);
+        _knownCharactersCache = chars.map(c => c.name);
+        _lastCacheTime = now;
+        return _knownCharactersCache;
+    } catch {
+        return [];
+    }
+}
+
+async function extractCharacterNamesFromContent(content: string, projectId: string): Promise<string[]> {
+    const known = await loadKnownCharacters(projectId);
+    return known.filter((name) => content.includes(name));
 }
 
 // ===== 主函数 =====
@@ -57,10 +76,10 @@ export async function updateMemory(
 ): Promise<MemoryUpdateResult> {
     const { projectId, chapterNumber, chapterTitle, chapterContent, characters } = input;
 
-    // 如果未传入角色名，尝试从内容中提取
+    // 如果未传入角色名，尝试从 API 读取真实角色列表并提取
     const activeChars = characters.length > 0
         ? characters
-        : extractCharacterNamesFromContent(chapterContent);
+        : await extractCharacterNamesFromContent(chapterContent, projectId);
 
     // 1. 生成摘要（先用本地提取，后续可改为AI提炼）
     const summary = extractSummary(chapterContent, chapterTitle);
@@ -124,33 +143,32 @@ function extractSummary(content: string, title: string): string {
 // ===== 地点提取 =====
 
 function extractLocations(content: string): string[] {
-    const knownLocations = [
-        "演武场", "擂台", "神霄峰", "青霄峰", "碧霄峰", "丹霄峰",
-        "景霄峰", "玉霄峰", "振霄峰", "紫霄峰", "长霄峰",
-        "灵田", "藏经阁", "食堂", "剑坪", "青崖村",
-        "中州", "东苍灵洲", "南炎火洲", "西金荒洲", "北寒冰洲",
-    ];
-
+    // 用常见的地点标记词来识别
+    const locationMarkers = ["山", "峰", "谷", "湖", "海", "城", "镇", "村", "殿", "阁", "楼", "府", "宫", "洞", "渊", "林", "园", "台", "岛", "关", "河", "江", "原", "漠", "崖", "岭"];
     const found: string[] = [];
-    for (const loc of knownLocations) {
-        if (content.includes(loc)) found.push(loc);
+    // 匹配 "XXX山"、"XXX峰"、"XXX城" 等模式（2-4字地名）
+    const pattern = new RegExp(`([\\u4e00-\\u9fff]{1,3}[${locationMarkers.join("")}])`, 'g');
+    const matches = content.matchAll(pattern);
+    for (const m of matches) {
+        if (!found.includes(m[1])) found.push(m[1]);
     }
-    return found;
+    return found.slice(0, 10);
 }
 
 // ===== 故事线提取 =====
 
 function extractStorylines(content: string): string[] {
-    const knownStorylines = [
-        "宗门大比", "寻找师父", "修炼突破", "身份秘密",
-        "星辰圣体", "朱雀血脉", "青崖村建设", "空间裂缝",
-    ];
-
+    // 不依赖硬编码列表，而是将正文按关键词拆分为故事线标签
     const found: string[] = [];
-    for (const s of knownStorylines) {
-        if (content.includes(s)) found.push(s);
+    // 检测常见的故事线关键词模式
+    const pattern = /(?:第[一二三四五六七八九十\d]+章|主线|支线|暗线|明线|伏笔|回顾|插叙|倒叙)/g;
+    const matches = content.matchAll(pattern);
+    for (const m of matches) {
+        if (!found.includes(m[0])) found.push(m[0]);
     }
-    return found;
+    // 如果找到的关键词太少，返回空
+    if (found.length < 2) return [];
+    return found.slice(0, 5);
 }
 
 // ===== 伏笔提取 =====
@@ -185,27 +203,13 @@ interface LogStore {
 
 function getLogStore(projectId: string): LogStore {
     const key = `novel-workbench-log-${projectId}`;
-    try {
-        const raw = localStorage.getItem(key);
-        if (!raw) return {};
-        const parsed = JSON.parse(raw);
-        // 兼容旧格式：如果是一维数组，转义为新结构
-        if (Array.isArray(parsed)) {
-            return { summaries: parsed };
-        }
-        return parsed as LogStore;
-    } catch {
-        return {};
-    }
+    return getJSONSync(key, {});
 }
 
 function saveLogStore(projectId: string, store: LogStore) {
     const key = `novel-workbench-log-${projectId}`;
-    try {
-        localStorage.setItem(key, JSON.stringify(store));
-    } catch {
-        // 静默
-    }
+    setJSONSync(key, store);
+    setJSON(key, store);
 }
 
 // ===== 摘要存储 =====

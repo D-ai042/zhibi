@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { BookMarked, Save, Shield, Palette, History, FileText, Sparkles, MessageCircle } from "lucide-react";
 import { useAppStore } from "@/stores/app-store";
 import { api } from "@/lib/api";
+import { getJSONSync, setJSONSync, setJSON } from "@/lib/storage";
 import type { StyleGuide, StoryBible } from "@/types";
 
 type TabId = "style" | "rules" | "voices" | "summary" | "versions";
@@ -90,9 +91,8 @@ function StyleGuideEditor({ projectId }: { projectId: string }) {
 
     useEffect(() => {
         try {
-            const raw = localStorage.getItem(`novel-workbench-style-${projectId}`);
-            if (raw) {
-                const p = JSON.parse(raw);
+            const p = getJSONSync(`novel-workbench-style-${projectId}`, null);
+            if (p) {
                 setGuide({ project_id: projectId, narrative_style: p.narrative_style || "", writing_tone: p.writing_tone || "", writing_rules: p.writing_rules || "", character_voices: p.character_voices || "", updated_at: p.updated_at || new Date().toISOString(), updated_by_chapter: p.updated_by_chapter || 0 });
             }
         } catch { /* ignore */ }
@@ -100,7 +100,8 @@ function StyleGuideEditor({ projectId }: { projectId: string }) {
 
     const handleSave = useCallback(() => {
         const updated = { ...guide, updated_at: new Date().toISOString() };
-        localStorage.setItem(`novel-workbench-style-${projectId}`, JSON.stringify(updated));
+        setJSONSync(`novel-workbench-style-${projectId}`, updated);
+        setJSON(`novel-workbench-style-${projectId}`, updated);
         setGuide(updated); setSaved(true); setTimeout(() => setSaved(false), 2000);
     }, [guide, projectId]);
 
@@ -211,8 +212,8 @@ function BibleRulesEditor({ projectId }: { projectId: string }) {
 
     useEffect(() => {
         try {
-            const raw = localStorage.getItem(`novel-workbench-bible-${projectId}`);
-            if (raw) setBible(JSON.parse(raw));
+            const p = getJSONSync(`novel-workbench-bible-${projectId}`, null);
+            if (p) setBible(p);
         } catch { /* ignore */ }
         // 从大纲自动读取世界观词条（从 novel-workbench-mock 读取）
         try {
@@ -230,7 +231,8 @@ function BibleRulesEditor({ projectId }: { projectId: string }) {
 
     const handleSave = useCallback(() => {
         const updated = { ...bible, updated_at: new Date().toISOString() };
-        localStorage.setItem(`novel-workbench-bible-${projectId}`, JSON.stringify(updated));
+        setJSONSync(`novel-workbench-bible-${projectId}`, updated);
+        setJSON(`novel-workbench-bible-${projectId}`, updated);
         setBible(updated); setSaved(true); setTimeout(() => setSaved(false), 2000);
     }, [bible, projectId]);
 
@@ -371,12 +373,13 @@ function CharacterVoiceEditor({ projectId }: { projectId: string }) {
     const extractableChapters = getVolumeGroupedChapterOptions(projectId);
 
     useEffect(() => {
-        try { const raw = localStorage.getItem(`novel-workbench-voices-${projectId}`); if (raw) { const p = JSON.parse(raw); setEntries(Array.isArray(p) ? p : [{ char: "默认", voice: p }]); } } catch { setEntries([]); }
+        try { const p = getJSONSync(`novel-workbench-voices-${projectId}`, null); if (p) setEntries(Array.isArray(p) ? p : [{ char: "默认", voice: p }]); } catch { setEntries([]); }
     }, [projectId]);
 
     const handleSave = useCallback(() => {
         const filtered = entries.filter(e => e.char.trim());
-        localStorage.setItem(`novel-workbench-voices-${projectId}`, JSON.stringify(filtered));
+        setJSONSync(`novel-workbench-voices-${projectId}`, filtered);
+        setJSON(`novel-workbench-voices-${projectId}`, filtered);
         setEntries(filtered); setSaved(true); setTimeout(() => setSaved(false), 2000);
     }, [entries, projectId]);
 

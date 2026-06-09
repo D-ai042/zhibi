@@ -1,6 +1,7 @@
 import { useCallback, useEffect } from "react";
 import { api } from "@/lib/api";
 import { useAppStore } from "@/stores/app-store";
+import { migrateLocalStorageToSqlite } from "@/lib/migrate-data";
 
 export function useProjectBootstrap() {
   const {
@@ -25,7 +26,12 @@ export function useProjectBootstrap() {
   }, [currentProject, setProjects, setApiConfig, setFrameworkProgress, setDeepseekStatus]);
 
   useEffect(() => {
-    refresh();
+    // EXE 首次启动时迁移 localStorage 数据到 SQLite
+    migrateLocalStorageToSqlite().then(() => {
+      // 迁移完成后刷新数据
+      refresh();
+    });
+
     const t = setInterval(() => {
       useAppStore.getState().setAutosaveStatus("自动保存 " + new Date().toLocaleTimeString());
     }, 30000);

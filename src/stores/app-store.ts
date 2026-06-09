@@ -12,6 +12,7 @@ import type {
   OverviewSection,
   Project,
 } from "@/types";
+import { getJSONSync, setJSONSync } from "@/lib/storage";
 
 interface AppState {
   projects: Project[];
@@ -209,18 +210,15 @@ export const useAppStore = create<AppState>((set, get) => ({
     const { currentProject, chatMessages } = get();
     if (!currentProject) return;
     try {
-      const payload = JSON.stringify({
+      const payload = {
         _projectId: currentProject.id,
         _projectName: currentProject.name,
         messages: chatMessages,
-      });
-      localStorage.setItem(`novel-workbench-chat-${currentProject.id}`, payload);
+      };
+      setJSONSync(`novel-workbench-chat-${currentProject.id}`, payload);
       // 同时按名称保存，防止项目 ID 变更后丢失
-      localStorage.setItem(
-        `novel-workbench-chat-name:${currentProject.name}`,
-        payload
-      );
-    } catch { /* localStorage 满时静默失败 */ }
+      setJSONSync(`novel-workbench-chat-name:${currentProject.name}`, payload);
+    } catch { /* 存储满时静默失败 */ }
   },
   loadChat: (projectId: string) => {
     try {
@@ -239,22 +237,21 @@ export const useAppStore = create<AppState>((set, get) => ({
       };
 
       // 1) 按项目 ID 加载
-      const idRaw = localStorage.getItem(`novel-workbench-chat-${projectId}`);
-      if (idRaw) {
-        const msgs = extract(idRaw);
+      const idPayload = getJSONSync(`novel-workbench-chat-${projectId}`, null);
+      if (idPayload) {
+        const msgs = extract(JSON.stringify(idPayload));
         if (msgs && msgs.length > 0) bestData = msgs;
       }
 
       // 2) 按项目名称加载（可能更完整）
       if (project) {
-        const nameRaw = localStorage.getItem(`novel-workbench-chat-name:${project.name}`);
-        if (nameRaw) {
-          const msgs = extract(nameRaw);
+        const namePayload = getJSONSync(`novel-workbench-chat-name:${project.name}`, null);
+        if (namePayload) {
+          const msgs = extract(JSON.stringify(namePayload));
           // 只有存储的项目 ID 与当前 ID 一致才加载（避免删除后新建同名项目加载旧聊天）
           let projectIdMatches = false;
           try {
-            const parsed = JSON.parse(nameRaw);
-            projectIdMatches = parsed._projectId === projectId;
+            projectIdMatches = (namePayload as any)._projectId === projectId;
           } catch { /* 旧格式无 _projectId，忽略 */ }
           if (msgs && projectIdMatches && (!bestData || msgs.length > bestData.length)) {
             bestData = msgs;
@@ -270,32 +267,30 @@ export const useAppStore = create<AppState>((set, get) => ({
           if (knownIds.has(orphanId)) continue; // 不是孤立数据
 
           try {
-            const orphanRaw = localStorage.getItem(key);
-            if (!orphanRaw) continue;
-            const orphanParsed = JSON.parse(orphanRaw);
-            let orphanMsgs: ChatMessage[] | null = null;
+            const orphanPayload = getJSONSync(key, null);
+            if (!orphanPayload) continue;
 
-            if (Array.isArray(orphanParsed)) {
-              orphanMsgs = orphanParsed as ChatMessage[];
-            } else if (orphanParsed.messages && Array.isArray(orphanParsed.messages)) {
-              orphanMsgs = orphanParsed.messages as ChatMessage[];
+            let orphanMsgs: ChatMessage[] | null = null;
+            const raw = JSON.stringify(orphanPayload);
+            const parsed = JSON.parse(raw);
+
+            if (Array.isArray(parsed)) {
+              orphanMsgs = parsed as ChatMessage[];
+            } else if (parsed.messages && Array.isArray(parsed.messages)) {
+              orphanMsgs = parsed.messages as ChatMessage[];
             }
 
             // 孤立数据的项目 ID 必须与当前项目 ID 一致才加载
-            // 旧格式数据（无 _projectId）无法验证归属，不加载
-            const orphanProjectId = orphanParsed?._projectId;
-            const orphanProjectName = orphanParsed?._projectName;
+            const orphanProjectId = (orphanPayload as any)._projectId;
+            const orphanProjectName = (orphanPayload as any)._projectName;
             if (orphanMsgs && orphanMsgs.length > 0) {
               if (orphanProjectId === projectId) {
-                // _projectId 完全匹配 → 安全加载
                 if (!bestData || orphanMsgs.length > bestData.length) {
                   bestData = orphanMsgs;
                 }
               } else if (!orphanProjectId && !orphanProjectName && (!bestData || orphanMsgs.length > bestData.length)) {
-                // 极旧格式（连 _projectName 都没有）：仅当没有任何其他数据时兜底
                 bestData = orphanMsgs;
               }
-              // 其他情况（有 _projectId 但不匹配，或有 _projectName 但不匹配）→ 跳过
             }
           } catch { /* 跳过格式错误的数据 */ }
         }
@@ -304,10 +299,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (bestData) {
         set({ chatMessages: bestData });
         // 保存到当前 ID 键以便下次快速加载
-        localStorage.setItem(
-          `novel-workbench-chat-${projectId}`,
-          JSON.stringify({ _projectId: projectId, _projectName: project?.name ?? '', messages: bestData })
-        );
+        setJSONSync(`novel-workbench-chat-${projectId}`, {
+          _projectId: projectId, _projectName: project?.name ?? '', messages: bestData
+        });
         return;
       }
 
