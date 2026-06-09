@@ -2,24 +2,22 @@
  * 记忆更新器 —— 章节定稿后自动更新日志库
  *
  * 职责：
- * 1. 生成章节摘要（~200字，AI提炼+你可手动修改）
- * 2. 更新角色状态（位置、状态、情绪）
- * 3. 更新故事线进度
- * 4. 管理伏笔（标记已收/新增未收）
- * 5. 保留原文快照（3-5段关键引用）
+ * 1. AI 生成章节摘要（结构化提炼）
+ * 2. AI 分析角色状态（位置/情绪/状态）
+ * 3. AI 判断故事线推进
+ * 4. AI 识别新伏笔
+ * 5. 保留原文快照
+ *
+ * 所有文本分析均由 AI 完成，无任何正则/关键词兜底。
+ * AI 调用失败直接报错，不降级。
  */
-import { uuid } from "@/lib/uuid";
 
+import { uuid } from "@/lib/uuid";
 import { api } from "./api";
 import { getJSONSync, setJSONSync, setJSON } from "./storage";
 import type {
-    Chapter,
-    ChapterSummary,
-    ChapterSnapshot,
-    Character,
-    CharacterState,
-    ForeshadowEntry,
-    StorylineProgress,
+    ChapterSummary, ChapterSnapshot,
+    CharacterState, ForeshadowEntry, StorylineProgress,
 } from "@/types";
 
 // ===== 接口 =====
@@ -29,44 +27,132 @@ export interface MemoryUpdateInput {
     chapterNumber: number;
     chapterTitle: string;
     chapterContent: string;
-    characters: string[];         // 本章出场角色名
+    characters: string[];
 }
 
 export interface MemoryUpdateResult {
     summary: string;
     characterChanges: { name: string; newStatus: string }[];
     storylineProgress: { name: string; delta: string }[];
-    foreshadowUpdates: {
-        resolved: string[];
-        new: string[];
-    };
+    foreshadowUpdates: { resolved: string[]; new: string[] };
     snapshotCount: number;
 }
 
-// ===== 辅助：从内容中提取角色名 =====
+// ===== AI 章节分析 =====
 
-let _knownCharactersCache: string[] | null = null;
-let _lastCacheTime = 0;
-
-async function loadKnownCharacters(projectId: string): Promise<string[]> {
-    // 缓存 10 秒，避免频繁调用
-    const now = Date.now();
-    if (_knownCharactersCache && now - _lastCacheTime < 10000) {
-        return _knownCharactersCache;
-    }
-    try {
-        const chars = await api.listCharacters(projectId);
-        _knownCharactersCache = chars.map(c => c.name);
-        _lastCacheTime = now;
-        return _knownCharactersCache;
-    } catch {
-        return [];
-    }
+interface AiChapterAnalysis {
+    summary: string;
+    key_characters: string[];
+    key_locations: string[];
+    advanced_storylines: string[];
+    planted_foreshadow: string[];
+    character_states: { name: string; current_status: string; current_location: string }[];
+    storyline_progress: { name: string; delta: string; progress_percent: number }[];
 }
 
-async function extractCharacterNamesFromContent(content: string, projectId: string): Promise<string[]> {
-    const known = await loadKnownCharacters(projectId);
-    return known.filter((name) => content.includes(name));
+function buildChapterAnalysisPrompt(
+    chapterNumber: number, chapterTitle: string, chapterContent: string,
+    knownCharacters: string, knownStorylines: string, prevSummary: string
+): string {
+    return `你是一个资深文学编辑，请分析以下章节内容，输出结构化 JSON。
+
+【本章信息】
+第${chapterNumber}章「${chapterTitle}」
+
+【已知角色列表】
+${knownCharacters || "（暂无）"}
+
+【已有故事线列表】
+${knownStorylines || "（暂无）"}
+
+【前情摘要】
+${prevSummary || "（首章，无前情）"}
+
+【本章正文（前6000字）】
+${chapterContent.slice(0, 6000)}
+
+请严格按以下 JSON 格式输出（放在 ---CHAPTER_ANALYSIS--- 块中），不要有任何额外文字：
+
+---CHAPTER_ANALYSIS---
+{
+  "summary": "本章核心剧情摘要（200字以内）",
+  "key_characters": ["本章出场角色名"],
+  "key_locations": ["本章发生的地名"],
+  "advanced_storylines": ["本章推进了哪些故事线"],
+  "planted_foreshadow": ["本章埋下的新伏笔（无则空数组）"],
+  "character_states": [
+    {"name": "角色名", "current_status": "情绪或状态", "current_location": "所在位置"}
+  ],
+  "storyline_progress": [
+    {"name": "故事线名", "delta": "本章推进了什么", "progress_percent": 0}
+  ]
+}
+---END_CHAPTER_ANALYSIS---`;
+}
+
+async function analyzeChapterViaAI(
+    projectId: string, chapterNumber: number, chapterTitle: string, chapterContent: string
+): Promise<AiChapterAnalysis> {
+    // 收集上下文
+    let knownCharacters = "";
+    let knownStorylines = "";
+    let prevSummary = "";
+
+    try {
+        const chars = await api.listCharacters(projectId);
+        knownCharacters = chars.map(c => `${c.name}（${c.personality || ""}，${c.faction || ""}）`).join("、");
+    } catch { /* ignore */ }
+
+    try {
+        const segs = getJSONSync(`plot-segments-${projectId}`, [] as any[]);
+        knownStorylines = segs.filter((s: any) => s.title).map((s: any) => s.title).join("、");
+    } catch { /* ignore */ }
+
+    try {
+        const summaries = await api.getChapterSummaries(projectId);
+        const prev = summaries
+            .filter((s: ChapterSummary) => s.chapter_number < chapterNumber)
+            .sort((a, b) => a.chapter_number - b.chapter_number)
+            .slice(-3);
+        prevSummary = prev.map(s => `第${s.chapter_number}章：${s.summary}`).join("\n");
+    } catch { /* ignore */ }
+
+    const prompt = buildChapterAnalysisPrompt(
+        chapterNumber, chapterTitle, chapterContent,
+        knownCharacters, knownStorylines, prevSummary
+    );
+
+    const res = await api.aiComplete({
+        action: "chat", entity_type: "chapter", entity_id: projectId,
+        extra: {
+            system_hint: "你是一个严谨的文学分析助手。只输出指定 JSON 格式，不要额外文字。",
+            user_message: prompt, history: [], context: "",
+        },
+    });
+
+    if (!res.content || res.error) {
+        throw new Error(res.error || "AI 分析返回为空，请检查 API 配置后重试");
+    }
+
+    const m = res.content.match(/---CHAPTER_ANALYSIS---\s*([\s\S]*?)\s*---END_CHAPTER_ANALYSIS---/);
+    if (!m) {
+        throw new Error("AI 未按指定格式输出分析结果，请重试");
+    }
+
+    try {
+        const a: AiChapterAnalysis = JSON.parse(m[1]);
+        return {
+            summary: a.summary || "",
+            key_characters: a.key_characters || [],
+            key_locations: a.key_locations || [],
+            advanced_storylines: a.advanced_storylines || [],
+            planted_foreshadow: a.planted_foreshadow || [],
+            character_states: a.character_states || [],
+            storyline_progress: a.storyline_progress || [],
+        };
+    } catch (e) {
+        throw new Error("AI 分析结果 JSON 解析失败: " + (e instanceof Error ? e.message : String(e)));
+    }
 }
 
 // ===== 主函数 =====
@@ -74,124 +160,127 @@ async function extractCharacterNamesFromContent(content: string, projectId: stri
 export async function updateMemory(
     input: MemoryUpdateInput
 ): Promise<MemoryUpdateResult> {
-    const { projectId, chapterNumber, chapterTitle, chapterContent, characters } = input;
+    const { projectId, chapterNumber, chapterTitle, chapterContent } = input;
 
-    // 如果未传入角色名，尝试从 API 读取真实角色列表并提取
-    const activeChars = characters.length > 0
-        ? characters
-        : await extractCharacterNamesFromContent(chapterContent, projectId);
+    // 内容哈希检测 — 上次分析后内容没变则跳过
+    const contentHash = simpleHash(chapterContent);
+    const lastHashKey = `chapter-hash-${projectId}-${chapterNumber}`;
+    const lastHash = getJSONSync(lastHashKey, "");
+    if (lastHash === contentHash) {
+        return {
+            summary: "（内容未变更，跳过分析）",
+            characterChanges: [], storylineProgress: [],
+            foreshadowUpdates: { resolved: [], new: [] }, snapshotCount: 0,
+        };
+    }
 
-    // 1. 生成摘要（先用本地提取，后续可改为AI提炼）
-    const summary = extractSummary(chapterContent, chapterTitle);
+    // AI 分析本章
+    const analysis = await analyzeChapterViaAI(projectId, chapterNumber, chapterTitle, chapterContent);
 
-    // 2. 保存章节摘要
+    // 保存 contentHash
+    setJSONSync(lastHashKey, contentHash);
+    setJSON(lastHashKey, contentHash);
+
+    // 1. 保存摘要
     const summaryEntry: ChapterSummary = {
-        project_id: projectId,
-        chapter_number: chapterNumber,
+        project_id: projectId, chapter_number: chapterNumber,
         chapter_title: chapterTitle,
-        summary,
-        key_characters: characters,
-        key_locations: extractLocations(chapterContent),
-        advanced_storylines: extractStorylines(chapterContent),
-        planted_foreshadow: extractNewForeshadow(chapterContent),
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
+        summary: analysis.summary,
+        key_characters: analysis.key_characters,
+        key_locations: analysis.key_locations,
+        advanced_storylines: analysis.advanced_storylines,
+        planted_foreshadow: analysis.planted_foreshadow,
+        created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
     };
     saveSummary(projectId, summaryEntry);
 
-    // 3. 更新角色状态
-    const characterChanges = updateCharacterStates(projectId, chapterNumber, chapterContent, characters);
+    // 2. 角色状态
+    const characterChanges: { name: string; newStatus: string }[] = [];
+    const store = getLogStore(projectId);
+    const states: CharacterState[] = store.characterStates || [];
 
-    // 4. 更新故事线进度
-    const storylineProgress = updateStorylineProgress(projectId, chapterNumber, chapterContent);
+    for (const cs of analysis.character_states) {
+        const existing = states.find(s => s.character_name === cs.name);
+        if (existing) {
+            existing.current_status = cs.current_status;
+            existing.current_location = cs.current_location;
+            existing.last_active_chapter = chapterNumber;
+            existing.recent_changes.push(`第${chapterNumber}章: ${cs.current_status}`);
+            if (existing.recent_changes.length > 10) existing.recent_changes = existing.recent_changes.slice(-10);
+        } else {
+            states.push({
+                project_id: projectId, character_name: cs.name,
+                current_location: cs.current_location,
+                current_status: cs.current_status,
+                last_active_chapter: chapterNumber,
+                recent_changes: [`第${chapterNumber}章: ${cs.current_status}`],
+            });
+        }
+        characterChanges.push({ name: cs.name, newStatus: cs.current_status });
+    }
+    store.characterStates = states;
 
-    // 5. 管理伏笔
-    const foreshadowUpdates = manageForeshadow(projectId, chapterNumber, chapterContent);
+    // 3. 故事线进度
+    const storylineProgress: { name: string; delta: string }[] = [];
+    const storylines: StorylineProgress[] = store.storylines || [];
+    for (const sp of analysis.storyline_progress) {
+        const existing = storylines.find(s => s.storyline_name === sp.name);
+        if (existing) {
+            existing.progress_percent = sp.progress_percent;
+            existing.last_active_chapter = chapterNumber;
+            existing.status = "active";
+            existing.next_milestone = sp.delta;
+        } else {
+            storylines.push({
+                project_id: projectId, storyline_name: sp.name,
+                storyline_type: "main", progress_percent: sp.progress_percent,
+                last_active_chapter: chapterNumber, status: "active",
+                next_milestone: sp.delta,
+            });
+        }
+        storylineProgress.push({ name: sp.name, delta: sp.delta });
+    }
+    store.storylines = storylines;
 
-    // 6. 保留原文快照
+    // 4. 伏笔
+    const foreshadows: ForeshadowEntry[] = store.foreshadows || [];
+    const newForeshadows: string[] = [];
+    for (const desc of analysis.planted_foreshadow) {
+        if (!foreshadows.some(f => f.description === desc)) {
+            foreshadows.push({
+                id: uuid(), project_id: projectId, description: desc,
+                planted_chapter: chapterNumber, expected_resolve_chapter: chapterNumber + 10,
+                resolved_chapter: null, status: "pending", priority: "minor",
+            });
+            newForeshadows.push(desc);
+        }
+    }
+    store.foreshadows = foreshadows;
+    saveLogStore(projectId, store);
+
+    // 5. 快照
     const snapshotCount = saveSnapshots(projectId, chapterNumber, chapterContent);
 
     return {
-        summary,
-        characterChanges,
-        storylineProgress,
-        foreshadowUpdates,
+        summary: analysis.summary,
+        characterChanges, storylineProgress,
+        foreshadowUpdates: { resolved: [], new: newForeshadows },
         snapshotCount,
     };
 }
 
-// ===== 摘要提取 =====
+// ===== 简单哈希 =====
 
-function extractSummary(content: string, title: string): string {
-    // 取前 300 字作为摘要基础
-    const cleaned = content
-        .replace(/#{1,6}\s+/g, "")
-        .replace(/\*\*/g, "")
-        .replace(/\n{3,}/g, "\n")
-        .trim();
-
-    // 取前 3 段
-    const paragraphs = cleaned.split(/\n\n/).filter(Boolean);
-    const firstParas = paragraphs.slice(0, Math.min(3, paragraphs.length));
-    const raw = firstParas.join("。").slice(0, 500);
-
-    // 压缩到 ~200 字
-    if (raw.length <= 200) return raw;
-    return raw.slice(0, 197) + "...";
-}
-
-// ===== 地点提取 =====
-
-function extractLocations(content: string): string[] {
-    // 用常见的地点标记词来识别
-    const locationMarkers = ["山", "峰", "谷", "湖", "海", "城", "镇", "村", "殿", "阁", "楼", "府", "宫", "洞", "渊", "林", "园", "台", "岛", "关", "河", "江", "原", "漠", "崖", "岭"];
-    const found: string[] = [];
-    // 匹配 "XXX山"、"XXX峰"、"XXX城" 等模式（2-4字地名）
-    const pattern = new RegExp(`([\\u4e00-\\u9fff]{1,3}[${locationMarkers.join("")}])`, 'g');
-    const matches = content.matchAll(pattern);
-    for (const m of matches) {
-        if (!found.includes(m[1])) found.push(m[1]);
+function simpleHash(str: string): string {
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+        hash = ((hash << 5) - hash) + str.charCodeAt(i);
+        hash |= 0;
     }
-    return found.slice(0, 10);
+    return hash.toString(36);
 }
 
-// ===== 故事线提取 =====
-
-function extractStorylines(content: string): string[] {
-    // 不依赖硬编码列表，而是将正文按关键词拆分为故事线标签
-    const found: string[] = [];
-    // 检测常见的故事线关键词模式
-    const pattern = /(?:第[一二三四五六七八九十\d]+章|主线|支线|暗线|明线|伏笔|回顾|插叙|倒叙)/g;
-    const matches = content.matchAll(pattern);
-    for (const m of matches) {
-        if (!found.includes(m[0])) found.push(m[0]);
-    }
-    // 如果找到的关键词太少，返回空
-    if (found.length < 2) return [];
-    return found.slice(0, 5);
-}
-
-// ===== 伏笔提取 =====
-
-function extractNewForeshadow(content: string): string[] {
-    // 检测常见的伏笔模式
-    const patterns = [
-        /(?:似乎|好像|隐约|仿佛|感觉|觉得).{3,30}(?:不对|异常|奇怪|特别|可疑)/g,
-        /(?:还没|尚未|暂时不|以后再|留着|留着以后).{2,30}/g,
-        /(?:记住|记住这句话|这话|这个细节).{2,20}/g,
-    ];
-
-    const found: string[] = [];
-    for (const pattern of patterns) {
-        const matches = content.matchAll(pattern);
-        for (const m of matches) {
-            found.push(m[0].slice(0, 30));
-        }
-    }
-    return found.slice(0, 3);
-}
-
-// ===== 统一日志存储读写 =====
+// ===== 日志存储 =====
 
 interface LogStore {
     summaries?: ChapterSummary[];
@@ -202,8 +291,7 @@ interface LogStore {
 }
 
 function getLogStore(projectId: string): LogStore {
-    const key = `novel-workbench-log-${projectId}`;
-    return getJSONSync(key, {});
+    return getJSONSync(`novel-workbench-log-${projectId}`, {});
 }
 
 function saveLogStore(projectId: string, store: LogStore) {
@@ -212,352 +300,73 @@ function saveLogStore(projectId: string, store: LogStore) {
     setJSON(key, store);
 }
 
-// ===== 摘要存储 =====
-
 function saveSummary(projectId: string, entry: ChapterSummary) {
     const store = getLogStore(projectId);
     const summaries = store.summaries || [];
-    const idx = summaries.findIndex((s) => s.chapter_number === entry.chapter_number);
-    if (idx >= 0) {
-        summaries[idx] = entry;
-    } else {
-        summaries.push(entry);
-    }
+    const idx = summaries.findIndex(s => s.chapter_number === entry.chapter_number);
+    if (idx >= 0) summaries[idx] = entry;
+    else summaries.push(entry);
     store.summaries = summaries;
     saveLogStore(projectId, store);
 }
 
-// ===== 角色状态更新 =====
-
-function updateCharacterStates(
-    projectId: string,
-    chapterNumber: number,
-    content: string,
-    characterNames: string[]
-): { name: string; newStatus: string }[] {
-    try {
-        const store = getLogStore(projectId);
-        const states: CharacterState[] = store.characterStates || [];
-        const changes: { name: string; newStatus: string }[] = [];
-
-        for (const name of characterNames) {
-            const existing = states.find((s) => s.character_name === name);
-            const newStatus = inferCharacterStatus(content, name);
-
-            if (existing) {
-                existing.current_status = newStatus;
-                existing.last_active_chapter = chapterNumber;
-                existing.recent_changes.push(`第${chapterNumber}章: ${newStatus}`);
-                if (existing.recent_changes.length > 10) {
-                    existing.recent_changes = existing.recent_changes.slice(-10);
-                }
-            } else {
-                states.push({
-                    project_id: projectId,
-                    character_name: name,
-                    current_location: inferCharacterLocation(content, name),
-                    current_status: newStatus,
-                    last_active_chapter: chapterNumber,
-                    recent_changes: [`第${chapterNumber}章: ${newStatus}`],
-                });
-            }
-            changes.push({ name, newStatus });
-        }
-
-        store.characterStates = states;
-        saveLogStore(projectId, store);
-        return changes;
-    } catch {
-        return [];
-    }
-}
-
-function inferCharacterStatus(content: string, name: string): string {
-    if (!content.includes(name)) return "本章未出场";
-
-    const lines = content.split("\n").filter(l => l.includes(name));
-    const text = lines.join(" ");
-
-    if (text.includes("受伤") || text.includes("昏迷") || text.includes("中毒")) return "受伤/不适";
-    if (text.includes("突破") || text.includes("晋级") || text.includes("进阶")) return "修为突破";
-    if (text.includes("高兴") || text.includes("开心") || text.includes("笑")) return "愉悦";
-    if (text.includes("愤怒") || text.includes("生气") || text.includes("怒")) return "愤怒";
-    if (text.includes("悲伤") || text.includes("哭") || text.includes("难过")) return "悲伤";
-    if (text.includes("紧张") || text.includes("焦虑") || text.includes("急")) return "紧张/焦虑";
-    if (text.includes("平静") || text.includes("淡然") || text.includes("不在意")) return "平静";
-    if (text.includes("疑惑") || text.includes("好奇") || text.includes("不解")) return "疑惑/好奇";
-
-    return "正常";
-}
-
-function inferCharacterLocation(content: string, name: string): string {
-    const knownLocations = [
-        "演武场", "擂台", "神霄峰", "青霄峰", "碧霄峰", "丹霄峰",
-        "景霄峰", "玉霄峰", "振霄峰", "紫霄峰", "长霄峰",
-        "灵田", "藏经阁", "食堂", "剑坪", "青崖村",
-    ];
-
-    const lines = content.split("\n").filter(l => l.includes(name));
-    const text = lines.join(" ");
-
-    for (const loc of knownLocations) {
-        if (text.includes(loc)) return loc;
-    }
-    return "未知";
-}
-
-// ===== 故事线进度 =====
-
-function updateStorylineProgress(
-    projectId: string,
-    chapterNumber: number,
-    content: string
-): { name: string; delta: string }[] {
-    try {
-        const store = getLogStore(projectId);
-        const storylines: StorylineProgress[] = store.storylines || [];
-        const results: { name: string; delta: string }[] = [];
-        const knownLines = [
-            { name: "宗门大比", keywords: ["大比", "比试", "擂台"] },
-            { name: "身份秘密", keywords: ["圣品", "功法", "秘密", "保密"] },
-            { name: "星辰圣体", keywords: ["星辰", "圣体", "封印", "力量"] },
-            { name: "日常修炼", keywords: ["修炼", "练功", "突破", "灵力"] },
-        ];
-
-        for (const line of knownLines) {
-            const mentioned = line.keywords.some(k => content.includes(k));
-            const existing = storylines.find(s => s.storyline_name === line.name);
-
-            if (mentioned) {
-                if (existing) {
-                    existing.last_active_chapter = chapterNumber;
-                    existing.status = "active";
-                    existing.progress_percent = Math.min(100, existing.progress_percent + 5);
-                } else {
-                    storylines.push({
-                        project_id: projectId,
-                        storyline_name: line.name,
-                        storyline_type: "main",
-                        progress_percent: 5,
-                        last_active_chapter: chapterNumber,
-                        status: "active",
-                        next_milestone: "",
-                    });
-                    results.push({ name: line.name, delta: "新故事线开启" });
-                }
-            }
-        }
-
-        store.storylines = storylines;
-        saveLogStore(projectId, store);
-        return results;
-    } catch {
-        return [];
-    }
-}
-
-// ===== 伏笔管理 =====
-
-function manageForeshadow(
-    projectId: string,
-    chapterNumber: number,
-    content: string
-): { resolved: string[]; new: string[] } {
-    try {
-        const store = getLogStore(projectId);
-        const foreshadows: ForeshadowEntry[] = store.foreshadows || [];
-
-        const resolved: string[] = [];
-        const newForeshadows: string[] = [];
-
-        // 检测已收伏笔（内容中包含"原来""果然""早就知道"等揭示词）
-        const revealPatterns = /(?:原来|果然|果真|早就知道|早就料到|真相|真正的原因|终于知道).{10,50}/g;
-        const reveals = content.matchAll(revealPatterns);
-        for (const r of reveals) {
-            const desc = r[0].slice(0, 30);
-            // 找是否有匹配的待收伏笔
-            const pending = foreshadows.find(
-                (f) =>
-                    f.status === "pending" &&
-                    f.expected_resolve_chapter >= chapterNumber - 5 &&
-                    f.expected_resolve_chapter <= chapterNumber + 3
-            );
-            if (pending) {
-                pending.status = "resolved";
-                pending.resolved_chapter = chapterNumber;
-                resolved.push(pending.description);
-            }
-        }
-
-        // 检测新伏笔
-        const newForeshadowDescs = extractNewForeshadow(content);
-        for (const desc of newForeshadowDescs) {
-            const exists = foreshadows.some((f) => f.description === desc);
-            if (!exists) {
-                foreshadows.push({
-                    id: uuid(),
-                    project_id: projectId,
-                    description: desc,
-                    planted_chapter: chapterNumber,
-                    expected_resolve_chapter: chapterNumber + 10,
-                    resolved_chapter: null,
-                    status: "pending",
-                    priority: "minor",
-                });
-                newForeshadows.push(desc);
-            }
-        }
-
-        store.foreshadows = foreshadows;
-        saveLogStore(projectId, store);
-        return { resolved, new: newForeshadows };
-    } catch {
-        return { resolved: [], new: [] };
-    }
-}
-
-// ===== 原文快照 =====
-
-function saveSnapshots(
-    projectId: string,
-    chapterNumber: number,
-    content: string
-): number {
+function saveSnapshots(projectId: string, chapterNumber: number, content: string): number {
     try {
         const store = getLogStore(projectId);
         const snapshots: ChapterSnapshot[] = store.snapshots || [];
-
-        // 提取 3-5 段关键原文
-        const paragraphs = content
-            .split(/\n\n+/)
-            .filter(p => p.trim().length > 30 && p.trim().length < 500)
-            .slice(0, 5);
-
-        const excerpts = paragraphs.map((text) => ({
-            text: text.trim().slice(0, 200),
-            purpose: inferExcerptPurpose(text),
-        }));
-
-        const idx = snapshots.findIndex((s) => s.chapter_number === chapterNumber);
-
-        const entry: ChapterSnapshot = {
-            project_id: projectId,
-            chapter_number: chapterNumber,
-            excerpts,
-        };
-
-        if (idx >= 0) {
-            snapshots[idx] = entry;
-        } else {
-            snapshots.push(entry);
-        }
-
+        const paragraphs = content.split(/\n\n+/).filter(p => p.trim().length > 30 && p.trim().length < 500).slice(0, 5);
+        const excerpts = paragraphs.map(text => ({ text: text.trim().slice(0, 200), purpose: "情节发展" as string }));
+        const idx = snapshots.findIndex(s => s.chapter_number === chapterNumber);
+        const entry: ChapterSnapshot = { project_id: projectId, chapter_number: chapterNumber, excerpts };
+        if (idx >= 0) snapshots[idx] = entry; else snapshots.push(entry);
         store.snapshots = snapshots;
         saveLogStore(projectId, store);
         return excerpts.length;
-    } catch {
-        return 0;
-    }
+    } catch { return 0; }
 }
-
-function inferExcerptPurpose(text: string): string {
-    if (text.includes("对话") || text.includes("说") || text.includes("道") || text.includes("问") || text.includes("答")) {
-        return "关键对话";
-    }
-    if (text.includes("原来") || text.includes("终于") || text.includes("发现") || text.includes("真相")) {
-        return "重要揭示";
-    }
-    if (text.includes("突破") || text.includes("晋级") || text.includes("成功")) {
-        return "角色突破";
-    }
-    if (text.includes("(") || text.includes("伏笔") || text.includes("似乎") || text.includes("隐约")) {
-        return "伏笔/暗示";
-    }
-    return "情节发展";
-}
-
 
 // ===== 快照管理 =====
-interface ProjectSnapshot {
-    id: string;
-    label: string;
-    timestamp: string;
-}
 
+interface ProjectSnapshot { id: string; label: string; timestamp: string; }
 const SNAPSHOT_KEY = (pid: string) => `novel-snapshots-${pid}`;
 
 export function listSnapshots(projectId: string): { id: string; label: string; timestamp: string }[] {
-    try {
-        const raw = localStorage.getItem(SNAPSHOT_KEY(projectId));
-        if (!raw) return [];
-        return JSON.parse(raw) as ProjectSnapshot[];
-    } catch {
-        return [];
-    }
+    try { return getJSONSync(SNAPSHOT_KEY(projectId), [] as ProjectSnapshot[]); } catch { return []; }
 }
 
 export function createSnapshot(projectId: string, label: string): void {
     try {
         const snaps = listSnapshots(projectId);
-        snaps.push({
-            id: uuid(),
-            label,
-            timestamp: new Date().toISOString(),
-        });
-        localStorage.setItem(SNAPSHOT_KEY(projectId), JSON.stringify(snaps));
-    } catch {
-        // silent
-    }
+        snaps.push({ id: uuid(), label, timestamp: new Date().toISOString() });
+        setJSONSync(SNAPSHOT_KEY(projectId), snaps);
+    } catch { /* silent */ }
 }
 
 export function restoreSnapshot(projectId: string, snapId: string): boolean {
     try {
         const snaps = listSnapshots(projectId);
-        const idx = snaps.findIndex((s) => s.id === snapId);
+        const idx = snaps.findIndex(s => s.id === snapId);
         if (idx === -1) return false;
-        const restored = snaps.slice(0, idx + 1);
-        localStorage.setItem(SNAPSHOT_KEY(projectId), JSON.stringify(restored));
+        setJSONSync(SNAPSHOT_KEY(projectId), snaps.slice(0, idx + 1));
         return true;
-    } catch {
-        return false;
-    }
+    } catch { return false; }
 }
 
 export async function rebaseMemory(
-    projectId: string,
-    fromChapter: number,
+    projectId: string, fromChapter: number,
     onProgress?: (current: number, total: number) => void
 ): Promise<void> {
-    try {
-        const raw = localStorage.getItem("novel-workbench-mock");
-        if (!raw) return;
-        const data = JSON.parse(raw);
-        const volumes = data.volumes || [];
-        const chapters: { number: number; title: string; content: string }[] = [];
-        for (const vol of volumes) {
-            const chs = vol.chapters || [];
-            for (const ch of chs) {
-                if (ch.number >= fromChapter) {
-                    chapters.push(ch);
-                }
-            }
+    const plotChapters = getJSONSync(`plot-chapters-${projectId}`, [] as any[]);
+    const chapters = plotChapters
+        .filter((ch: any) => ch.number >= fromChapter)
+        .sort((a: any, b: any) => a.number - b.number);
+    const total = chapters.length;
+    for (let i = 0; i < total; i++) {
+        const ch = chapters[i] as any;
+        if (ch.content) {
+            await updateMemory({ projectId, chapterNumber: ch.number, chapterTitle: ch.title || "", chapterContent: ch.content, characters: [] });
         }
-        const total = chapters.length;
-        for (let i = 0; i < total; i++) {
-            const ch = chapters[i];
-            if (ch.content) {
-                await updateMemory({
-                    projectId,
-                    chapterNumber: ch.number,
-                    chapterTitle: ch.title || "",
-                    chapterContent: ch.content || "",
-                    characters: [],
-                });
-            }
-            onProgress?.(i + 1, total);
-        }
-    } catch (e) {
-        console.error("rebaseMemory failed:", e);
-        throw e;
+        onProgress?.(i + 1, total);
     }
 }
+

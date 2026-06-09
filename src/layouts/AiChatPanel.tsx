@@ -150,48 +150,6 @@ function parseWorldTermUpdate(
   return null;
 }
 
-function extractWorldTermFromText(
-  content: string,
-  userMsg: string
-): { term_type: WorldTerm["term_type"]; title: string; one_liner: string; detail: string } | null {
-  // 尝试提取词条名：从「xxx」中提取
-  const titleMatch = content.match(/「([^」]{1,20})」/);
-  if (!titleMatch) return null;
-
-  const title = titleMatch[1].trim();
-
-  // 尝试从用户消息中推断类型
-  let termType: WorldTerm["term_type"] = "rule";
-  const typeMap: Record<string, WorldTerm["term_type"]> = {
-    规则: "rule", 势力: "faction", 地点: "place", 道具: "item", 制度: "system", 其他: "other",
-  };
-  const bothMsgs = userMsg + "\n" + content;
-  for (const [cn, en] of Object.entries(typeMap)) {
-    if (bothMsgs.includes(cn)) { termType = en; break; }
-  }
-
-  // 从 AI 回复中提取一句话定义（第一段非标题文本）
-  const lines = content.split("\n").filter(l => l.trim());
-  const detailLines: string[] = [];
-  let foundTitle = false;
-  for (const line of lines) {
-    const clean = line.replace(/^[#*> ]+/, "").trim();
-    if (!clean) continue;
-    if (clean.includes(title) && !foundTitle) { foundTitle = true; continue; }
-    if (foundTitle && clean.length > 5 && !clean.startsWith("```")) {
-      detailLines.push(clean);
-    }
-  }
-  const oneLiner = detailLines[0] || "";
-  const detail = detailLines.join("\n");
-
-  // 只在明确提及创建词条时才生效
-  const createHints = /(?:创建|添加|建立|增加)(?:了)?(?:一个|个|些)?(?:世界观)?(?:词条|术语|概念|设定)/;
-  if (!createHints.test(content)) return null;
-
-  return { term_type: termType, title, one_liner: oneLiner, detail };
-}
-
 /**
  * 解析 AI 回复中的批量世界观词条创建指令（JSON 数组格式）。
  * AI 可输出：
@@ -203,9 +161,8 @@ function extractWorldTermFromText(
 function parseBatchWorldTerms(
   content: string
 ): { term_type: WorldTerm["term_type"]; title: string; one_liner: string; detail: string }[] {
-  const mk = (t: string) => ({ term_type: inferTypeFromText(t) as WorldTerm["term_type"], title: t, one_liner: "", detail: "" });
 
-  // 0) 特殊标记 ---WORLD_TERMS---（不会被 parseUIActions 误抢）
+  // 0) 特殊标记 ---WORLD_TERMS---
   const wtm = content.match(/---WORLD_TERMS---\s*([\s\S]*?)\s*---END_WORLD_TERMS---/);
   if (wtm) {
     try {
@@ -237,33 +194,8 @@ function parseBatchWorldTerms(
     } catch { }
   }
 
-  // 2) Markdown ### 标题
-  const hs = [...content.matchAll(/^#{2,4}\s+(.+)/gm)];
-  if (hs.length >= 2) return hs.map(h => mk(h[1].replace(/\*\*/g, "").trim().slice(0, 30)));
-
-  // 3) 粗体数字 **1. xxx**
-  const bs = [...content.matchAll(/\*\*(\d+)[.)、]\s*([^*]{1,40})\*\*/g)];
-  if (bs.length >= 2) return bs.map(m => mk(m[2].replace(/\*\*/g, "").trim().slice(0, 30)));
-
-  // 4) 纯文本编号 一、xxx  1. xxx
-  const ns = [...content.matchAll(/(?:^|\n)([一二三四五六七八九十\d]+)[、.]\s*(.{1,30})/g)];
-  if (ns.length >= 2) return ns.map(m => mk(m[2].trim().slice(0, 30)));
-
-  // 5) 兜底：任何 Markdown 列表项 - xxx
-  const li = [...content.matchAll(/(?:^|\n)[\s]*[-*•]\s+(.{2,30})/gm)];
-  if (li.length >= 2) return li.map(m => mk(m[1].trim().slice(0, 30)));
-
+  // 无标准格式输出 → 返回空数组，不兜底
   return [];
-}
-
-/** 从文本推断类型 */
-function inferTypeFromText(text: string): WorldTerm["term_type"] {
-  if (/规则|法则|体系|境界|修炼|功法|灵力|熟练度|品阶/.test(text) && !(/宗门|势力|王朝|门派/.test(text))) return "rule";
-  if (/势力|宗门|王朝|家族|门派|组织|分布/.test(text)) return "faction";
-  if (/地点|禁地|村|州|界|大陆|天地|国|朝/.test(text) && !(/势力|宗门/.test(text))) return "place";
-  if (/道具|法器|丹药|物品|剑|神器/.test(text)) return "item";
-  if (/制度|规矩|大比|资格|管理|层次|比试/.test(text)) return "system";
-  return "other";
 }
 
 /**
@@ -1497,16 +1429,7 @@ export function AiChatPanel() {
         }
       }
 
-      // 兜底：如果 JSON 解析没找到，但 AI 回复中可能提到了创建词条
-      if (!worldTermDef && activeModule === "outline" && outlineSection === "worldview") {
-        const fallbackTermDef = extractWorldTermFromText(filteredAiContent, fullContent);
-        if (fallbackTermDef) {
-          worldTermDef = fallbackTermDef;
-          displayContent = displayContent
-            .replace(/```(?:json)?\s*\{[\s\S]*?\}\s*```/, "")
-            .trim();
-        }
-      }
+      // 无标准格式 → 不兜底
 
       // 添加 AI 回复消息
       const thinkingRef = streamThinkingRef.current;
