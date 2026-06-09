@@ -16,6 +16,7 @@
  */
 
 import { api } from "./api";
+import { getJSONSync } from "./storage";
 import type {
     Chapter,
     ChapterSummary,
@@ -53,7 +54,7 @@ const EFFECTIVE_MAX_TOKENS = MAX_TOKENS - 2_000;
 /** 从 novel-workbench-mock 中读取项目世界观词条 */
 function loadWorldTerms(projectId: string): any[] {
     try {
-        const mock = JSON.parse(localStorage.getItem('novel-workbench-mock') || '{}');
+        const mock = getJSONSync('novel-workbench-mock', {});
         return (mock.worldTerms || []).filter((t: any) => t.project_id === projectId);
     } catch { return []; }
 }
@@ -114,7 +115,7 @@ export async function buildModuleContext(input: ChatContextInput): Promise<strin
         // 词条关系连线
         try {
             const edgeKey = "worldview-edges-" + projectId;
-            const edges = JSON.parse(localStorage.getItem(edgeKey) || "[]");
+            const edges = getJSONSync(edgeKey, [] as any[]);
             if (edges.length > 0) {
                 parts.push("\n===== 🔗 词条关系连线 =====");
                 const termMap = new Map(allWorldTerms.map(t => [t.id, t.title]));
@@ -154,8 +155,8 @@ export async function buildModuleContext(input: ChatContextInput): Promise<strin
     } else if (mod === "plot-direction") {
         // 剧情走向：明暗线 + 连线 + 时间轴
         try {
-            const segs = JSON.parse(localStorage.getItem(`plot-segments-${projectId}`) || "[]") as any[];
-            const savedEdges = JSON.parse(localStorage.getItem(`plot-edges-${projectId}`) || "[]");
+            const segs = getJSONSync(`plot-segments-${projectId}`, [] as any[]);
+            const savedEdges = getJSONSync(`plot-edges-${projectId}`, [] as any[]);
             const bright = segs.filter((s: any) => s.type === "bright");
             const dark = segs.filter((s: any) => s.type === "dark");
 
@@ -199,7 +200,7 @@ export async function buildModuleContext(input: ChatContextInput): Promise<strin
         // P5: 本章正文
         if (currentChapter) {
             try {
-                const allPlotChapters = JSON.parse(localStorage.getItem(`plot-chapters-${projectId}`) || "[]") as any[];
+                const allPlotChapters = getJSONSync(`plot-chapters-${projectId}`, [] as any[]);
                 const thisCh = allPlotChapters.find((c: any) => c.id === chapterId);
                 if (thisCh?.content) {
                     const body = thisCh.content.slice(0, 3000);
@@ -242,9 +243,8 @@ export async function buildModuleContext(input: ChatContextInput): Promise<strin
             }
         }
         try {
-            const voicesRaw = localStorage.getItem(`novel-workbench-voices-${projectId}`);
-            if (voicesRaw) {
-                const voices = JSON.parse(voicesRaw);
+            const voices = getJSONSync(`novel-workbench-voices-${projectId}`, null as any[] | null);
+            if (voices) {
                 if (Array.isArray(voices) && voices.length > 0) {
                     parts.push("\n===== 🎭 角色语言 =====");
                     for (const v of voices) parts.push(`· ${v.char}：${v.voice}`);
@@ -298,7 +298,7 @@ export async function buildChapterContext(projectId: string, chapterRange: strin
     // ====== 唯一数据源: plot-chapters-{pid}（写作台卷章树）=======
     let plotChapters: any[] = [];
     try {
-        plotChapters = JSON.parse(localStorage.getItem(`plot-chapters-${projectId}`) || '[]');
+        plotChapters = getJSONSync(`plot-chapters-${projectId}`, [] as any[]);
     } catch { /* ignore */ }
 
     // 按范围过滤
@@ -334,7 +334,7 @@ export async function buildChatContext(projectId: string): Promise<string> {
 /** 从 plot-chapters（写作台卷章树）读取章节，这是章节数据的唯一真实来源 */
 function findChapterFromPlotChapters(projectId: string, chapterId: string): { id: string; number: number; title: string; volumeName: string } | null {
     try {
-        const raw = localStorage.getItem(`plot-chapters-${projectId}`);
+        const raw = localStorage.getItem(`plot-chapters-${projectId}`); // -- keep: used for null check, not JSON parse
         if (!raw) return null;
         const chapters = JSON.parse(raw);
         const ch = chapters.find((c: any) => c.id === chapterId);
@@ -342,7 +342,7 @@ function findChapterFromPlotChapters(projectId: string, chapterId: string): { id
         // 从剧情走向中找卷名
         let volumeName = "";
         try {
-            const segs = JSON.parse(localStorage.getItem(`plot-segments-${projectId}`) || "[]");
+            const segs = getJSONSync(`plot-segments-${projectId}`, [] as any[]);
             const seg = segs.find((s: any) => s.id === ch.volumeSegmentId);
             if (seg) volumeName = seg.title;
         } catch { /* ignore */ }
@@ -387,7 +387,7 @@ export async function buildProjectContext(input: ContextEngineInput): Promise<Co
     if (currentChapter) {
         try {
             // 从 plot-chapters 读本章已写的内容
-            const allPlotChapters = JSON.parse(localStorage.getItem(`plot-chapters-${projectId}`) || "[]") as any[];
+            const allPlotChapters = getJSONSync(`plot-chapters-${projectId}`, [] as any[]);
             const thisCh = allPlotChapters.find((c: any) => c.id === chapterId);
             if (thisCh?.content?.trim()) {
                 p5 = `━━━━ P5 · 本章已有正文（${thisCh.content.replace(/\s/g, "").length}字） ━━━━\n${thisCh.content}`;
@@ -501,8 +501,8 @@ function assembleP0(projectId: string, _styleGuide: StyleGuide | null, storyBibl
 function assembleP1(projectId: string, recentSummaries: ChapterSummary[], currentChapterNumber?: number): string {
     const parts: string[] = ["━━━━ P1 · 剧情走向与前情摘要 ━━━━"];
     try {
-        const segs = JSON.parse(localStorage.getItem(`plot-segments-${projectId}`) || "[]") as any[];
-        const chaps = JSON.parse(localStorage.getItem(`plot-chapters-${projectId}`) || "[]") as any[];
+        const segs = getJSONSync(`plot-segments-${projectId}`, [] as any[]);
+        const chaps = getJSONSync(`plot-chapters-${projectId}`, [] as any[]);
         if (segs.length > 0) {
             // 如果知道当前章节号，找到它所属的卷（bright segment）
             let currentVolId = "";
@@ -554,9 +554,8 @@ function assembleP1(projectId: string, recentSummaries: ChapterSummary[], curren
     parts.push("");
 
     try {
-        const bibleRaw = localStorage.getItem(`novel-workbench-bible-${projectId}`);
-        if (bibleRaw) {
-            const bible = JSON.parse(bibleRaw);
+        const bible = getJSONSync(`novel-workbench-bible-${projectId}`, null as any);
+        if (bible) {
             if (bible.locked_events?.length > 0) {
                 parts.push("【已锁定事件（不可提前/跳过）】");
                 for (const e of bible.locked_events) parts.push(`· 第${e.chapter}章「${e.title}」：${e.description}`);
@@ -593,9 +592,8 @@ function assembleP2(styleGuide: StyleGuide | null, projectId: string): string {
         if (styleGuide.writing_rules) parts.push(`写作红线：${styleGuide.writing_rules}`);
     }
     try {
-        const voicesRaw = localStorage.getItem(`novel-workbench-voices-${projectId}`);
-        if (voicesRaw) {
-            const voices = JSON.parse(voicesRaw);
+        const voices = getJSONSync(`novel-workbench-voices-${projectId}`, null as any[] | null);
+        if (voices) {
             if (Array.isArray(voices) && voices.length > 0) {
                 parts.push("【角色语言】");
                 for (const v of voices) parts.push(`· ${v.char}：${v.voice}`);
@@ -620,9 +618,8 @@ interface LogStoreV2 {
 
 function getLogStoreV2(projectId: string): LogStoreV2 {
     try {
-        const raw = localStorage.getItem(`novel-workbench-log-${projectId}`);
-        if (!raw) return {};
-        const parsed = JSON.parse(raw);
+        const parsed = getJSONSync(`novel-workbench-log-${projectId}`, null);
+        if (!parsed) return {};
         if (Array.isArray(parsed)) return { summaries: parsed };
         return parsed as LogStoreV2;
     } catch { return {}; }
@@ -639,8 +636,8 @@ function assembleP3_BookStructure(
 
     // 1. 卷章树
     try {
-        const allPlotChapters = JSON.parse(localStorage.getItem(`plot-chapters-${projectId}`) || "[]") as any[];
-        const segs = JSON.parse(localStorage.getItem(`plot-segments-${projectId}`) || "[]") as any[];
+        const allPlotChapters = getJSONSync(`plot-chapters-${projectId}`, [] as any[]);
+        const segs = getJSONSync(`plot-segments-${projectId}`, [] as any[]);
         const bright = segs.filter((s: any) => s.type === "bright");
         if (bright.length > 0 && allPlotChapters.length > 0) {
             parts.push("【卷章结构】");

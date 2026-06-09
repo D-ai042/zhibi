@@ -1773,7 +1773,7 @@ export function AiChatPanel() {
         const engine = memoryEngineRef.current;
         if (engine && currentProject) {
           engine.tagMessages(store.chatMessages);
-          engine.performCompression(store.chatMessages).then(count => {
+          engine.executeAICCompression(store.chatMessages).then(count => {
             if (count > 0) {
               setMemoryEntries(engine.getShortTerm());
               useAppStore.getState().bumpMemory();

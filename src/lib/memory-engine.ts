@@ -4,40 +4,25 @@
  * 工作记忆：当前最后 10 轮对话（直接发送）
  * 短期记忆：较早对话的 AI 摘要（按话题检索）
  * 长期记忆：项目知识沉淀（世界观/角色/剧情决策等）
+ *
+ * 所有文本分析均由 AI 完成，无正则/关键词兜底。
  */
 
 import type { ChatMessage, MemoryEntry, LongTermMemory } from "@/types";
 import { uuid } from "@/lib/uuid";
+import { api } from "./api";
 
 // ===== 常量 =====
 
-/** 短期记忆存储 key */
 function shortTermKey(pid: string) { return `novel-workbench-memory-short-${pid}`; }
-/** 长期记忆存储 key */
 function longTermKey(pid: string) { return `novel-workbench-memory-long-${pid}`; }
-/** 消息的 tag 缓存 key */
-function msgTagsKey(pid: string) { return `novel-workbench-msg-tags-${pid}`; }
-/** 已压缩到的消息索引 */
 function compressedIdxKey(pid: string) { return `novel-workbench-compressed-idx-${pid}`; }
-
-/** 工作记忆轮数（直接发送给 AI） */
-const WORKING_ROUNDS = 10;
-/** 积累多少轮后触发压缩 */
-const COMPRESS_INTERVAL = 20;
-/** 召回的最大记忆条目数 */
-const MAX_RECALL = 5;
-
-// ===== 存储工具 =====
-
-function loadJSON<T>(key: string, def: T): T {
+function loadJSONSync<T>(key: string, def: T): T {
     try { const r = localStorage.getItem(key); return r ? JSON.parse(r) : def; } catch { return def; }
 }
 function saveJSON(key: string, data: unknown) {
-    try { localStorage.setItem(key, JSON.stringify(data)); } catch { /* quota */ }
+    try { localStorage.setItem(key, JSON.stringify(data)); } catch { /* */ }
 }
-
-// ===== Token 估算 =====
-
 function estimateTokens(text: string): number {
     let t = 0;
     for (const ch of text) {
@@ -47,64 +32,27 @@ function estimateTokens(text: string): number {
     return Math.ceil(t);
 }
 
-// ===== 主题词提取（简易版） =====
+// ===== 关键词提取（仅用于检索匹配，不用硬编码分类表） =====
 
-const TOPIC_KEYWORDS: Record<string, string[]> = {
-    worldview: ["世界观", "世界", "规则", "势力", "地点", "设定", "背景", "世界设定"],
-    character: ["角色", "人物", "性格", "关系", "身世", "外貌", "人设"],
-    plot: ["剧情", "情节", "走向", "明线", "暗线", "主线", "支线", "伏笔"],
-    style: ["风格", "文笔", "基调", "叙述", "文风", "语言"],
-    chapter: ["章节", "章", "节", "内容", "写作", "写"],
-    battle: ["战斗", "打斗", "功法", "修炼", "境界", "实力"],
-    emotion: ["情感", "感情", "爱情", "友情", "亲情", "内心"],
-};
-
-function extractTags(text: string): string[] {
-    const tags = new Set<string>();
-    for (const [tag, keywords] of Object.entries(TOPIC_KEYWORDS)) {
-        if (keywords.some(kw => text.includes(kw))) tags.add(tag);
-    }
-    // 找连续 2-4 个中文字符
-    const names = text.match(/[\u4e00-\u9fff]{2,4}/g);
-    if (names) {
-        // 过滤常见非名字词汇
-        const skip = new Set(["世界观", "角色", "人物", "剧情", "章节", "风格", "大纲", "故事", "我们", "可以", "这个", "那个", "什么", "怎么", "但是", "因为", "所以", "如果", "虽然", "然后", "而且", "或者", "还是", "不是", "就是", "没有", "一个", "一下", "一直", "一些", "已经", "知道", "觉得", "需要", "应该", "可能", "比较", "非常", "很多", "时候", "地方", "方式", "程度", "情况", "问题", "结果", "时候"]);
-        for (const n of names) {
-            if (!skip.has(n) && n.length >= 2) tags.add(n);
-        }
-    }
-    return Array.from(tags).slice(0, 8);
+function extractKeywords(text: string): string[] {
+    const words = text.match(/[\u4e00-\u9fff]{2,4}/g);
+    if (!words) return [text.slice(0, 20)];
+    const skip = new Set(["我们","可以","这个","那个","什么","怎么","但是","因为","所以","如果","虽然","然后","而且","或者","还是","不是","就是","没有","一个","一下","一直","一些","已经","知道","觉得","需要","应该","可能","比较","非常","很多","时候","地方","方式","程度","情况","问题","结果","时候"]);
+    const filtered = words.filter(w => !skip.has(w));
+    return Array.from(new Set(filtered)).slice(0, 8);
 }
 
 // ===== 记忆引擎 =====
 
 export class MemoryEngine {
     private projectId: string;
+    constructor(projectId: string) { this.projectId = projectId; }
 
-    constructor(projectId: string) {
-        this.projectId = projectId;
-    }
+    getShortTerm(): MemoryEntry[] { return loadJSONSync(shortTermKey(this.projectId), []); }
+    private saveShortTerm(entries: MemoryEntry[]) { saveJSON(shortTermKey(this.projectId), entries); }
 
-    // ========== 短期记忆 ==========
-
-    /** 读取短期记忆库 */
-    getShortTerm(): MemoryEntry[] {
-        return loadJSON(shortTermKey(this.projectId), []);
-    }
-
-    /** 写入短期记忆库 */
-    private saveShortTerm(entries: MemoryEntry[]) {
-        saveJSON(shortTermKey(this.projectId), entries);
-    }
-
-    /** 获取已压缩到的消息索引 */
-    getCompressedIdx(): number {
-        return loadJSON(compressedIdxKey(this.projectId), 0);
-    }
-
-    private saveCompressedIdx(idx: number) {
-        saveJSON(compressedIdxKey(this.projectId), idx);
-    }
+    getCompressedIdx(): number { return loadJSONSync(compressedIdxKey(this.projectId), 0); }
+    private saveCompressedIdx(idx: number) { saveJSON(compressedIdxKey(this.projectId), idx); }
 
     /** 按关键词召回短期记忆 */
     recallShortTerm(keywords: string[], limit = MAX_RECALL): MemoryEntry[] {
@@ -166,87 +114,53 @@ ${text}`;
         }
     }
 
-    /** 执行压缩：将指定范围的消息保存为记忆条目 */
-    async performCompression(messages: ChatMessage[]): Promise<number> {
-        const compressedIdx = this.getCompressedIdx();
-        const unprocessed = messages.slice(compressedIdx);
-        // 只处理 user/assistant 消息
-        const processable = unprocessed.filter(m => m.role !== "system");
-
-        // 不足 COMPRESS_INTERVAL 轮就不压缩（一轮=1 user+1 assistant=2 条）
-        const rounds = Math.floor(processable.filter(m => m.role === "user").length);
-        if (rounds < COMPRESS_INTERVAL) return 0;
-
-        // 取最早的 COMPRESS_INTERVAL 轮消息
-        const userCount = processable.filter(m => m.role === "user").length;
-        const compressRound = Math.floor(userCount / COMPRESS_INTERVAL) * COMPRESS_INTERVAL;
-
-        const messagesToCompress = processable.slice(0, compressRound * 2);
-        const sourceMsgIds = messagesToCompress.map(m => m.id);
-
-        // 提取标签
-        const allText = messagesToCompress.map(m => m.content).join(" ");
-        const tags = extractTags(allText);
-        const entities = tags.filter(t => !Object.keys(TOPIC_KEYWORDS).includes(t));
-
-        // 构建简易条目（不依赖 AI 调用，本地自己分析）
-        const entries = this.buildLocalEntries(messagesToCompress, tags, entities);
-
-        // 追加到短期记忆库
-        const existing = this.getShortTerm();
-        this.saveShortTerm([...existing, ...entries]);
-
-        // 更新压缩索引
-        this.saveCompressedIdx(compressedIdx + messagesToCompress.length);
-
-        return entries.length;
+    performCompression(messages: ChatMessage[]): number {
+        return 0; // 压缩需要等待 AI 完成，调用方通过 compressionTrigger 异步执行
     }
 
-    /** 本地简易压缩（不依赖 AI） */
-    private buildLocalEntries(
-        messages: ChatMessage[],
-        tags: string[],
-        entities: string[]
-    ): MemoryEntry[] {
-        // 按用户消息分组，每条用户消息 + 对应 AI 回复算一个话题块
-        const blocks: string[] = [];
-        let current = "";
-        let userMsgCount = 0;
+    /** 执行 AI 压缩：调用 AI 生成记忆条目，异步执行，不阻塞发送 */
+    async executeAICCompression(messages: ChatMessage[]): Promise<number> {
+        const compressedIdx = this.getCompressedIdx();
+        const unprocessed = messages.slice(compressedIdx);
+        const processable = unprocessed.filter(m => m.role !== "system");
+        const rounds = Math.floor(processable.filter(m => m.role === "user").length);
+        const COMPRESS_INTERVAL = 20;
+        if (rounds < COMPRESS_INTERVAL) return 0;
+        const messagesToCompress = processable.slice(0, rounds);
+        const sourceMsgIds = messagesToCompress.map(m => m.id);
 
-        for (const m of messages) {
-            if (m.role === "user") {
-                if (current) blocks.push(current);
-                current = `${m.content.slice(0, 200)}`;
-                userMsgCount++;
-            } else if (m.role === "assistant" && current) {
-                current += ` → ${m.content.slice(0, 200)}`;
+        try {
+            const prompt = this.buildCompressPrompt(messagesToCompress);
+            const res = await api.aiComplete({
+                action: "chat", entity_type: "memory", entity_id: this.projectId,
+                extra: { system_hint: "你是记忆压缩助手。只输出 JSON 数组。", user_message: prompt, history: [], context: "" },
+            });
+            if (res.content && !res.error) {
+                const parsed = this.parseCompressResult(res.content);
+                if (parsed.length > 0) {
+                    const entries: MemoryEntry[] = parsed.map(p => ({
+                        id: uuid(), topic: p.topic, summary: p.summary,
+                        tags: p.tags.slice(0, 6),
+                        tokens: estimateTokens(p.summary),
+                        createdAt: new Date().toISOString(),
+                        sourceMsgIds: sourceMsgIds.slice(0, 20),
+                        entities: p.tags.filter(t => t.length <= 4),
+                    }));
+                    const existing = this.getShortTerm();
+                    this.saveShortTerm([...existing, ...entries]);
+                    this.saveCompressedIdx(compressedIdx + messagesToCompress.length);
+                    return entries.length;
+                }
             }
-        }
-        if (current) blocks.push(current);
-
-        // 取前 3 个块生成摘要
-        const topBlocks = blocks.slice(0, 3);
-        const summary = topBlocks.map(b => b.slice(0, 80)).join("；").slice(0, 150);
-
-        const entry: MemoryEntry = {
-            id: uuid(),
-            topic: tags.find(t => Object.keys(TOPIC_KEYWORDS).includes(t)) || "综合",
-            summary: summary || "（对话摘要）",
-            tags: tags.slice(0, 6),
-            tokens: estimateTokens(summary),
-            createdAt: new Date().toISOString(),
-            sourceMsgIds: messages.map(m => m.id).slice(0, 20),
-            entities: entities.slice(0, 5),
-        };
-
-        return [entry];
+        } catch (e) { console.error("[MemoryEngine] AI 压缩失败:", e); }
+        return 0;
     }
 
     // ========== 长期记忆 ==========
 
     /** 读取长期记忆 */
     getLongTerm(): LongTermMemory {
-        return loadJSON(longTermKey(this.projectId), {
+        return loadJSONSync(longTermKey(this.projectId), {
             worldview_rules: [],
             character_traits: [],
             plot_decisions: [],
@@ -355,7 +269,7 @@ ${text}`;
         memorySummary: string;
     } {
         // 1. 提取用户输入关键词
-        const keywords = extractTags(userInput);
+        const keywords = extractKeywords(userInput);
 
         // 2. 检索短期记忆
         const shortTerm = this.recallShortTerm(keywords);
@@ -406,24 +320,23 @@ ${text}`;
 
     /** 对消息进行标签分析（存入缓存供 UI 显示） */
     tagMessages(messages: ChatMessage[]) {
-        const existing = loadJSON<Record<string, string[]>>(msgTagsKey(this.projectId), {});
+        const existing = loadJSONSync<Record<string, string[]>>(`novel-workbench-msg-tags-${this.projectId}`, {});
         let changed = false;
 
         for (const m of messages) {
             if (m.role === "system" || existing[m.id]) continue;
-            const tags = extractTags(m.content);
+            const tags = extractKeywords(m.content);
             if (tags.length > 0) {
                 existing[m.id] = tags;
                 changed = true;
             }
         }
 
-        if (changed) saveJSON(msgTagsKey(this.projectId), existing);
+        if (changed) saveJSON(`novel-workbench-msg-tags-${this.projectId}`, existing);
     }
 
-    /** 获取消息的标签 */
     getMessageTags(msgId: string): string[] {
-        const all = loadJSON<Record<string, string[]>>(msgTagsKey(this.projectId), {});
+        const all = loadJSONSync<Record<string, string[]>>(`novel-workbench-msg-tags-${this.projectId}`, {});
         return all[msgId] || [];
     }
 }
