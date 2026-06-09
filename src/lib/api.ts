@@ -23,6 +23,8 @@ import type {
   ChapterSummary,
 } from "@/types";
 
+import { MODEL_TO_PROVIDER } from "./model-config";
+
 export const isTauri = () =>
   typeof window !== "undefined" &&
   !!(window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
@@ -122,26 +124,14 @@ export const api = {
       // Tauri 模式下也用前端 fetch 走 SSE 流式，体验与浏览器一致
       const config = await call<ApiConfig>("get_api_config");
       const currentModel = config.api_model;
-      const modelToProvider: Record<string, string> = {
-        "deepseek-v4-flash": "DeepSeek", "deepseek-v4-pro": "DeepSeek",
-        "gpt-5.5": "OpenAI", "gpt-5.4": "OpenAI", "gpt-5.4-mini": "OpenAI",
-        "claude-opus-4-8": "Anthropic", "claude-sonnet-4-6": "Anthropic", "claude-haiku-4-5": "Anthropic",
-        "qwen-plus": "阿里云", "qwen-max": "阿里云",
-        "glm-4-plus": "智谱", "glm-4-flash": "智谱",
-        "moonshot-v1-8k": "月之暗面", "moonshot-v1-32k": "月之暗面",
-        "baichuan2-53b": "百川智能",
-        "yi-34b-chat": "零一万物",
-        "Pro/Qwen2.5-7B-Instruct": "硅基流动", "Pro/deepseek-ai/DeepSeek-V3": "硅基流动",
-        "mimo-v2.5-pro": "小米", "mimo-v2.5": "小米", "mimo-v2-flash": "小米",
-      };
-      // 1. 优先查 provider_models（自定义厂商），再回退到静态内置映射
+      // 优先查 provider_models（自定义厂商），再回退到静态内置映射
       let provider = "";
       if (config.provider_models) {
         for (const [p, models] of Object.entries(config.provider_models)) {
           if (models.includes(currentModel)) { provider = p; break; }
         }
       }
-      if (!provider) provider = modelToProvider[currentModel] || "";
+      if (!provider) provider = MODEL_TO_PROVIDER[currentModel] || "";
       const effectiveKey = config.provider_keys[provider] || "";
       const effectiveBaseUrl = config.provider_base_urls[provider] || config.api_base_url;
       if (effectiveKey && effectiveBaseUrl) {

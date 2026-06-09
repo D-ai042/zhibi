@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { getJSONSync } from "@/lib/storage";
 
 export function useUndoRedo(
     projectId: string | undefined,
@@ -9,7 +10,6 @@ export function useUndoRedo(
     const [canUndo, setCanUndo] = useState(false);
     const [canRedo, setCanRedo] = useState(false);
 
-    // 重置
     useEffect(() => {
         undoStackRef.current = [];
         redoStackRef.current = [];
@@ -20,11 +20,11 @@ export function useUndoRedo(
     const readCurrentState = useCallback(() => {
         let chars: any[] = [], rawEdges: any[] = [], groups: any[] = [];
         try {
-            const raw = localStorage.getItem("novel-workbench-mock");
-            if (raw) { const d = JSON.parse(raw); chars = d.characters || []; rawEdges = d.edges || []; }
+            const d = getJSONSync("novel-workbench-mock", {} as any);
+            chars = d.characters || []; rawEdges = d.edges || [];
         } catch { }
         try {
-            if (projectId) { const g = localStorage.getItem("char-groups-" + projectId); if (g) groups = JSON.parse(g); }
+            if (projectId) groups = getJSONSync("char-groups-" + projectId, [] as any[]);
         } catch { }
         return JSON.stringify({ chars, rawEdges, groups });
     }, [projectId]);

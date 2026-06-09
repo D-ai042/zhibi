@@ -179,7 +179,6 @@ export async function updateMemory(
 
     // 保存 contentHash
     setJSONSync(lastHashKey, contentHash);
-    setJSON(lastHashKey, contentHash);
 
     // 1. 保存摘要
     const summaryEntry: ChapterSummary = {
@@ -297,7 +296,6 @@ function getLogStore(projectId: string): LogStore {
 function saveLogStore(projectId: string, store: LogStore) {
     const key = `novel-workbench-log-${projectId}`;
     setJSONSync(key, store);
-    setJSON(key, store);
 }
 
 function saveSummary(projectId: string, entry: ChapterSummary) {

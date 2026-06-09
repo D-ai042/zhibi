@@ -18,6 +18,7 @@ import type {
   Volume,
   WorldTerm,
 } from "@/types";
+import { MODEL_TO_PROVIDER } from "./model-config";
 
 
 const STORAGE_KEY = "novel-workbench-mock";
@@ -306,26 +307,13 @@ export async function mockAiCompleteStream(
 ): Promise<AiResponse> {
   const s = load();
   const currentModel = s.apiConfig.api_model;
-  const modelToProvider: Record<string, string> = {
-    "deepseek-v4-flash": "DeepSeek", "deepseek-v4-pro": "DeepSeek",
-    "gpt-5.5": "OpenAI", "gpt-5.4": "OpenAI", "gpt-5.4-mini": "OpenAI",
-    "claude-opus-4-8": "Anthropic", "claude-sonnet-4-6": "Anthropic", "claude-haiku-4-5": "Anthropic",
-    "qwen-plus": "阿里云", "qwen-max": "阿里云",
-    "glm-4-plus": "智谱", "glm-4-flash": "智谱",
-    "moonshot-v1-8k": "月之暗面", "moonshot-v1-32k": "月之暗面",
-    "baichuan2-53b": "百川智能",
-    "yi-34b-chat": "零一万物",
-    "Pro/Qwen2.5-7B-Instruct": "硅基流动", "Pro/deepseek-ai/DeepSeek-V3": "硅基流动",
-    "mimo-v2.5-pro": "小米", "mimo-v2.5": "小米", "mimo-v2-flash": "小米",
-  };
-  // 1. 优先查 provider_models（自定义厂商），再回退到静态内置映射
   let provider = "";
   if (s.apiConfig.provider_models) {
     for (const [p, models] of Object.entries(s.apiConfig.provider_models)) {
       if (models.includes(currentModel)) { provider = p; break; }
     }
   }
-  if (!provider) provider = modelToProvider[currentModel] || "";
+  if (!provider) provider = MODEL_TO_PROVIDER[currentModel] || "";
   const effectiveKey = s.apiConfig.provider_keys?.[provider] || s.apiConfig.api_key || "";
   const effectiveBaseUrl = s.apiConfig.provider_base_urls?.[provider] || s.apiConfig.api_base_url || "";
 
@@ -792,27 +780,13 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
       // === 有 API Key 时走真实 API 调用 ===
       // 先查当前模型对应厂商的 key，没有则用全局 key
       const currentModel = s.apiConfig.api_model;
-      // 从 AI_MODELS 列表查这个模型属于哪个厂商（简化处理：用 model 值的匹配前缀）
-      const modelToProvider: Record<string, string> = {
-        "deepseek-v4-flash": "DeepSeek", "deepseek-v4-pro": "DeepSeek",
-        "gpt-5.5": "OpenAI", "gpt-5.4": "OpenAI", "gpt-5.4-mini": "OpenAI",
-        "claude-opus-4-8": "Anthropic", "claude-sonnet-4-6": "Anthropic", "claude-haiku-4-5": "Anthropic",
-        "qwen-plus": "阿里云", "qwen-max": "阿里云",
-        "glm-4-plus": "智谱", "glm-4-flash": "智谱",
-        "moonshot-v1-8k": "月之暗面", "moonshot-v1-32k": "月之暗面",
-        "baichuan2-53b": "百川智能",
-        "yi-34b-chat": "零一万物",
-        "Pro/Qwen2.5-7B-Instruct": "硅基流动", "Pro/deepseek-ai/DeepSeek-V3": "硅基流动",
-        "mimo-v2.5-pro": "小米", "mimo-v2.5": "小米", "mimo-v2-flash": "小米",
-      };
-      // 1. 优先查 provider_models（自定义厂商），再回退到静态内置映射
       let provider = "";
       if (s.apiConfig.provider_models) {
         for (const [p, models] of Object.entries(s.apiConfig.provider_models)) {
           if (models.includes(currentModel)) { provider = p; break; }
         }
       }
-      if (!provider) provider = modelToProvider[currentModel] || "";
+      if (!provider) provider = MODEL_TO_PROVIDER[currentModel] || "";
       const effectiveKey = s.apiConfig.provider_keys[provider] || s.apiConfig.api_key;
       const effectiveBaseUrl = s.apiConfig.provider_base_urls[provider] || s.apiConfig.api_base_url;
 
