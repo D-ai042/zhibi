@@ -42,7 +42,7 @@
     "updater": {
       "active": true,
       "endpoints": [
-        "https://github.com/D-ai042/zhibi/releases/latest/download/latest.json"
+        "https://ghfast.top/github.com/D-ai042/zhibi/releases/latest/download/latest.json"
       ],
       "dialog": true,
       "pubkey": ""

@@ -98,19 +98,19 @@ jobs:
   "platforms": {
     "windows-x86_64": {
       "signature": "",
-      "url": "https://github.com/D-ai042/zhibi/releases/download/${TAG}/执笔-v${TAG}-win.exe"
+      "url": "https://ghfast.top/github.com/D-ai042/zhibi/releases/download/${TAG}/执笔-v${TAG}-win.exe"
     },
     "darwin-x86_64": {
       "signature": "",
-      "url": "https://github.com/D-ai042/zhibi/releases/download/${TAG}/执笔-v${TAG}-mac-intel.dmg"
+      "url": "https://ghfast.top/github.com/D-ai042/zhibi/releases/download/${TAG}/执笔-v${TAG}-mac-intel.dmg"
     },
     "darwin-aarch64": {
       "signature": "",
-      "url": "https://github.com/D-ai042/zhibi/releases/download/${TAG}/执笔-v${TAG}-mac-arm.dmg"
+      "url": "https://ghfast.top/github.com/D-ai042/zhibi/releases/download/${TAG}/执笔-v${TAG}-mac-arm.dmg"
     },
     "linux-x86_64": {
       "signature": "",
-      "url": "https://github.com/D-ai042/zhibi/releases/download/${TAG}/执笔-v${TAG}-linux.AppImage"
+      "url": "https://ghfast.top/github.com/D-ai042/zhibi/releases/download/${TAG}/执笔-v${TAG}-linux.AppImage"
     }
   }
 }
