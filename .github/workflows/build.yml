@@ -15,24 +15,12 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            ext: AppImage
-            rust-target: x86_64-unknown-linux-gnu
-            label: linux
           - os: macos-latest
             target: x86_64-apple-darwin
-            ext: dmg
-            rust-target: x86_64-apple-darwin
-            label: mac-intel
           - os: macos-latest
             target: aarch64-apple-darwin
-            ext: dmg
-            rust-target: aarch64-apple-darwin
-            label: mac-arm
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            ext: nsis
-            rust-target: x86_64-pc-windows-msvc
-            label: win
 
     runs-on: ${{ matrix.os }}
     env:
@@ -46,7 +34,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.rust-target }}
+          targets: ${{ matrix.target }}
 
       - name: 安装 Linux 依赖
         if: matrix.os == 'ubuntu-latest'
@@ -63,20 +51,4 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: ${{ github.ref_name }}
-          args: --target ${{ matrix.rust-target }}
-
-      - name: 重命名产物
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          TAG="${{ github.ref_name }}"
-          case "${{ matrix.ext }}" in
-            dmg)      NEW_NAME="执笔-v$TAG-${{ matrix.label }}.dmg" ;;
-            nsis)     NEW_NAME="执笔-v$TAG-${{ matrix.label }}.exe" ;;
-            AppImage) NEW_NAME="执笔-v$TAG-${{ matrix.label }}.AppImage" ;;
-          esac
-          curl -s -X PATCH "$(gh release view "$TAG" --json assets -q '.assets[-1].url')" \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            -d "{\"name\":\"$NEW_NAME\"}"
+          args: --target ${{ matrix.target }}
