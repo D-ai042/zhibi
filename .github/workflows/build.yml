@@ -57,41 +57,26 @@ jobs:
       - name: 安装前端依赖
         run: npm ci
 
-      - name: 构建 Tauri
+      - name: 构建并上传 Tauri
+        uses: tauri-apps/tauri-action@v0
         env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: |
-          npm run tauri build -- --target ${{ matrix.rust-target }}
-        shell: bash
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          args: --target ${{ matrix.rust-target }}
 
       - name: 重命名产物
-        shell: bash
-        run: |
-          BUNDLE_DIR="src-tauri/target/${{ matrix.rust-target }}/release/bundle"
-          case "${{ matrix.ext }}" in
-            dmg)
-              SRC=$(find "$BUNDLE_DIR/dmg" -name "*.dmg" | head -1)
-              ;;
-            nsis)
-              SRC=$(find "$BUNDLE_DIR/nsis" -name "*.exe" | head -1)
-              ;;
-            AppImage)
-              SRC=$(find "$BUNDLE_DIR/appimage" -name "*.AppImage" -o -name "*.appimage" | head -1)
-              ;;
-          esac
-          EXT="${SRC##*.}"
-          DST="$BUNDLE_DIR/执笔-v${{ github.ref_name }}-${{ matrix.label }}.$EXT"
-          echo "SRC=$SRC"
-          echo "DST=$DST"
-          mv "$SRC" "$DST"
-          echo "ASSET_PATH=$DST" >> $GITHUB_ENV
-
-      - name: 上传到 Release
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${{ github.ref_name }}"
-          gh release create "$TAG" --title "执笔 $TAG" --notes "自动构建 · 多平台" --latest 2>/dev/null || true
-          gh release upload "$TAG" "$ASSET_PATH" --clobber
+          case "${{ matrix.ext }}" in
+            dmg)      NEW_NAME="执笔-v$TAG-${{ matrix.label }}.dmg" ;;
+            nsis)     NEW_NAME="执笔-v$TAG-${{ matrix.label }}.exe" ;;
+            AppImage) NEW_NAME="执笔-v$TAG-${{ matrix.label }}.AppImage" ;;
+          esac
+          curl -s -X PATCH "$(gh release view "$TAG" --json assets -q '.assets[-1].url')" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -d "{\"name\":\"$NEW_NAME\"}"
