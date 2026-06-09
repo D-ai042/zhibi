@@ -1,6 +1,6 @@
 /**
  * Tauri invoke 封装；浏览器开发时用 localStorage 模拟后端。
- * EXE 生产包统一走 localStorage 模拟，确保功能与浏览器预览一致。
+ * EXE 生产包走 Tauri Rust 后端（SQLite），浏览器走 localStorage mock。
  */
 import type {
   AiRequest,
@@ -18,6 +18,9 @@ import type {
   TimelineNode,
   Volume,
   WorldTerm,
+  StyleGuide,
+  StoryBible,
+  ChapterSummary,
 } from "@/types";
 
 export const isTauri = () =>
@@ -25,7 +28,12 @@ export const isTauri = () =>
   !!(window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
 
 async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
-  // 统一走 localStorage 模拟后端，EXE 与浏览器体验完全一致
+  if (isTauri()) {
+    // EXE 模式：走 Tauri Rust 后端（SQLite 持久化）
+    const { invoke } = await import("@tauri-apps/api/core");
+    return invoke<T>(cmd, args ?? {});
+  }
+  // 浏览器模式：走 localStorage mock 后端
   const { mockInvoke } = await import("./mock-backend");
   return mockInvoke<T>(cmd, args);
 }
@@ -168,4 +176,11 @@ export const api = {
   /** 保存导出文件（Tauri 模式） */
   saveExportFile: (projectId: string, filename: string, dataBase64: string, filePath: string) =>
     call<string>("save_export_file", { projectId, filename, dataBase64, filePath }),
+
+  /** 通用设置读取（通过 app_settings 表） */
+  getSetting: (key: string) =>
+    call<string | null>("get_setting", { key }),
+  /** 通用设置写入（通过 app_settings 表） */
+  setSetting: (key: string, value: string) =>
+    call<void>("set_setting", { key, value }),
 };

@@ -36,6 +36,8 @@ pub fn run() {
             commands::list_world_terms,
             commands::save_world_term,
             commands::delete_world_term,
+            commands::get_setting,
+            commands::set_setting,
             commands::list_relationship_edges,
             commands::save_relationship_edge,
             commands::delete_relationship_edge,

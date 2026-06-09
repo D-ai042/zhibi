@@ -971,6 +971,33 @@ pub fn export_project(project_id: String, state: State<'_, DbState>) -> Result<V
     .map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+pub fn get_setting(key: String, state: State<'_, DbState>) -> Result<Option<String>, String> {
+    with_conn(&state, |conn| {
+        let mut stmt = conn.prepare("SELECT value FROM app_settings WHERE key=?1")?;
+        let mut rows = stmt.query(params![key])?;
+        if let Some(row) = rows.next()? {
+            let val: String = row.get(0)?;
+            Ok(Some(val))
+        } else {
+            Ok(None)
+        }
+    })
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn set_setting(key: String, value: String, state: State<'_, DbState>) -> Result<(), String> {
+    with_conn(&state, |conn| {
+        conn.execute(
+            "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?1, ?2)",
+            params![key, value],
+        )?;
+        Ok(())
+    })
+    .map_err(|e| e.to_string())
+}
+
 fn read_table(conn: &rusqlite::Connection, sql: &str, params: impl rusqlite::Params) -> Result<Vec<Value>, rusqlite::Error> {
     use rusqlite::types::ValueRef;
     let mut stmt = conn.prepare(sql)?;
