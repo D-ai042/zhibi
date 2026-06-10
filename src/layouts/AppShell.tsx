@@ -1,4 +1,4 @@
-import { ReactNode, useMemo, useState, useRef, useCallback, useEffect } from "react";
+import { ReactNode, useMemo, useState, useRef, useCallback, useEffect, lazy } from "react";
 import {
   BookOpen,
   ChevronLeft,
@@ -9,14 +9,19 @@ import {
   Puzzle,
   LogOut,
   Download,
+  LayoutDashboard,
+  ListTree,
+  Layers,
+  BookMarked,
+  Lightbulb,
+  Archive,
 } from "lucide-react";
-import * as LucideIcons from "lucide-react";
 import { useAppStore } from "@/stores/app-store";
 import { api } from "@/lib/api";
-import { exportSetupDoc, exportChaptersDoc, exportFullDoc } from "@/lib/export-doc";
 import type { NavItem, NavTarget, ProjectStage } from "@/types";
 import { MODULE_LABEL } from "@/types";
-import { RightDrawer } from "./RightDrawer";
+
+const RightDrawer = lazy(() => import("./RightDrawer").then(m => ({ default: m.RightDrawer })));
 
 const STAGE_LABEL: Record<ProjectStage, string> = {
   ideation: "构思中",
@@ -104,9 +109,13 @@ function groupModels(
   return Array.from(map.entries());
 }
 
+const ICON_MAP: Record<string, typeof Puzzle> = {
+  LayoutDashboard, ListTree, Layers, BookMarked, Lightbulb, Archive, Settings, Puzzle,
+};
+
 /** 获取 lucide 图标组件 */
-function getIcon(name: string): React.ComponentType<{ className?: string }> {
-  return (LucideIcons as Record<string, React.ComponentType<{ className?: string }>>)[name] ?? Puzzle;
+function getIcon(name: string) {
+  return ICON_MAP[name] ?? Puzzle;
 }
 
 /** 是否是分隔节点头 */
@@ -251,6 +260,7 @@ export function AppShell({ children }: AppShellProps) {
     if (!currentProject) return;
     setExporting(true);
     try {
+      const { exportSetupDoc, exportChaptersDoc } = await import("@/lib/export-doc");
       const raw = await api.exportProject(currentProject.id);
       const base = {
         projectName: raw.project.name as string,
@@ -285,6 +295,7 @@ export function AppShell({ children }: AppShellProps) {
     if (!currentProject) return;
     setExporting(true);
     try {
+      const { exportFullDoc } = await import("@/lib/export-doc");
       const raw = await api.exportProject(currentProject.id);
       await exportFullDoc({
         projectName: raw.project.name as string,
@@ -386,7 +397,7 @@ export function AppShell({ children }: AppShellProps) {
                   if (!model) return "deepseek-chat";
                   // 先查是否是自定义 provider 的模型
                   if (apiConfig?.provider_models) {
-                    for (const [provider, models] of Object.entries(apiConfig.provider_models)) {
+                    for (const [, models] of Object.entries(apiConfig.provider_models)) {
                       if (models.includes(model)) return model;
                     }
                   }

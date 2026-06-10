@@ -65,7 +65,12 @@ function uid() {
   });
 }
 
+/** 内存缓存，避免每次 load() 都解析 JSON + 执行迁移 */
+let _mockStoreCache: MockStore | null = null;
+
 function load(): MockStore {
+  if (_mockStoreCache) return _mockStoreCache;
+
   const raw = localStorage.getItem(STORAGE_KEY);
   if (raw) {
     const data = JSON.parse(raw) as MockStore;
@@ -108,9 +113,11 @@ function load(): MockStore {
     if (!data.chapterContents) data.chapterContents = [];
     if (!data.lockedFields) data.lockedFields = [];
     if (!data.apiConfig.provider_models) data.apiConfig.provider_models = {};
+    _mockStoreCache = data;
     return data;
   }
-  return {
+
+  const defaultStore: MockStore = {
     projects: [],
     volumes: [],
     chapters: [],
@@ -133,6 +140,8 @@ function load(): MockStore {
     },
     currentProjectId: null,
   };
+  _mockStoreCache = defaultStore;
+  return defaultStore;
 }
 
 function save(s: MockStore) {
@@ -151,6 +160,8 @@ function save(s: MockStore) {
     }
   }
   localStorage.setItem(STORAGE_KEY, JSON.stringify(clone));
+  // 缓存变脏，下次 load() 重新解析
+  _mockStoreCache = null;
 }
 
 function progressFor(projectId: string, s: MockStore): FrameworkProgress {

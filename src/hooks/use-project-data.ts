@@ -13,9 +13,11 @@ export function useProjectBootstrap() {
   } = useAppStore();
 
   const refresh = useCallback(async () => {
-    const projects = await api.getProjects();
+    const [projects, config] = await Promise.all([
+      api.getProjects(),
+      api.getApiConfig(),
+    ]);
     setProjects(projects);
-    const config = await api.getApiConfig();
     setApiConfig(config);
     setDeepseekStatus(config.has_api_key ? "ok" : "offline");
 
