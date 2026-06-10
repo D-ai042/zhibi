@@ -24,6 +24,7 @@ import type {
 } from "@/types";
 
 import { MODEL_TO_PROVIDER } from "./model-config";
+import { mockInvoke, realAiCompleteStream, mockAiCompleteStream } from "./mock-backend";
 
 export const isTauri = () =>
   typeof window !== "undefined" &&
@@ -36,7 +37,6 @@ async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> 
     return invoke<T>(cmd, args ?? {});
   }
   // 浏览器模式：走 localStorage mock 后端
-  const { mockInvoke } = await import("./mock-backend");
   return mockInvoke<T>(cmd, args);
 }
 
@@ -135,15 +135,12 @@ export const api = {
       const effectiveKey = config.provider_keys[provider] || "";
       const effectiveBaseUrl = config.provider_base_urls[provider] || config.api_base_url;
       if (effectiveKey && effectiveBaseUrl) {
-        const { realAiCompleteStream } = await import("./mock-backend");
         return realAiCompleteStream(req, effectiveKey, effectiveBaseUrl, currentModel, callbacks, signal);
       }
       // Tauri 模式下没 Key 也尝试走 mockAiCompleteStream（降级报错）
-      const { mockAiCompleteStream } = await import("./mock-backend");
       return mockAiCompleteStream(req, callbacks, signal);
     }
-    // 浏览器模式 → 走 mockAiCompleteStream（里面有 Key 检测逻辑）
-    const { mockAiCompleteStream } = await import("./mock-backend");
+    // 浏览器模式 → 走 mockAiCompleteStream
     return mockAiCompleteStream(req, callbacks, signal);
   },
 

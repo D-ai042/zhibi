@@ -1,4 +1,4 @@
-import { ReactNode, useMemo, useState, useRef, useCallback, useEffect, lazy } from "react";
+import { ReactNode, useMemo, useState, useRef, useCallback, useEffect } from "react";
 import {
   BookOpen,
   ChevronLeft,
@@ -21,7 +21,7 @@ import { api } from "@/lib/api";
 import type { NavItem, NavTarget, ProjectStage } from "@/types";
 import { MODULE_LABEL } from "@/types";
 
-const RightDrawer = lazy(() => import("./RightDrawer").then(m => ({ default: m.RightDrawer })));
+import { RightDrawer } from "./RightDrawer";
 
 const STAGE_LABEL: Record<ProjectStage, string> = {
   ideation: "构思中",
