@@ -45,3 +45,6 @@ interface Window {
     SpeechRecognition?: new () => SpeechRecognition;
     webkitSpeechRecognition?: new () => SpeechRecognition;
 }
+
+/** 当前应用版本（由 Vite define 注入） */
+declare const __APP_VERSION__: string;

@@ -4,6 +4,7 @@ import { api, isTauri } from "@/lib/api";
 import { useAppStore } from "@/stores/app-store";
 import { listSnapshots, restoreSnapshot, createSnapshot } from "@/lib/memory-updater";
 import type { SttConfig } from "@/types";
+import { getCurrentVersion, checkForUpdate, markDismissed, type VersionInfo } from "@/lib/version-check";
 
 /** 厂商配置 */
 const PROVIDERS = [
@@ -29,7 +30,7 @@ interface CustomProviderEntry {
   models: string[];
 }
 
-type TabName = "api" | "stt" | "snapshots" | "migrate";
+type TabName = "api" | "stt" | "snapshots" | "migrate" | "about";
 
 export function SettingsModal() {
   const { settingsOpen, setSettingsOpen, setApiConfig, apiConfig } = useAppStore();
@@ -42,6 +43,10 @@ export function SettingsModal() {
   const [customProviders, setCustomProviders] = useState<CustomProviderEntry[]>([]);
   const [newCustomName, setNewCustomName] = useState("");
   const [saveMsg, setSaveMsg] = useState("");
+
+  // 版本检查
+  const [updateInfo, setUpdateInfo] = useState<VersionInfo | null>(null);
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
 
   // STT 状态（多 provider 架构）
   const [sttProviders, setSttProviders] = useState<Record<string, { api_key: string; secret_key: string; base_url: string; model: string }>>({});
@@ -199,6 +204,10 @@ export function SettingsModal() {
           <button type="button" onClick={() => setTab("migrate")}
             className={`flex items-center gap-1.5 px-4 py-2.5 font-medium ${tab === "migrate" ? "border-b-2 border-amber-500 text-amber-700" : "text-slate-500 hover:text-slate-700"}`}>
             <Download size={15} /> 数据迁移
+          </button>
+          <button type="button" onClick={() => { setTab("about"); }}
+            className={`flex items-center gap-1.5 px-4 py-2.5 font-medium ${tab === "about" ? "border-b-2 border-amber-500 text-amber-700" : "text-slate-500 hover:text-slate-700"}`}>
+            <History size={15} /> 关于
           </button>
         </div>
 
@@ -483,6 +492,83 @@ export function SettingsModal() {
           )}
           {tab === "migrate" && (
             <DataMigration />
+          )}
+          {tab === "about" && (
+            <div className="space-y-4">
+              <h3 className="font-semibold text-slate-700">关于执笔</h3>
+
+              <div className="rounded-lg border border-slate-100 bg-white p-4 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-slate-500">当前版本</span>
+                  <span className="text-sm font-medium text-slate-800">v{getCurrentVersion()}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-slate-500">构建标识</span>
+                  <span className="text-xs text-slate-400">com.zhibi.writer</span>
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-slate-100 bg-white p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <span className="text-sm font-medium text-slate-700">检查更新</span>
+                  <button
+                    type="button"
+                    disabled={checkingUpdate}
+                    onClick={async () => {
+                      setCheckingUpdate(true);
+                      try {
+                        const info = await checkForUpdate();
+                        setUpdateInfo(info);
+                      } finally {
+                        setCheckingUpdate(false);
+                      }
+                    }}
+                    className="rounded-lg bg-amber-500 px-4 py-1.5 text-xs text-white hover:bg-amber-600 disabled:opacity-50"
+                  >
+                    {checkingUpdate ? "检查中…" : "检查更新"}
+                  </button>
+                </div>
+                {updateInfo && (
+                  <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3">
+                    <p className="text-sm font-medium text-amber-800">
+                      🎉 新版本 v{updateInfo.version} 可用
+                    </p>
+                    {updateInfo.release_notes && (
+                      <p className="mt-1 text-xs text-amber-700">{updateInfo.release_notes}</p>
+                    )}
+                    <div className="mt-3 flex gap-2">
+                      <a
+                        href={updateInfo.download_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="rounded-lg bg-amber-500 px-3 py-1.5 text-xs text-white hover:bg-amber-600"
+                      >
+                        📥 下载最新版
+                      </a>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          markDismissed(updateInfo.version);
+                          setUpdateInfo(null);
+                        }}
+                        className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs text-slate-500 hover:bg-slate-50"
+                      >
+                        忽略此版本
+                      </button>
+                    </div>
+                  </div>
+                )}
+                {!updateInfo && !checkingUpdate && (
+                  <p className="text-xs text-slate-400">点击按钮检查服务器上是否有新版本。</p>
+                )}
+              </div>
+
+              <div className="text-xs text-slate-400 space-y-1">
+                <p>更新清单地址：{/* VERSION_CHECK_URL — 不暴露服务器路径给用户直观显示 */}
+                  服务器：175.178.18.102:8000</p>
+                <p>如有问题请联系开发者。</p>
+              </div>
+            </div>
           )}
 
           {testMsg && (

@@ -1,6 +1,8 @@
 node_modules/
 dist/
 src-tauri/target/
+src-tauri/tauri-key.txt
+src-tauri/tauri-key.txt.pub
 *.log
 .DS_Store
 .env

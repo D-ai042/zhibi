@@ -183,6 +183,9 @@ export function WorldviewPanel() {
   const handleSelect = useCallback((t: WorldTerm) => { setSelectedEntity({ type: "world_term", id: t.id, name: t.title }); }, [setSelectedEntity]);
   const delRef = useRef<(id: string) => void>(() => { });
   delRef.current = useCallback(async (id: string) => {
+    // 找回词条名称用于确认对话框
+    const term = terms.find(t => t.id === id);
+    if (!window.confirm(`确定删除词条「${term?.title || id}」？此操作不可撤销。`)) return;
     await api.deleteWorldTerm(id);
     setTerms(p => p.filter(t => t.id !== id));
     // remove edges pointing to/from this node
@@ -198,7 +201,7 @@ export function WorldviewPanel() {
       if (dirty) saveGroups(currentProject.id, gs.filter(g => g.childIds.length > 0));
     }
     setNodes(nds => nds.filter(n => n.id !== id));
-  }, [setNodes, setEdges, currentProject]);
+  }, [setNodes, setEdges, currentProject, terms]);
 
   // ==== load ====
 

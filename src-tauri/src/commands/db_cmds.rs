@@ -18,11 +18,7 @@ fn new_id() -> String {
 }
 
 fn config_path() -> PathBuf {
-    let exe_dir = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-        .unwrap_or_else(|| PathBuf::from("."));
-    exe_dir.join("data").join("config.json")
+    crate::db::data_dir().join("config.json")
 }
 
 fn load_config() -> ApiConfig {
@@ -1205,10 +1201,14 @@ pub fn import_project(project_data: serde_json::Value, state: State<'_, DbState>
 }
 
 fn open_or_create_settings_db() -> rusqlite::Connection {
-    let dir = crate::db::projects_dir();
+    let dir = crate::db::data_dir();
     std::fs::create_dir_all(&dir).ok();
     let path = dir.join("settings.db");
-    let conn = rusqlite::Connection::open(&path).expect("open settings.db");
+    let conn = rusqlite::Connection::open(&path).unwrap_or_else(|e| {
+        // 降级：如果 settings.db 打不开，用内存数据库保证不崩溃
+        eprintln!("[WARN] 无法打开 settings.db ({}), 使用内存数据库降级", e);
+        rusqlite::Connection::open_in_memory().expect("内存数据库也失败")
+    });
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);"
     ).ok();

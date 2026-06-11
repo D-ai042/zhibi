@@ -2,6 +2,7 @@ import { useCallback, useEffect } from "react";
 import { api } from "@/lib/api";
 import { useAppStore } from "@/stores/app-store";
 import { migrateLocalStorageToSqlite } from "@/lib/migrate-data";
+import { prewarmFromSqlite } from "@/lib/storage";
 
 export function useProjectBootstrap() {
   const {
@@ -28,8 +29,10 @@ export function useProjectBootstrap() {
   }, [currentProject, setProjects, setApiConfig, setFrameworkProgress, setDeepseekStatus]);
 
   useEffect(() => {
-    // EXE 首次启动时迁移 localStorage 数据到 SQLite
-    migrateLocalStorageToSqlite().then(() => {
+    // EXE 模式：先预暖 localStorage（从 SQLite 读回），再迁移（localStorage → SQLite）
+    prewarmFromSqlite().then(() => {
+      return migrateLocalStorageToSqlite();
+    }).then(() => {
       // 迁移完成后刷新数据
       refresh();
     });

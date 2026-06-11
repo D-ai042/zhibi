@@ -588,11 +588,13 @@ export function WritingModule() {
     // ===== 删除章节 =====
     const deleteChapter = useCallback((chId: string) => {
         if (!pid) return;
+        const ch = chapters.find(c => c.id === chId);
+        if (!window.confirm(`确定删除「${ch?.title || chId}」？章节内容将永久丢失。`)) return;
         const all = loadChapters(pid).filter(c => c.id !== chId);
         saveChapters(pid, all);
         setChapters(all);
         if (selectedChapterId === chId) { setSelectedChapterId(null); setEditingContent(""); }
-    }, [pid, selectedChapterId]);
+    }, [pid, selectedChapterId, chapters]);
 
     // ===== 重命名 =====
     const renameChapter = useCallback((chId: string, newTitle: string) => {

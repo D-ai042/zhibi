@@ -21,6 +21,11 @@ const MIGRATABLE_PREFIXES = [
     "novel-workbench-voices-",
     "novel-workbench-log-",
     "novel-workbench-chat-",
+    "novel-workbench-memory-short-",
+    "novel-workbench-memory-long-",
+    "novel-workbench-compressed-idx-",
+    "novel-workbench-mock",
+    "novel-workbench-snapshots-",
     "plot-chapters-",
     "plot-segments-",
     "plot-edges-",
@@ -28,6 +33,10 @@ const MIGRATABLE_PREFIXES = [
     "worldview-groups-",
     "material-",
     "ai-pending-chars-",
+    "ai-pending-world-terms-",
+    "inspiration-cards-",
+    "char-groups-",
+    "chapter-hash-",
 ];
 
 /**
@@ -71,11 +80,15 @@ export async function migrateLocalStorageToSqlite(): Promise<void> {
         }
     }
 
-    // 标记迁移完成
-    try {
-        await api.setSetting(MIGRATION_FLAG_KEY, "1");
-    } catch (e) {
-        console.warn("[migrate] 无法写入迁移标记", e);
+    // 标记迁移完成（只有至少成功迁移了 1 条才标记，防止全失败后遗漏）
+    if (count > 0) {
+        try {
+            await api.setSetting(MIGRATION_FLAG_KEY, "1");
+        } catch (e) {
+            console.warn("[migrate] 无法写入迁移标记", e);
+        }
+    } else {
+        console.warn("[migrate] 没有数据需要迁移，跳过标记");
     }
 
     console.log(`[migrate] 迁移完成: 共 ${count} 条数据`);

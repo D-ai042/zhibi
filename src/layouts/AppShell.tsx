@@ -22,6 +22,7 @@ import type { NavItem, NavTarget, ProjectStage } from "@/types";
 import { MODULE_LABEL } from "@/types";
 
 import { RightDrawer } from "./RightDrawer";
+import { getCurrentVersion, checkForUpdate, markDismissed, type VersionInfo } from "@/lib/version-check";
 
 const STAGE_LABEL: Record<ProjectStage, string> = {
   ideation: "构思中",
@@ -201,6 +202,7 @@ export function AppShell({ children }: AppShellProps) {
   const [modelOpen, setModelOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  const [updateInfo, setUpdateInfo] = useState<VersionInfo | null>(null);
 
   // 首次加载时同步 __active_provider__
   useEffect(() => {
@@ -214,6 +216,15 @@ export function AppShell({ children }: AppShellProps) {
       });
     }
   }, [apiConfig]);
+
+  // 启动时自动检查新版本
+  useEffect(() => {
+    let cancelled = false;
+    checkForUpdate().then(info => {
+      if (!cancelled && info) setUpdateInfo(info);
+    });
+    return () => { cancelled = true; };
+  }, []);
 
   const navWidth = navCollapsed ? "w-[72px]" : "w-[220px]";
   const [isDragging, setIsDragging] = useState(false);
@@ -561,6 +572,18 @@ export function AppShell({ children }: AppShellProps) {
         <span className="text-violet-500">{customModules.length} 个自定义</span>
         {frameworkProgress && (
           <span>大纲完成度: {Math.round((frameworkProgress.worldview + frameworkProgress.characters + frameworkProgress.plot_direction) / 3)}%</span>
+        )}
+        <span className="ml-auto">v{getCurrentVersion()}</span>
+        {updateInfo && (
+          <button
+            type="button"
+            onClick={() => setSettingsOpen(true)}
+            className="flex items-center gap-1 rounded bg-amber-100 px-1.5 py-0.5 text-amber-700 hover:bg-amber-200"
+            title={`新版本 v${updateInfo.version} 可用`}
+          >
+            <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+            <span>新版本</span>
+          </button>
         )}
       </footer>
     </div>

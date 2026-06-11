@@ -1859,7 +1859,7 @@ export function AiChatPanel() {
           <button
             type="button"
             title="清空对话"
-            onClick={clearChat}
+            onClick={() => { if (window.confirm('确定清空全部对话记录？此操作不可撤销。')) clearChat(); }}
             className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
           >
             <Trash2 className="h-4 w-4" />

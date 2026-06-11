@@ -289,7 +289,9 @@ function BibleRulesEditor({ projectId }: { projectId: string }) {
                     <div key={i} className="mb-1 flex items-center justify-between rounded border border-slate-100 bg-white px-2 py-1">
                         <span className="text-sm text-slate-700">第{ev.chapter}章「{ev.title}」：{ev.description}</span>
                         <button type="button" className="text-xs text-red-400 hover:text-red-600" onClick={() => {
-                            setBible(prev => ({ ...prev, locked_events: prev.locked_events.filter((_, j) => j !== i) }));
+                            if (window.confirm(`确定删除第${ev.chapter}章事件「${ev.title}」？`)) {
+                                setBible(prev => ({ ...prev, locked_events: prev.locked_events.filter((_, j) => j !== i) }));
+                            }
                         }}>删除</button>
                     </div>
                 ))}
@@ -325,7 +327,9 @@ function BibleRulesEditor({ projectId }: { projectId: string }) {
                     <div key={i} className="mb-1 flex items-center justify-between rounded border border-slate-100 bg-white px-2 py-1">
                         <span className="text-sm text-slate-700">第{s.chapter_range[0]}-{s.chapter_range[1]}章「{s.name}」：{s.description}</span>
                         <button type="button" className="text-xs text-red-400 hover:text-red-600" onClick={() => {
-                            setBible(prev => ({ ...prev, main_stages: prev.main_stages.filter((_, j) => j !== i) }));
+                            if (window.confirm(`确定删除阶段「${s.name}」？`)) {
+                                setBible(prev => ({ ...prev, main_stages: prev.main_stages.filter((_, j) => j !== i) }));
+                            }
                         }}>删除</button>
                     </div>
                 ))}
@@ -389,7 +393,10 @@ function CharacterVoiceEditor({ projectId }: { projectId: string }) {
         setNewChar(""); setNewVoice("");
     }, [newChar, newVoice]);
 
-    const removeEntry = useCallback((char: string) => setEntries(prev => prev.filter(e => e.char !== char)), []);
+    const removeEntry = useCallback((char: string) => {
+        if (!window.confirm(`确定删除角色「${char}」的语言特色？`)) return;
+        setEntries(prev => prev.filter(e => e.char !== char));
+    }, []);
     const updateVoice = useCallback((char: string, voice: string) => setEntries(prev => prev.map(e => e.char === char ? { ...e, voice } : e)), []);
 
     const handleAnalyze = useCallback(async () => {

@@ -87,7 +87,7 @@ export function CustomModuleRenderer({ mod }: Props) {
                     </button>
                     <button
                         type="button"
-                        onClick={() => removeCustomModule(mod.id)}
+                        onClick={() => { if (window.confirm(`确定删除模块「${mod.label || mod.id}」？`)) removeCustomModule(mod.id); }}
                         className="flex items-center gap-1 rounded-md border border-red-200 px-2.5 py-1 text-xs text-red-600 hover:bg-red-50"
                         title="删除此模块"
                     >

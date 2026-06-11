@@ -5,13 +5,23 @@ use tauri::{AppHandle, Manager};
 
 pub struct DbState(pub Mutex<Option<Connection>>);
 
+/// 应用数据根目录：%APPDATA%/com.zhibi.writer/（安装版可写）
+/// 不再使用 exe 同级目录，避免 Program Files 权限问题
+pub fn data_dir() -> PathBuf {
+    if let Ok(appdata) = std::env::var("APPDATA") {
+        PathBuf::from(appdata).join("com.zhibi.writer")
+    } else {
+        // fallback：exe 同级目录
+        let exe_dir = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+            .unwrap_or_else(|| PathBuf::from("."));
+        exe_dir.join("data")
+    }
+}
+
 pub fn projects_dir() -> PathBuf {
-    // 存到 exe 同级目录下的 data/projects
-    let exe_dir = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-        .unwrap_or_else(|| PathBuf::from("."));
-    exe_dir.join("data").join("projects")
+    data_dir().join("projects")
 }
 
 pub fn init_app_db(app: &AppHandle) -> std::io::Result<()> {
