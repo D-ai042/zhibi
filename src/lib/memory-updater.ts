@@ -22,6 +22,23 @@ import type {
 
 // ===== 接口 =====
 
+/** 解析章节范围字符串如 "1-3" 或 "4,7-9" 为数字数组 */
+function parseChapterRange(range: string): number[] {
+    const nums: number[] = [];
+    if (!range) return nums;
+    const parts = range.split(/[,，]/);
+    for (const p of parts) {
+        const m = p.match(/(\d+)\s*[-−–—]\s*(\d+)/);
+        if (m) {
+            for (let i = parseInt(m[1]); i <= parseInt(m[2]); i++) nums.push(i);
+        } else {
+            const n = parseInt(p);
+            if (!isNaN(n)) nums.push(n);
+        }
+    }
+    return nums;
+}
+
 export interface MemoryUpdateInput {
     projectId: string;
     chapterNumber: number;
@@ -48,6 +65,25 @@ interface AiChapterAnalysis {
     planted_foreshadow: string[];
     character_states: { name: string; current_status: string; current_location: string }[];
     storyline_progress: { name: string; delta: string; progress_percent: number }[];
+    /** 角色字段级变化——如果有角色在外貌/性格/能力等发生明显变化，输出快照 */
+    character_snapshots?: {
+        name: string;            // 角色名
+        age: string;             // 推测的当前年龄
+        personality?: string;    // 性格变化（如果有）
+        ability?: string;        // 能力变化（如果有）
+        appearance?: string;     // 外貌变化（如果有）
+        background?: string;    // 背景变化（如果有）
+        style?: string;
+        interests?: string;
+        desire?: string;
+        fear?: string;
+        flaw?: string;
+        arc?: string;
+        voice_style?: string;
+        faction?: string;
+        race?: string;
+        gender?: string;
+    }[];
 }
 
 function buildChapterAnalysisPrompt(
@@ -75,7 +111,7 @@ ${chapterContent.slice(0, 6000)}
 
 ---CHAPTER_ANALYSIS---
 {
-  "summary": "本章核心剧情摘要（200字以内）",
+  "summary": "本章核心剧情摘要（200-400字，包含关键出场人物、事件经过、场景地点）",
   "key_characters": ["本章出场角色名"],
   "key_locations": ["本章发生的地名"],
   "advanced_storylines": ["本章推进了哪些故事线"],
@@ -85,6 +121,9 @@ ${chapterContent.slice(0, 6000)}
   ],
   "storyline_progress": [
     {"name": "故事线名", "delta": "本章推进了什么", "progress_percent": 0}
+  ],
+  "character_snapshots": [
+    {"name": "角色名", "age": "推测年龄", "personality": "新性格（变化才填）", "ability": "新能力（变化才填）", "appearance": "新外貌（变化才填）"}
   ]
 }
 ---END_CHAPTER_ANALYSIS---`;
@@ -149,6 +188,7 @@ async function analyzeChapterViaAI(
             planted_foreshadow: a.planted_foreshadow || [],
             character_states: a.character_states || [],
             storyline_progress: a.storyline_progress || [],
+            character_snapshots: a.character_snapshots || [],
         };
     } catch (e) {
         throw new Error("AI 分析结果 JSON 解析失败: " + (e instanceof Error ? e.message : String(e)));
@@ -219,6 +259,33 @@ export async function updateMemory(
     }
     store.characterStates = states;
 
+    // ★ 3.5 角色快照：AI 检测到字段级变化时自动创建/更新快照
+    if (analysis.character_snapshots?.length) {
+        try {
+            const allChars = await api.listCharacters(projectId);
+            for (const snap of analysis.character_snapshots) {
+                const targetChar = allChars.find(c => c.name === snap.name);
+                if (!targetChar || !snap.age) continue;
+                const existingSnaps = targetChar.snapshots || [];
+                const snapAge = parseInt(snap.age);
+                const idx = existingSnaps.findIndex(s => parseInt(s.age) === snapAge);
+                const changes: Record<string, string> = {};
+                for (const key of ["personality", "ability", "appearance", "background", "style", "interests", "desire", "fear", "flaw", "arc", "voice_style", "faction", "race", "gender"] as const) {
+                    const val = (snap as any)[key];
+                    if (val && val.length > 3) changes[key] = val;
+                }
+                if (Object.keys(changes).length === 0) continue;
+                if (idx >= 0) {
+                    existingSnaps[idx] = { age: snap.age, changes };
+                } else {
+                    existingSnaps.push({ age: snap.age, changes });
+                }
+                existingSnaps.sort((a, b) => parseInt(a.age) - parseInt(b.age));
+                await api.saveCharacter({ ...targetChar, snapshots: existingSnaps } as any);
+            }
+        } catch { /* 快照保存失败不阻塞定稿 */ }
+    }
+
     // 3. 故事线进度
     const storylineProgress: { name: string; delta: string }[] = [];
     const storylines: StorylineProgress[] = store.storylines || [];
@@ -287,6 +354,143 @@ interface LogStore {
     storylines?: StorylineProgress[];
     foreshadows?: ForeshadowEntry[];
     snapshots?: ChapterSnapshot[];
+    termActivity?: TermActivityEntry[];
+}
+
+// ===== 词条激活状态 =====
+
+interface TermActivityEntry {
+    termId: string;
+    termTitle: string;
+    activeForChapter: number;
+    status: "active" | "dormant";
+    reason: string;
+    evaluatedAt: string;
+}
+
+/**
+ * 定稿后 AI 判断下一章需要激活哪些世界观词条。
+ * 输入：所有词条 + 前5章摘要 + 下一章 beat 规划
+ * 输出：每个词条的 active/dormant 标记，写入 termActivity
+ */
+export async function activateNextChapterTerms(
+    projectId: string,
+    chapterNumber: number,
+    allWorldTerms: { id: string; title: string; one_liner: string; term_type: string }[],
+    plotSegments: any[],
+    plotChapters: any[],
+    recentSummaries: ChapterSummary[],
+): Promise<TermActivityEntry[]> {
+    // 找到下一章（第 N+1 章）对应的 beat
+    const nextChapterNumber = chapterNumber + 1;
+    const nextChap = plotChapters.find((c: any) => c.number === nextChapterNumber);
+    let nextBeatInfo = "";
+    let nextVolInfo = "";
+
+    if (nextChap) {
+        const vol = plotSegments.find((s: any) => s.id === nextChap.volumeSegmentId && s.type === "bright");
+        if (vol) {
+            nextVolInfo = `所属卷：${vol.title}\n卷概要：角色：${vol.characters || ""}  地点：${vol.location || ""}  时间：${vol.time || ""}  事件：${vol.event || ""}`;
+            const beats = vol.beats || [];
+            // 用 beat.chapters 精确匹配（修复旧版 idxInVol + 1 的映射错误）
+            const nextChapterNum = nextChapterNumber;
+            const beat = beats.find((b: any) => {
+                const range = parseChapterRange(b.chapters || "");
+                return range.includes(nextChapterNum);
+            });
+            if (beat) {
+                nextBeatInfo = `细纲 #${beat.number}「${beat.title}」\n角色：${beat.characters || ""}\n地点：${beat.location || ""}\n时间：${beat.time || ""}\n事件：${beat.event || ""}\n章节范围：${beat.chapters || ""}`;
+            }
+        }
+    }
+
+    const summariesText = recentSummaries
+        .map(s => `第${s.chapter_number}章：${s.summary}\n出场角色：${(s.key_characters || []).join("、")}\n地点：${(s.key_locations || []).join("、")}`)
+        .join("\n\n");
+
+    const termsText = allWorldTerms
+        .map(t => `[${t.term_type}] ${t.id}: ${t.title} — ${t.one_liner || ""}`)
+        .join("\n");
+
+    const prompt = `你是资深小说设定编辑。
+
+给定：
+1. 所有世界观词条列表（id、title、one_liner、term_type）
+2. 前 5 章摘要（key_characters、key_locations、summary）
+3. 下一章（第 ${nextChapterNumber} 章）的剧情规划（所属卷概要 + 当前细纲 beat 的完整信息）
+
+对每个词条判断第 ${nextChapterNumber} 章是否需要：
+
+- rule 类型：本章剧情是否涉及该规则约束的场景？
+- place 类型：本章是否发生在该地点或直接关联地点？
+- faction 类型：本章是否会出现该势力？
+- item/system 类型：本章是否会涉及该道具或制度？
+- other 类型：默认不需要
+
+严格规则：
+- 只有第 ${nextChapterNumber} 章明确相关才标 active，其他标 dormant
+- 不要因为"以后可能会用到"而提前激活
+- 输出纯 JSON，放在 ---TERM_ACTIVATION--- 块中：
+---TERM_ACTIVATION---
+{
+  "terms": [
+    {"id": "词条id", "status": "active", "reason": "一句话原因，必须具体"}
+  ]
+}
+---END_TERM_ACTIVATION---
+
+【全部词条列表】
+${termsText}
+
+【前情摘要】
+${summariesText || "（首章，无前情摘要）"}
+
+【下一章（第${nextChapterNumber}章）剧情规划】
+${nextVolInfo}
+
+${nextBeatInfo}`;
+
+    const res = await api.aiComplete({
+        action: "chat", entity_type: "chapter", entity_id: projectId,
+        extra: {
+            system_hint: "你是一个严谨的设定编辑助手。只输出指定 JSON 格式，不要额外文字。",
+            user_message: prompt, history: [], context: "",
+        },
+    });
+
+    if (!res.content || res.error) {
+        throw new Error(res.error || "AI 词条激活分析返回为空");
+    }
+
+    const m = res.content.match(/---TERM_ACTIVATION---\s*([\s\S]*?)\s*---END_TERM_ACTIVATION---/);
+    if (!m) {
+        throw new Error("AI 未按指定格式输出词条激活结果，请重试");
+    }
+
+    try {
+        const result: { terms: { id: string; status: string; reason: string }[] } = JSON.parse(m[1]);
+        const entries: TermActivityEntry[] = result.terms.map(t => ({
+            termId: t.id,
+            termTitle: allWorldTerms.find(wt => wt.id === t.id)?.title || "",
+            activeForChapter: nextChapterNumber,
+            status: t.status === "active" ? "active" : "dormant",
+            reason: t.reason || "",
+            evaluatedAt: new Date().toISOString(),
+        }));
+
+        // 写入 log store
+        const store = getLogStore(projectId);
+        // 移除旧的对同一章的评估
+        store.termActivity = (store.termActivity || []).filter(
+            e => e.activeForChapter !== nextChapterNumber
+        );
+        store.termActivity.push(...entries);
+        saveLogStore(projectId, store);
+
+        return entries;
+    } catch (e) {
+        throw new Error("AI 词条激活结果 JSON 解析失败: " + (e instanceof Error ? e.message : String(e)));
+    }
 }
 
 function getLogStore(projectId: string): LogStore {
@@ -321,6 +525,75 @@ function saveSnapshots(projectId: string, chapterNumber: number, content: string
         saveLogStore(projectId, store);
         return excerpts.length;
     } catch { return 0; }
+}
+
+// ===== 下一章角色调度 =====
+
+/**
+ * 每一章定稿后，AI 根据前情摘要 + 下章细纲 + 角色名册
+ * 预测下一章应该出场的角色，写入日志库。
+ */
+export async function activateNextChapterCharacters(
+    projectId: string,
+    currentChapterNumber: number,
+): Promise<void> {
+    const nextChapter = currentChapterNumber + 1;
+
+    let allCharacters: any[] = [];
+    let summaries: any[] = [];
+    let segs: any[] = [];
+    let chaps: any[] = [];
+    try {
+        allCharacters = await api.listCharacters(projectId);
+        summaries = await api.getChapterSummaries(projectId);
+        segs = getJSONSync(`plot-segments-${projectId}`, []) as any[];
+        chaps = getJSONSync(`plot-chapters-${projectId}`, []) as any[];
+    } catch { return; }
+
+    // 找到下一章所属的 beat
+    const nextChap = chaps.find((c: any) => c.number === nextChapter);
+    const nextVol = nextChap ? segs.find((s: any) => s.id === nextChap.volumeSegmentId) : null;
+    const nextBeat = nextVol?.beats?.find((b: any) => {
+        const range = parseChapterRange(b.chapters || "");
+        return range.includes(nextChapter);
+    });
+
+    const prompt = `你是小说角色调度助手。根据以下信息，判断第${nextChapter}章应该出场哪些角色。
+
+【角色名册】（共 ${allCharacters.length} 人）
+${allCharacters.map((c: any) => `- ${c.name}（${c.faction || "无"}）${c.summary || c.personality || ""}`).join("\n")}
+
+【前情摘要】
+${summaries.filter((s: any) => s.chapter_number <= currentChapterNumber).slice(-5).map((s: any) => `第${s.chapter_number}章：${s.summary}`).join("\n")}
+
+【下一章细纲】
+${nextBeat ? `#${nextBeat.number}「${nextBeat.title}」角色：${nextBeat.characters}  事件：${nextBeat.event}` : "（未找到对应细纲）"}
+
+请输出 JSON，列出第${nextChapter}章预计出场的角色名（从角色名册中选取，可新增名册外角色）：
+---NEXT_CHARS---
+["角色名1", "角色名2", ...]
+---END---`;
+
+    try {
+        const res = await api.aiComplete({
+            action: "chat", entity_type: "project", entity_id: projectId,
+            extra: { system_hint: "你是一个小说角色调度助手。只输出 JSON 数组。", user_message: prompt, history: [], context: "" },
+        });
+        if (!res.content || res.error) return;
+        const m = res.content.match(/---NEXT_CHARS---\s*([\s\S]*?)\s*---END---/);
+        if (!m) return;
+        const chars: string[] = JSON.parse(m[1]);
+
+        // 写入日志库
+        const logKey = `novel-workbench-log-${projectId}`;
+        const logStore = getJSONSync(logKey, {} as any) || {};
+        logStore.nextChapterCharacters = {
+            forChapter: nextChapter,
+            characterNames: chars,
+            updatedAt: new Date().toISOString(),
+        };
+        setJSONSync(logKey, logStore);
+    } catch { /* 角色预测失败不阻塞定稿 */ }
 }
 
 // ===== 快照管理 =====

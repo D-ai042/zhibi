@@ -224,12 +224,13 @@ function parseCharacterBatch(content: string): {
   chars: { name: string; faction: string; gender?: string; age?: string; race?: string; appearance?: string; personality?: string; background?: string; ability?: string; style?: string; interests?: string }[];
   edges: { sourceName: string; targetName: string; relation_type: string; strength: number }[];
   removeEdges: { sourceName: string; targetName: string }[];
+  snapshots: { name: string; changes: Record<string, string> }[];
 } {
   const m = content.match(/---CHARACTERS---\s*([\s\S]*?)\s*---END_CHARACTERS---/);
-  if (!m) return { chars: [], edges: [], removeEdges: [] };
+  if (!m) return { chars: [], edges: [], removeEdges: [], snapshots: [] };
   try {
     const arr = JSON.parse(m[1]);
-    if (!Array.isArray(arr)) return { chars: [], edges: [], removeEdges: [] };
+    if (!Array.isArray(arr)) return { chars: [], edges: [], removeEdges: [], snapshots: [] };
     const chars = arr
       .filter((a: any) => a.action === "create_character" && a.character)
       .map((a: any) => ({
@@ -251,8 +252,12 @@ function parseCharacterBatch(content: string): {
     const removeEdges = arr
       .filter((a: any) => (a.action === "remove_relationship" || a.action === "delete_relationship") && a.edge)
       .map((a: any) => ({ sourceName: a.edge.sourceName, targetName: a.edge.targetName }));
-    return { chars, edges, removeEdges };
-  } catch { return { chars: [], edges: [], removeEdges: [] }; }
+    // 解析 update_snapshot 指令
+    const snapshots = arr
+      .filter((a: any) => a.action === "update_snapshot" && a.name)
+      .map((a: any) => ({ name: a.name, changes: a.changes || {} }));
+    return { chars, edges, removeEdges, snapshots };
+  } catch { return { chars: [], edges: [], removeEdges: [], snapshots: [] }; }
 }
 
 /**
@@ -435,6 +440,7 @@ export function AiChatPanel() {
   const [pendingChars, setPendingChars] = useState<{ name: string; faction: string; gender?: string; age?: string; race?: string; appearance?: string; personality?: string; background?: string; ability?: string; style?: string; interests?: string }[]>([]);
   const [pendingCharEdges, setPendingCharEdges] = useState<{ sourceName: string; targetName: string; relation_type: string; strength: number }[]>([]);
   const [pendingRemoveEdges, setPendingRemoveEdges] = useState<{ sourceName: string; targetName: string }[]>([]);
+  const [pendingSnapshots, setPendingSnapshots] = useState<{ name: string; changes: Record<string, string> }[]>([]);
   const [pendingPlotSegments, setPendingPlotSegments] = useState<{ type: "bright" | "dark"; title: string; characters: string; location: string; time: string; chapters: string; event: string }[]>([]);
   const [pendingPlotEdges, setPendingPlotEdges] = useState<{ sourceTitle: string; targetTitle: string }[]>([]);
   const [pendingPlotBeats, setPendingPlotBeats] = useState<{ segmentTitle: string; beat: { title: string; characters: string; location: string; time: string; event: string; chapters: string } }[]>([]);
@@ -684,7 +690,7 @@ export function AiChatPanel() {
 
   /** 插入人物：将待插入角色写入画布 */
   const handleCharacterInsert = useCallback(async () => {
-    if (pendingChars.length === 0 && pendingCharEdges.length === 0) return;
+    if (pendingChars.length === 0 && pendingCharEdges.length === 0 && pendingSnapshots.length === 0) return;
     const store = useAppStore.getState();
     const curProject = store.currentProject;
     if (!curProject) return;
@@ -775,6 +781,35 @@ export function AiChatPanel() {
     setPendingChars([]);
     setPendingCharEdges([]);
     setPendingRemoveEdges([]);
+
+    // ★ 处理角色快照更新（update_snapshot）
+    for (const snap of pendingSnapshots) {
+      const targetChar = existingChars.find(c => c.name === snap.name);
+      if (!targetChar) continue;
+      const existingSnaps = targetChar.snapshots || [];
+      const existingNum = parseInt(snap.changes.age || "0");
+      const idx = existingSnaps.findIndex(s => parseInt(s.age) === existingNum);
+      if (idx >= 0) {
+        existingSnaps[idx] = { age: snap.changes.age || "未知", changes: snap.changes };
+      } else {
+        existingSnaps.push({ age: snap.changes.age || "未知", changes: snap.changes });
+      }
+      existingSnaps.sort((a, b) => parseInt(a.age) - parseInt(b.age));
+      // 同时通过 API + localStorage 双重写入确保持久化
+      await api.saveCharacter({ ...targetChar, snapshots: existingSnaps });
+      const MOCK_KEY = "novel-workbench-mock";
+      const storeRaw = localStorage.getItem(MOCK_KEY);
+      if (storeRaw) {
+        const storeData = JSON.parse(storeRaw);
+        const scIdx = storeData.characters?.findIndex((c: any) => c.id === targetChar.id);
+        if (scIdx >= 0) {
+          storeData.characters[scIdx] = { ...storeData.characters[scIdx], snapshots: existingSnaps };
+          localStorage.setItem(MOCK_KEY, JSON.stringify(storeData));
+        }
+      }
+    }
+    setPendingSnapshots([]);
+
     // 清理 localStorage 和 loadedRef，防止下次挂载时重复读取
     localStorage.removeItem(`ai-pending-chars-${curProject.id}`);
     loadedRef.current = false;
@@ -787,12 +822,13 @@ export function AiChatPanel() {
     if (pendingChars.length > 0) parts.push(`角色：${pendingChars.map(c => c.name).join("、")}`);
     if (pendingCharEdges.length > 0) parts.push(`${pendingCharEdges.length} 条关系`);
     if (pendingRemoveEdges.length > 0) parts.push(`删除 ${pendingRemoveEdges.length} 条关系`);
+    if (pendingSnapshots.length > 0) parts.push(`${pendingSnapshots.length} 个快照`);
     appendChatMessages([{
       id: uuid(), role: "system",
       content: `👤 已更新人物星图：${parts.join(" · ")}`,
       created_at: new Date().toISOString(),
     }]);
-  }, [pendingChars, pendingCharEdges, pendingRemoveEdges, appendChatMessages]);
+  }, [pendingChars, pendingCharEdges, pendingRemoveEdges, pendingSnapshots, appendChatMessages]);
 
   /** 剧情段落：将待确认的段落/细纲插入到剧情走向画布 */
   const handlePlotInsert = useCallback(async () => {
@@ -882,7 +918,7 @@ export function AiChatPanel() {
     localStorage.setItem("plot-chapters-" + pid, JSON.stringify(existing));
     setPendingChapters([]);
     const store = useAppStore.getState();
-    store.bumpChapter();
+    store.bumpPlot();
     if (created > 0) {
       appendChatMessages([{
         id: uuid(), role: "system",
@@ -1595,10 +1631,11 @@ export function AiChatPanel() {
       // ====== 人物角色：解析 ---CHARACTERS--- 块 ======
       if (activeModule === "outline" && outlineSection === "characters") {
         const charBatch = parseCharacterBatch(filteredAiContent);
-        if (charBatch.chars.length > 0 || charBatch.edges.length > 0 || charBatch.removeEdges.length > 0) {
+        if (charBatch.chars.length > 0 || charBatch.edges.length > 0 || charBatch.removeEdges.length > 0 || charBatch.snapshots.length > 0) {
           setPendingChars(prev => [...prev, ...charBatch.chars]);
           setPendingCharEdges(prev => [...prev, ...charBatch.edges]);
           setPendingRemoveEdges(prev => [...prev, ...charBatch.removeEdges]);
+          setPendingSnapshots(prev => [...prev, ...charBatch.snapshots]);
           displayContent = displayContent
             .replace(/---CHARACTERS---[\s\S]*?---END_CHARACTERS---/g, "")
             .replace(/```(?:json)?\s*[\s\S]*?```/g, "")
@@ -2035,14 +2072,14 @@ export function AiChatPanel() {
           </div>
         )}
 
-        {/* 待插入角色预览 */}
-        {pendingChars.length > 0 && (
+        {/* 待插入角色/快照预览 */}
+        {(pendingChars.length > 0 || pendingCharEdges.length > 0 || pendingSnapshots.length > 0) && (
           <div className="space-y-2 px-1">
             <div className="flex items-center justify-between">
               <p className="text-[10px] font-medium text-blue-700">
-                👤 待插入星图（{pendingChars.length} 个角色{pendingCharEdges.length > 0 ? ` · ${pendingCharEdges.length} 条关系` : ""}）
+                👤 待插入星图（{pendingChars.length} 个角色{pendingCharEdges.length > 0 ? ` · ${pendingCharEdges.length} 条关系` : ""}{pendingSnapshots.length > 0 ? ` · ${pendingSnapshots.length} 个快照` : ""}）
               </p>
-              <button className="text-[10px] text-slate-400 hover:text-red-500" onClick={() => { setPendingChars([]); setPendingCharEdges([]); setPendingRemoveEdges([]); }}>清空全部</button>
+              <button className="text-[10px] text-slate-400 hover:text-red-500" onClick={() => { setPendingChars([]); setPendingCharEdges([]); setPendingRemoveEdges([]); setPendingSnapshots([]); }}>清空全部</button>
             </div>
             <div className="flex flex-wrap gap-2">
               {pendingChars.map((c, i) => (
@@ -2051,6 +2088,14 @@ export function AiChatPanel() {
                     onClick={() => setPendingChars(prev => prev.filter((_, j) => j !== i))}>✕</button>
                   <p className="text-xs font-semibold text-slate-800 pr-4">{c.name}</p>
                   {c.faction && <p className="text-[10px] text-slate-400">{c.faction}</p>}
+                </div>
+              ))}
+              {pendingSnapshots.map((s, i) => (
+                <div key={'snap-' + i} className="relative group rounded-lg border bg-white p-2 shadow-sm min-w-[100px]" style={{ borderColor: "#8b5cf6", borderLeftWidth: 3 }}>
+                  <button className="absolute top-1 right-1 z-10 opacity-0 group-hover:opacity-100 text-slate-400 hover:text-red-500 text-xs leading-none"
+                    onClick={() => setPendingSnapshots(prev => prev.filter((_, j) => j !== i))}>✕</button>
+                  <p className="text-xs font-semibold text-slate-800 pr-4">{s.name}</p>
+                  <p className="text-[10px] text-violet-500">{s.changes.age || '?'}岁快照</p>
                 </div>
               ))}
             </div>
@@ -2117,7 +2162,7 @@ export function AiChatPanel() {
         <div className="flex items-center gap-1 text-[10px] text-slate-400">
           <span>
             {pendingTerms.length > 0 ? "待插入词条："
-              : pendingChars.length > 0 ? "待插入角色："
+              : pendingChars.length > 0 || pendingCharEdges.length > 0 || pendingSnapshots.length > 0 ? "待插入角色："
                 : pendingPlotSegments.length > 0 || pendingPlotBeats.length > 0 ? "待插入剧情段落/细纲："
                   : pendingChapters.length > 0 ? "待创建章节："
                     : "对最后一条 AI 回复操作："}
@@ -2133,13 +2178,15 @@ export function AiChatPanel() {
             </button>
           )}
           {/* 角色插入按钮 */}
-          {(pendingChars.length > 0 || pendingCharEdges.length > 0) && (
+          {(pendingChars.length > 0 || pendingCharEdges.length > 0 || pendingSnapshots.length > 0) && (
             <button type="button" title="应用到星图" onClick={handleCharacterInsert} disabled={loading}
               className="inline-flex items-center gap-1 rounded-md border border-blue-200 bg-blue-50 px-2 py-1 text-[11px] text-blue-700 hover:bg-blue-100">
               <ClipboardPlus className="h-3 w-3" />
               {pendingChars.length > 0
-                ? `插入 ${pendingChars.length} 个角色`
-                : `应用 ${pendingCharEdges.length} 条关系`}
+                ? `插入 ${pendingChars.length} 个角色${pendingSnapshots.length > 0 ? ` · ${pendingSnapshots.length} 个快照` : ''}`
+                : pendingSnapshots.length > 0
+                  ? `应用 ${pendingSnapshots.length} 个快照`
+                  : `应用 ${pendingCharEdges.length} 条关系`}
             </button>
           )}
           {/* 剧情段落/细纲插入按钮 */}

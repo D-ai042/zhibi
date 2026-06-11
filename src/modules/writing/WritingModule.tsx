@@ -3,10 +3,8 @@ import { Plus, Trash2, FileText, Sparkles, AlignLeft, Undo2, Redo2, CheckCircle 
 import { useAppStore } from "@/stores/app-store";
 import { api } from "@/lib/api";
 import { buildProjectContext } from "@/lib/context-engine";
-import { updateMemory } from "@/lib/memory-updater";
+import { updateMemory, activateNextChapterTerms, activateNextChapterCharacters } from "@/lib/memory-updater";
 import { createSnapshot, rebaseMemory } from "@/lib/memory-updater";
-import { runQualityCheck } from "@/lib/quality-checker";
-import type { QualityCheckItem } from "@/lib/quality-checker";
 import { AiWritingDialog } from "@/components/editor/AiWritingDialog";
 import { AiWriteChapterDialog } from "@/components/editor/AiWriteChapterDialog";
 import { renderMarkdown } from "@/lib/markdown";
@@ -223,8 +221,6 @@ export function WritingModule() {
     const { chapterSelectMode: selectMode, selectedChapterIds: storeSelIds, setChapterSelectMode, setSelectedChapterIds: storeSetSelIds } = useAppStore();
     const selIdSet = new Set(storeSelIds);
     const [volCollapsed, setVolCollapsed] = useState<Record<string, boolean>>({});
-    // 质量检查结果面板
-    const [qualityPanel, setQualityPanel] = useState<{ checks: QualityCheckItem[]; onProceed: () => void; onReject: () => void } | null>(null);
     const editorRef = useRef<HTMLDivElement>(null);
     const insertLockRef = useRef(false);
     const _ignoreNextInput = useRef(false);
@@ -760,35 +756,45 @@ export function WritingModule() {
                 userIntent: undefined,
             });
 
-            // 构建参考上下文（勾选的灵感/素材）
-            let contextStr = "";
+            // 构建参考上下文
+            let structureHint = "";
+            let inspContext = "";
             if (refIds && refIds.length > 0) {
+                // 灵感参考（放在 user_message）
                 const inspIds = refIds.filter(r => r.startsWith("insp:")).map(r => r.slice(5));
                 if (inspIds.length > 0) {
                     const allCards = JSON.parse(localStorage.getItem(`inspiration-cards-${pid}`) || "[]");
                     const selected = allCards.filter((c: any) => inspIds.includes(c.id));
                     if (selected.length > 0) {
-                        contextStr += "\n【灵感参考】\n";
+                        inspContext = "\n【灵感参考】\n";
                         for (const c of selected) {
-                            contextStr += `- ${c.title || "无标题"}：${(c.content || "").slice(0, 300)}\n`;
+                            inspContext += `- ${c.title || "无标题"}：${(c.content || "").slice(0, 300)}\n`;
                         }
-                        contextStr += "\n";
                     }
                 }
+                // 已结构分析的素材注入 system_hint（最高优先级）
                 const matIds = refIds.filter(r => r.startsWith("mat:")).map(r => r.slice(4));
                 if (matIds.length > 0) {
                     const allItems = JSON.parse(localStorage.getItem(`material-items-${pid}`) || "[]");
                     const selected = allItems.filter((i: any) => matIds.includes(i.id) && (i.type === "text" || i.content));
                     if (selected.length > 0) {
-                        contextStr += "\n【素材库参考】\n";
-                        for (const t of selected) {
-                            contextStr += `\n──── ${t.name || "未命名"} ────\n`;
-                            if (t.structureAnalysis) {
-                                contextStr += `【结构分析】\n${t.structureAnalysis}\n\n`;
+                        const analyzed = selected.filter((i: any) => i.structureAnalysis);
+                        const plain = selected.filter((i: any) => !i.structureAnalysis);
+                        if (analyzed.length > 0) {
+                            structureHint = "\n\n【⚠️ 最高优先级 — 结构参考，必须严格遵循】\n";
+                            for (const t of analyzed) {
+                                structureHint += `\n──── ${t.name || "未命名"} ────\n`;
+                                structureHint += `【结构分析】\n${t.structureAnalysis}\n\n`;
+                                structureHint += `【原文】\n${t.content}\n`;
+                                structureHint += `\n（请严格遵循以上结构分析来组织本章内容）\n`;
                             }
-                            contextStr += `【原文】\n${t.content}\n`;
                         }
-                        contextStr += "\n";
+                        if (plain.length > 0) {
+                            inspContext += "\n【素材参考】\n";
+                            for (const t of plain) {
+                                inspContext += `\n──── ${t.name || "未命名"} ────\n${t.content}\n`;
+                            }
+                        }
                     }
                 }
             }
@@ -799,8 +805,8 @@ export function WritingModule() {
             if (plotDirection) {
                 userMsg += `\n\n剧情方向：\n${plotDirection}`;
             }
-            if (contextStr) {
-                userMsg += `\n\n参考素材：\n${contextStr}`;
+            if (inspContext) {
+                userMsg += `\n\n${inspContext}`;
             }
             userMsg += `\n\n根据以上上下文，写出本章正文。`;
 
@@ -809,7 +815,7 @@ export function WritingModule() {
                 entity_type: "chapter",
                 entity_id: selectedChapter.id,
                 extra: {
-                    system_hint: output.systemHint,
+                    system_hint: output.systemHint + structureHint,
                     user_message: userMsg,
                     history: [],
                 },
@@ -830,57 +836,7 @@ export function WritingModule() {
                     saveChapters(pid, upd);
                     return upd;
                 });
-
-                // ★ 质量检查：定稿前自动校验
-                const qualityResult = await runQualityCheck({
-                    projectId: pid,
-                    chapterId: selectedChapter.id,
-                    chapterNumber: selectedChapter.number,
-                    chapterContent: res.content,
-                });
-
-                // 有 error 时弹出自定义面板
-                const errors = qualityResult.checks.filter(c => c.severity === "error");
-                let userProceed = true;
-                if (errors.length > 0) {
-                    userProceed = await new Promise<boolean>((resolve) => {
-                        setQualityPanel({
-                            checks: qualityResult.checks,
-                            onProceed: () => {
-                                setQualityPanel(null);
-                                resolve(true);
-                            },
-                            onReject: () => {
-                                setQualityPanel(null);
-                                resolve(false);
-                            },
-                        });
-                    });
-                }
-
-                if (!userProceed) {
-                    setAiWriting(false);
-                    return;
-                }
-
-                // AI 写完后自动生成摘要
-                await updateMemory({
-                    projectId: pid,
-                    chapterNumber: selectedChapter.number,
-                    chapterTitle: selectedChapter.title,
-                    chapterContent: res.content,
-                    characters: [],
-                }).catch((e) => {
-                    console.error("AI 写完后自动生成摘要失败:", e);
-                });
-
-                // 定稿后自动创建快照
-                if (pid) {
-                    createSnapshot(pid, `第${selectedChapter.number}章定稿`);
-                }
-
-                // ★ AI 识别本章新出场角色（异步，不阻塞）
-                aiExtractNewCharacters(pid, selectedChapter.number, res.content);
+                // 定稿动作（摘要/快照/新角色识别/词条激活/角色预测）由用户手动点击「定稿」按钮触发
             }
         } catch (e) {
             setAiError(String(e));
@@ -1267,7 +1223,7 @@ export function WritingModule() {
                                     className={`rounded-lg px-4 py-1.5 text-sm text-white ${isDirty ? "bg-amber-500 hover:bg-amber-600" : "bg-slate-300 cursor-default"}`}>
                                     保存
                                 </button>
-                                {/* 定稿按钮（保存 + 更新记忆 + 快照） */}
+                                {/* 定稿按钮（保存 + 更新记忆 + 词条激活 + 快照） */}
                                 <button type="button" onClick={async () => {
                                     if (!pid || !selectedChapter || !selectedChapterId) return;
                                     // 先保存
@@ -1287,6 +1243,37 @@ export function WritingModule() {
                                         console.error("定稿 - 摘要生成失败:", e);
                                         useAppStore.getState().setAutosaveStatus("⚠ 摘要生成失败");
                                     }
+                                    // ★ 激活下一章词条（AI 判断）
+                                    try {
+                                        useAppStore.getState().setAutosaveStatus("正在分析词条...");
+                                        const allWorldTerms = await api.listWorldTerms(pid);
+                                        const segs = JSON.parse(localStorage.getItem(`plot-segments-${pid}`) || "[]");
+                                        const chaps = JSON.parse(localStorage.getItem(`plot-chapters-${pid}`) || "[]");
+                                        const logStore = JSON.parse(localStorage.getItem(`novel-workbench-log-${pid}`) || "{}");
+                                        const recentSummaries = logStore.summaries || [];
+                                        await activateNextChapterTerms(
+                                            pid,
+                                            selectedChapter.number,
+                                            allWorldTerms.map(t => ({
+                                                id: t.id, title: t.title,
+                                                one_liner: t.one_liner, term_type: t.term_type,
+                                            })),
+                                            segs, chaps,
+                                            recentSummaries.sort((a: any, b: any) => b.chapter_number - a.chapter_number).slice(0, 5),
+                                        );
+                                        useAppStore.getState().setAutosaveStatus("✅ 词条已分析");
+                                    } catch (e) {
+                                        console.error("定稿 - 词条激活失败:", e);
+                                        // 不阻塞定稿流程
+                                    }
+                                    // ★ AI 预测下章角色调度
+                                    try {
+                                        useAppStore.getState().setAutosaveStatus("正在预测角色...");
+                                        await activateNextChapterCharacters(pid, selectedChapter.number);
+                                        useAppStore.getState().setAutosaveStatus("✅ 角色已预测");
+                                    } catch (e) {
+                                        console.error("定稿 - 角色预测失败:", e);
+                                    }
                                     // 创建快照标记定稿
                                     createSnapshot(pid, `第${selectedChapter.number}章「${selectedChapter.title}」定稿`);
                                     // AI 识别新角色
@@ -1305,27 +1292,6 @@ export function WritingModule() {
                                         退回重写
                                     </button>
                                 )}
-                                <button type="button" onClick={async () => {
-                                    if (!pid || !selectedChapter) return;
-                                    const store = useAppStore.getState();
-                                    store.setAutosaveStatus("正在生成摘要...");
-                                    try {
-                                        await updateMemory({
-                                            projectId: pid,
-                                            chapterNumber: selectedChapter.number,
-                                            chapterTitle: selectedChapter.title,
-                                            chapterContent: editingContent,
-                                            characters: [],
-                                        });
-                                        store.setAutosaveStatus("✅ 摘要已生成");
-                                    } catch (e) {
-                                        store.setAutosaveStatus("⚠ 摘要生成失败");
-                                    }
-                                    setTimeout(() => store.setAutosaveStatus("已就绪"), 2500);
-                                }} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50" title="生成本章摘要，供后续章节作为前情上下文">
-                                    <FileText className="h-3.5 w-3.5 inline mr-1" />生成摘要
-                                </button>
-
                                 <button type="button" onClick={() => {
                                     const indent = "\u3000\u3000";
                                     const lines = editingContent.split("\n");
@@ -1456,40 +1422,6 @@ export function WritingModule() {
                 />
             )}
 
-            {/* 质量检查结果面板 */}
-            {qualityPanel && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" onClick={() => setQualityPanel(null)}>
-                    <div className="w-full max-w-lg rounded-xl border bg-white p-5 shadow-2xl" onClick={e => e.stopPropagation()}>
-                        <h3 className="mb-3 text-lg font-bold text-slate-800">📋 质量检查结果</h3>
-                        <div className="max-h-80 space-y-2 overflow-y-auto">
-                            {qualityPanel.checks.map((c, i) => (
-                                <div key={i} className={`rounded-lg border px-3 py-2.5 text-sm ${c.severity === "error" ? "border-red-200 bg-red-50" :
-                                    c.severity === "warning" ? "border-amber-200 bg-amber-50" :
-                                        "border-green-200 bg-green-50"
-                                    }`}>
-                                    <div className="flex items-center gap-1.5 font-medium">
-                                        <span>{c.severity === "error" ? "❌" : c.severity === "warning" ? "⚠️" : "✅"}</span>
-                                        <span>{c.message}</span>
-                                    </div>
-                                    <p className="mt-0.5 text-xs text-slate-500">{c.detail}</p>
-                                </div>
-                            ))}
-                        </div>
-                        <div className="mt-4 flex items-center justify-end gap-2">
-                            {qualityPanel.checks.some(c => c.severity === "error") && (
-                                <button onClick={qualityPanel.onReject}
-                                    className="rounded-lg border border-red-200 px-4 py-2 text-sm text-red-600 hover:bg-red-50">
-                                    退回重写
-                                </button>
-                            )}
-                            <button onClick={qualityPanel.onProceed}
-                                className="rounded-lg bg-violet-600 px-4 py-2 text-sm text-white hover:bg-violet-700">
-                                {qualityPanel.checks.some(c => c.severity === "error") ? "忽略问题，继续定稿" : "确认通过"}
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
         </div>
     );
 }

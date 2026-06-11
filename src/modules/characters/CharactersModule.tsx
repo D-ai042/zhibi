@@ -65,6 +65,19 @@ export function CharactersModule() {
   const [selectedChar, setSelectedChar] = useState<Character | null>(null);
   const [editingField, setEditingField] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState("");
+  /** 当前查看的角色快照索引（-1 = 初始卡，0+ = snapshots 数组索引） */
+  const [snapshotIdx, setSnapshotIdx] = useState(-1);
+
+  // 当 selectedChar 变化时，重置 snapshotIdx 到最新年龄的快照
+  useEffect(() => {
+    if (selectedChar?.snapshots?.length) {
+      // 快照已经按年龄升序排列，最后一个就是年龄最大的
+      setSnapshotIdx(selectedChar.snapshots.length - 1);
+    } else {
+      setSnapshotIdx(-1);
+    }
+  }, [selectedChar?.id]);
+
   const [selIds, setSelIds] = useState<string[]>([]);
   const [showDlg, setShowDlg] = useState(false);
   const [gName, setGName] = useState("");
@@ -131,6 +144,31 @@ export function CharactersModule() {
   const handleEdgeDelete = edgeDeleteRef.current;
   const handleEdgeUpdate = edgeUpdateRef.current;
 
+  /** 获取角色在指定年龄快照下的合并状态 */
+  const getMergedChar = useCallback((c: Character, snapIdx: number): Character => {
+    if (snapIdx < 0 || !c.snapshots?.length) return c;
+    const sorted = [...c.snapshots].sort((a, b) => parseInt(a.age) - parseInt(b.age));
+    const merged = { ...c };
+    for (let i = 0; i <= Math.min(snapIdx, sorted.length - 1); i++) {
+      const ch = sorted[i].changes;
+      if (ch.personality) merged.personality = ch.personality;
+      if (ch.ability) merged.ability = ch.ability;
+      if (ch.appearance) merged.appearance = ch.appearance;
+      if (ch.background) merged.background = ch.background;
+      if (ch.style) merged.style = ch.style;
+      if (ch.interests) merged.interests = ch.interests;
+      if (ch.desire) merged.desire = ch.desire;
+      if (ch.fear) merged.fear = ch.fear;
+      if (ch.flaw) merged.flaw = ch.flaw;
+      if (ch.arc) merged.arc = ch.arc;
+      if (ch.voice_style) merged.voice_style = ch.voice_style;
+      if (ch.faction) merged.faction = ch.faction;
+      if (ch.race) merged.race = ch.race;
+    }
+    merged.age = sorted[snapIdx]?.age || c.age;
+    return merged;
+  }, []);
+
   // ===== 编辑字段辅助 =====
   const startEdit = useCallback((key: string, value: string) => {
     setEditingField(key);
@@ -138,6 +176,22 @@ export function CharactersModule() {
   }, []);
   const commitField = useCallback((key: string) => {
     if (!selectedChar || !currentProject) return;
+    // 如果在快照视图下编辑，写入快照的 changes 而不是基础角色
+    if (snapshotIdx >= 0 && selectedChar.snapshots?.length && snapshotIdx < selectedChar.snapshots.length) {
+      const updatedSnaps = [...selectedChar.snapshots];
+      const snap = { ...updatedSnaps[snapshotIdx] };
+      snap.changes = { ...snap.changes, [key]: editDraft };
+      updatedSnaps[snapshotIdx] = snap;
+      const updated = { ...selectedChar, snapshots: updatedSnaps };
+      setSelectedChar(updated);
+      setEditingField(null);
+      api.saveCharacter(updated as Character);
+      const raw = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
+      const idx = raw.characters?.findIndex((c: any) => c.id === selectedChar.id);
+      if (idx >= 0) { raw.characters[idx] = updated; localStorage.setItem(STORAGE_KEY, JSON.stringify(raw)); }
+      const store = useAppStore.getState(); store.bumpCharacters();
+      return;
+    }
     const updated = { ...selectedChar, [key]: editDraft };
     setSelectedChar(updated);
     setEditingField(null);
@@ -146,7 +200,7 @@ export function CharactersModule() {
     const idx = raw.characters?.findIndex((c: any) => c.id === selectedChar.id);
     if (idx >= 0) { raw.characters[idx] = updated; localStorage.setItem(STORAGE_KEY, JSON.stringify(raw)); }
     const store = useAppStore.getState(); store.bumpCharacters();
-  }, [selectedChar, currentProject, editDraft]);
+  }, [selectedChar, currentProject, editDraft, snapshotIdx]);
 
   // ===== 加载 =====
   const circleLayout = useCallback((characters: Character[]) => {
@@ -165,6 +219,12 @@ export function CharactersModule() {
       api.listCharacters(currentProject.id),
       api.listRelationshipEdges(currentProject.id),
     ]);
+    // 快照按年龄升序排列，小左大右
+    for (const c of loadedChars) {
+      if (c.snapshots?.length > 1) {
+        c.snapshots.sort((a, b) => parseInt(a.age) - parseInt(b.age));
+      }
+    }
     setChars(loadedChars);
     const hasCustom = loadedChars.some(c => c.layout_x > 0 || c.layout_y > 0);
     let pos: { x: number; y: number }[];
@@ -655,141 +715,192 @@ export function CharactersModule() {
 
         <style>{`.char-card::-webkit-scrollbar{display:none}`}</style>
         {/* 左侧人物卡 - 可滚动 */}
-        {selectedChar && (
-          <div className="char-card" style={{
-            position: "absolute", top: 10, bottom: 56, left: 10, zIndex: 40,
-            width: 340,
-            borderRadius: 12, fontSize: 13,
-            background: "#fff",
-            boxShadow: "0 8px 32px rgba(99,102,241,0.12)",
-            padding: 0,
-            overflowY: "auto",
-            scrollbarWidth: "none",
-            msOverflowStyle: "none",
-            border: "1px solid #e0dcf0",
-          }}>
-            {/* 标题行 */}
-            <div style={{
-              textAlign: "center", padding: "10px 0 8px",
-              background: "linear-gradient(90deg, #6366f1, #8b5cf6, #a78bfa)",
-              color: "#fff", fontSize: 15, fontWeight: 700, letterSpacing: "0.06em",
+        {selectedChar && (() => {
+          const displayChar = getMergedChar(selectedChar!, snapshotIdx);
+          const snaps = (selectedChar?.snapshots || []) as typeof selectedChar.snapshots;
+          const canLeft = snapshotIdx >= 0;
+          const canRight = snapshotIdx < (snaps?.length || 0) - 1;
+          return (
+            <div className="char-card" style={{
+              position: "absolute", top: 10, bottom: 56, left: 10, zIndex: 40,
+              width: 340,
+              borderRadius: 12, fontSize: 13,
+              background: "#fff",
+              boxShadow: "0 8px 32px rgba(99,102,241,0.12)",
+              padding: 0,
+              overflowY: "auto",
+              scrollbarWidth: "none",
+              msOverflowStyle: "none",
+              border: "1px solid #e0dcf0",
             }}>
-              ✦ {selectedChar.name} ✦
-            </div>
+              {/* 标题行 */}
+              <div style={{
+                textAlign: "center", padding: "10px 36px 8px",
+                background: "linear-gradient(90deg, #6366f1, #8b5cf6, #a78bfa)",
+                color: "#fff", position: "relative",
+              }}>
+                {/* 左箭头 */}
+                <button
+                  onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); if (canLeft) setSnapshotIdx(snapshotIdx - 1); }}
+                  disabled={!canLeft}
+                  style={{
+                    position: "absolute", left: 6, top: "50%", transform: "translateY(-50%)",
+                    background: "rgba(255,255,255,0.2)", border: "none", borderRadius: "50%",
+                    width: 26, height: 26, cursor: canLeft ? "pointer" : "default",
+                    color: "#fff", fontSize: 15, opacity: canLeft ? 1 : 0.25,
+                    display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1,
+                  }}
+                >◀</button>
+                {/* 右箭头 */}
+                <button
+                  onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); if (canRight) setSnapshotIdx(snapshotIdx + 1); }}
+                  disabled={!canRight}
+                  style={{
+                    position: "absolute", right: 6, top: "50%", transform: "translateY(-50%)",
+                    background: "rgba(255,255,255,0.2)", border: "none", borderRadius: "50%",
+                    width: 26, height: 26, cursor: canRight ? "pointer" : "default",
+                    color: "#fff", fontSize: 15, opacity: canRight ? 1 : 0.25,
+                    display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1,
+                  }}
+                >▶</button>
+                <div style={{ fontSize: 15, fontWeight: 700, letterSpacing: "0.06em" }}>
+                  ✦ {displayChar.name} ✦
+                </div>
+                <div style={{ fontSize: 11, fontWeight: 400, opacity: 0.8, marginTop: 2, display: "flex", alignItems: "center", justifyContent: "center", gap: 3 }}>
+                  {displayChar.age || ""}{displayChar.age ? " 岁" : ""}
+                  {snapshotIdx >= 0 && snaps && snapshotIdx < snaps.length && (
+                    <span
+                      onMouseDown={(e) => {
+                        e.stopPropagation(); e.preventDefault();
+                        const updated = [...(selectedChar!.snapshots || [])];
+                        updated.splice(snapshotIdx, 1);
+                        api.saveCharacter({ ...selectedChar!, snapshots: updated });
+                        setSelectedChar({ ...selectedChar!, snapshots: updated } as Character);
+                        setSnapshotIdx(Math.min(snapshotIdx, updated.length - 1));
+                        const store = useAppStore.getState(); store.bumpCharacters();
+                      }}
+                      style={{ cursor: "pointer", opacity: 0.5, fontSize: 10 }}
+                      title="删除此快照"
+                    >✕</span>
+                  )}
+                </div>
+              </div>
 
-            {/* 基本信息行：左列→姓名/性别/年龄/种族，右列→外在形象 */}
-            <div style={{ display: "flex", gap: 16, padding: "12px 14px 10px" }}>
-              <div style={{ flex: 1, fontSize: 12 }}>
+              {/* 基本信息行：左列→姓名/性别/年龄/种族，右列→外在形象 */}
+              <div style={{ display: "flex", gap: 16, padding: "12px 14px 10px" }}>
+                <div style={{ flex: 1, fontSize: 12 }}>
+                  {[
+                    { label: "姓名", key: "name", value: displayChar.name },
+                    { label: "性别", key: "gender", value: displayChar.gender },
+                    { label: "年龄", key: "age", value: displayChar.age },
+                    { label: "种族", key: "race", value: displayChar.race },
+                  ].map(item => (
+                    <div key={item.key} style={{ display: "flex", marginBottom: 4 }}>
+                      <span style={{ color: "#6366f1", fontWeight: 600, width: 40, flexShrink: 0 }}>{item.label}</span>
+                      {editingField === item.key ? (
+                        <input autoFocus value={editDraft} onChange={e => setEditDraft(e.target.value)}
+                          onBlur={() => { commitField(item.key); }}
+                          onKeyDown={e => { if (e.key === "Enter") commitField(item.key); if (e.key === "Escape") setEditingField(null); }}
+                          style={{ border: "1px solid #6366f1", borderRadius: 4, padding: "0 4px", fontSize: 12, width: 80, outline: "none" }}
+                        />
+                      ) : (
+                        <span style={{ color: "#374151", cursor: "pointer" }} onClick={() => startEdit(item.key, item.value)}>{item.value || "—"}</span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ color: "#6366f1", fontWeight: 600, fontSize: 12, marginBottom: 3 }}>外在形象</div>
+                  {editingField === "appearance" ? (
+                    <textarea autoFocus value={editDraft} onChange={e => setEditDraft(e.target.value)}
+                      onBlur={() => commitField("appearance")}
+                      onKeyDown={e => { if (e.key === "Escape") setEditingField(null); }}
+                      style={{ border: "1px solid #6366f1", borderRadius: 4, padding: 2, fontSize: 11, width: "100%", minHeight: 50, outline: "none", resize: "vertical" }}
+                    />
+                  ) : (
+                    <div style={{ color: "#475569", lineHeight: 1.6, fontSize: 11.5, cursor: "pointer" }} onClick={() => startEdit("appearance", displayChar.appearance)}>
+                      {displayChar.appearance || "—"}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* 内在性格 + 背景经历 双栏 - 带边框 */}
+              <div style={{ borderTop: "1px solid #f1edf8", margin: "0 14px" }} />
+              <div style={{ display: "flex", gap: 14, padding: "8px 14px" }}>
                 {[
-                  { label: "姓名", key: "name", value: selectedChar.name },
-                  { label: "性别", key: "gender", value: selectedChar.gender },
-                  { label: "年龄", key: "age", value: selectedChar.age },
-                  { label: "种族", key: "race", value: selectedChar.race },
-                ].map(item => (
-                  <div key={item.key} style={{ display: "flex", marginBottom: 4 }}>
-                    <span style={{ color: "#6366f1", fontWeight: 600, width: 40, flexShrink: 0 }}>{item.label}</span>
-                    {editingField === item.key ? (
-                      <input autoFocus value={editDraft} onChange={e => setEditDraft(e.target.value)}
-                        onBlur={() => { commitField(item.key); }}
-                        onKeyDown={e => { if (e.key === "Enter") commitField(item.key); if (e.key === "Escape") setEditingField(null); }}
-                        style={{ border: "1px solid #6366f1", borderRadius: 4, padding: "0 4px", fontSize: 12, width: 80, outline: "none" }}
+                  { label: "内在性格", key: "personality", icon: "•" },
+                  { label: "背景经历", key: "background", icon: "•" },
+                ].map(section => (
+                  <div key={section.key} style={{ flex: 1, border: "1px solid #ede9fe", borderRadius: 8, padding: "6px 8px", cursor: "pointer" }} onClick={() => startEdit(section.key, displayChar[section.key])}>
+                    <div style={{ color: "#6366f1", fontWeight: 700, fontSize: 11.5, marginBottom: 3 }}>【{section.label}】</div>
+                    {editingField === section.key ? (
+                      <textarea autoFocus value={editDraft} onChange={e => setEditDraft(e.target.value)}
+                        onBlur={() => commitField(section.key)}
+                        onKeyDown={e => { if (e.key === "Escape") setEditingField(null); }}
+                        style={{ border: "1px solid #6366f1", borderRadius: 4, padding: 2, fontSize: 11, width: "100%", minHeight: 60, outline: "none", resize: "vertical" }}
                       />
                     ) : (
-                      <span style={{ color: "#374151", cursor: "pointer" }} onClick={() => startEdit(item.key, item.value)}>{item.value || "—"}</span>
+                      <div style={{ color: "#475569", fontSize: 11, lineHeight: 1.6 }}>
+                        {displayChar[section.key] ? displayChar[section.key].split("，").map((item, i) => (
+                          <div key={i}>{section.icon} {item}</div>
+                        )) : <div style={{ color: "#94a3b8" }}>暂缺</div>}
+                      </div>
                     )}
                   </div>
                 ))}
               </div>
-              <div style={{ flex: 1 }}>
-                <div style={{ color: "#6366f1", fontWeight: 600, fontSize: 12, marginBottom: 3 }}>外在形象</div>
-                {editingField === "appearance" ? (
-                  <textarea autoFocus value={editDraft} onChange={e => setEditDraft(e.target.value)}
-                    onBlur={() => commitField("appearance")}
-                    onKeyDown={e => { if (e.key === "Escape") setEditingField(null); }}
-                    style={{ border: "1px solid #6366f1", borderRadius: 4, padding: 2, fontSize: 11, width: "100%", minHeight: 50, outline: "none", resize: "vertical" }}
-                  />
-                ) : (
-                  <div style={{ color: "#475569", lineHeight: 1.6, fontSize: 11.5, cursor: "pointer" }} onClick={() => startEdit("appearance", selectedChar.appearance)}>
-                    {selectedChar.appearance || "—"}
-                  </div>
-                )}
-              </div>
-            </div>
 
-            {/* 内在性格 + 背景经历 双栏 - 带边框 */}
-            <div style={{ borderTop: "1px solid #f1edf8", margin: "0 14px" }} />
-            <div style={{ display: "flex", gap: 14, padding: "8px 14px" }}>
-              {[
-                { label: "内在性格", key: "personality", icon: "•" },
-                { label: "背景经历", key: "background", icon: "•" },
-              ].map(section => (
-                <div key={section.key} style={{ flex: 1, border: "1px solid #ede9fe", borderRadius: 8, padding: "6px 8px", cursor: "pointer" }} onClick={() => startEdit(section.key, selectedChar[section.key])}>
-                  <div style={{ color: "#6366f1", fontWeight: 700, fontSize: 11.5, marginBottom: 3 }}>【{section.label}】</div>
-                  {editingField === section.key ? (
+              {/* 能力 + 行事风格 双栏 - 带边框 */}
+              <div style={{ borderTop: "1px solid #f1edf8", margin: "0 14px" }} />
+              <div style={{ display: "flex", gap: 14, padding: "8px 14px" }}>
+                {[
+                  { label: "能力", key: "ability", icon: "✦" },
+                  { label: "行事风格", key: "style", icon: "•" },
+                ].map(section => (
+                  <div key={section.key} style={{ flex: 1, border: "1px solid #ede9fe", borderRadius: 8, padding: "6px 8px", cursor: "pointer" }} onClick={() => startEdit(section.key, displayChar[section.key])}>
+                    <div style={{ color: "#6366f1", fontWeight: 700, fontSize: 11.5, marginBottom: 3 }}>【{section.label}】</div>
+                    {editingField === section.key ? (
+                      <textarea autoFocus value={editDraft} onChange={e => setEditDraft(e.target.value)}
+                        onBlur={() => commitField(section.key)}
+                        onKeyDown={e => { if (e.key === "Escape") setEditingField(null); }}
+                        style={{ border: "1px solid #6366f1", borderRadius: 4, padding: 2, fontSize: 11, width: "100%", minHeight: 60, outline: "none", resize: "vertical" }}
+                      />
+                    ) : (
+                      <div style={{ color: "#475569", fontSize: 11, lineHeight: 1.6 }}>
+                        {displayChar[section.key] ? displayChar[section.key].split("，").map((item, i) => (
+                          <div key={i}>{section.icon} {item}</div>
+                        )) : <div style={{ color: "#94a3b8" }}>暂缺</div>}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              {/* 兴趣爱好 - 带边框 */}
+              <div style={{ borderTop: "1px solid #f1edf8", margin: "0 14px" }} />
+              <div style={{ padding: "8px 14px 12px" }}>
+                <div style={{ border: "1px solid #ede9fe", borderRadius: 8, padding: "6px 8px", cursor: "pointer" }} onClick={() => startEdit("interests", displayChar.interests)}>
+                  <div style={{ color: "#6366f1", fontWeight: 700, fontSize: 11.5, marginBottom: 4, textAlign: "center" }}>【兴趣爱好】</div>
+                  {editingField === "interests" ? (
                     <textarea autoFocus value={editDraft} onChange={e => setEditDraft(e.target.value)}
-                      onBlur={() => commitField(section.key)}
+                      onBlur={() => commitField("interests")}
                       onKeyDown={e => { if (e.key === "Escape") setEditingField(null); }}
                       style={{ border: "1px solid #6366f1", borderRadius: 4, padding: 2, fontSize: 11, width: "100%", minHeight: 60, outline: "none", resize: "vertical" }}
                     />
                   ) : (
                     <div style={{ color: "#475569", fontSize: 11, lineHeight: 1.6 }}>
-                      {selectedChar[section.key] ? selectedChar[section.key].split("，").map((item, i) => (
-                        <div key={i}>{section.icon} {item}</div>
-                      )) : <div style={{ color: "#94a3b8" }}>暂缺</div>}
+                      {displayChar.interests ? displayChar.interests.split("，").map((item, i) => (
+                        <div key={i}>• {item}</div>
+                      )) : <div style={{ color: "#94a3b8", textAlign: "center" }}>暂缺</div>}
                     </div>
                   )}
                 </div>
-              ))}
-            </div>
-
-            {/* 能力 + 行事风格 双栏 - 带边框 */}
-            <div style={{ borderTop: "1px solid #f1edf8", margin: "0 14px" }} />
-            <div style={{ display: "flex", gap: 14, padding: "8px 14px" }}>
-              {[
-                { label: "能力", key: "ability", icon: "✦" },
-                { label: "行事风格", key: "style", icon: "•" },
-              ].map(section => (
-                <div key={section.key} style={{ flex: 1, border: "1px solid #ede9fe", borderRadius: 8, padding: "6px 8px", cursor: "pointer" }} onClick={() => startEdit(section.key, selectedChar[section.key])}>
-                  <div style={{ color: "#6366f1", fontWeight: 700, fontSize: 11.5, marginBottom: 3 }}>【{section.label}】</div>
-                  {editingField === section.key ? (
-                    <textarea autoFocus value={editDraft} onChange={e => setEditDraft(e.target.value)}
-                      onBlur={() => commitField(section.key)}
-                      onKeyDown={e => { if (e.key === "Escape") setEditingField(null); }}
-                      style={{ border: "1px solid #6366f1", borderRadius: 4, padding: 2, fontSize: 11, width: "100%", minHeight: 60, outline: "none", resize: "vertical" }}
-                    />
-                  ) : (
-                    <div style={{ color: "#475569", fontSize: 11, lineHeight: 1.6 }}>
-                      {selectedChar[section.key] ? selectedChar[section.key].split("，").map((item, i) => (
-                        <div key={i}>{section.icon} {item}</div>
-                      )) : <div style={{ color: "#94a3b8" }}>暂缺</div>}
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-
-            {/* 兴趣爱好 - 带边框 */}
-            <div style={{ borderTop: "1px solid #f1edf8", margin: "0 14px" }} />
-            <div style={{ padding: "8px 14px 12px" }}>
-              <div style={{ border: "1px solid #ede9fe", borderRadius: 8, padding: "6px 8px", cursor: "pointer" }} onClick={() => startEdit("interests", selectedChar.interests)}>
-                <div style={{ color: "#6366f1", fontWeight: 700, fontSize: 11.5, marginBottom: 4, textAlign: "center" }}>【兴趣爱好】</div>
-                {editingField === "interests" ? (
-                  <textarea autoFocus value={editDraft} onChange={e => setEditDraft(e.target.value)}
-                    onBlur={() => commitField("interests")}
-                    onKeyDown={e => { if (e.key === "Escape") setEditingField(null); }}
-                    style={{ border: "1px solid #6366f1", borderRadius: 4, padding: 2, fontSize: 11, width: "100%", minHeight: 60, outline: "none", resize: "vertical" }}
-                  />
-                ) : (
-                  <div style={{ color: "#475569", fontSize: 11, lineHeight: 1.6 }}>
-                    {selectedChar.interests ? selectedChar.interests.split("，").map((item, i) => (
-                      <div key={i}>• {item}</div>
-                    )) : <div style={{ color: "#94a3b8", textAlign: "center" }}>暂缺</div>}
-                  </div>
-                )}
               </div>
             </div>
-          </div>
-        )}
+          );
+        })()
+        }
 
         <ReactFlow
           onInit={(inst: any) => { rfRef.current = inst; }}
@@ -801,13 +912,13 @@ export function CharactersModule() {
           onNodeContextMenu={onNodeCtx as any}
           onNodeClick={(_e: any, node: Node) => {
             const c = chars.find(x => x.id === node.id);
-            if (c) setSelectedChar(c);
+            if (c) handleSelect(c);
           }}
           onClick={(e) => {
             // 点击空白处关闭人物卡
             if (selectedChar) {
               const target = e.target as HTMLElement;
-              if (!target.closest('.react-flow__node')) setSelectedChar(null);
+              if (!target.closest('.react-flow__node')) { setSelectedChar(null); setSnapshotIdx(-1); }
             }
           }}
           nodeTypes={nts} edgeTypes={ets}

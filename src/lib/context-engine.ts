@@ -2,13 +2,12 @@
  * 上下文引擎 —— 上下文组装器
  *
  * 每次 AI 写作请求前，从知识库和日志库中取出相关内容，
- * 按优先级 P0-P4 分层组装：
+ * 按优先级 P0-P3 分层组装：
  *
  * P0（世界观背景）：世界设定 + 铁则，不可违反
- * P1（剧情走向）：明暗线 + 已锁定事件，故事大方向
- * P2（风格指南+角色语言）：写作腔调
- * P3（进度+前5章摘要）：第 N 章位置 + 前面发生了什么
- * P4（已出场角色池）：已有角色，AI 可复用也可创造新角色
+ * P1（剧情走向）：当前卷细纲（±3）+ 前情摘要 + 明暗线
+ * P2（风格指南）：叙述风格 / 文笔基调 / 写作红线
+ * P3（角色池）：三层调度（活跃完整卡 + 关系 + 全量名册）
  *
  * v2.0 新增模块感知上下文 buildModuleContext()：
  *   根据用户当前所处的模块，按需组装最相关的数据，
@@ -21,9 +20,12 @@ import type {
     Chapter,
     ChapterSummary,
     Character,
+    CharacterState,
     ContextEngineOutput,
+    ForeshadowEntry,
     RelationshipEdge,
     StoryBible,
+    StorylineProgress,
     StyleGuide,
     WorldTerm,
 } from "@/types";
@@ -98,7 +100,7 @@ export async function buildModuleContext(input: ChatContextInput): Promise<strin
     const parts: string[] = ["===== 📖 项目数据上下文 ====="];
 
     // P0 所有模块都带（铁则不可省略）
-    const p0 = assembleP0(projectId, styleGuide, storyBible, allWorldTerms);
+    const p0 = assembleP0(projectId, styleGuide, storyBible, allWorldTerms, undefined);
     parts.push(p0);
 
     // ===== 按模块分派 =====
@@ -128,16 +130,22 @@ export async function buildModuleContext(input: ChatContextInput): Promise<strin
         } catch { /* ignore */ }
 
     } else if (mod === "characters") {
-        // 人物关系：强调角色卡 + 关系网
+        // 人物关系：强调角色卡 + 关系网 + 快照系统说明
         if (allCharacters.length > 0) {
             parts.push("\n===== 👤 全部角色档案 =====");
             for (const c of allCharacters) {
                 const fields: string[] = [c.name];
                 if (c.faction) fields.push(`【${c.faction}】`);
+                if (c.age) fields.push(`${c.age}岁`);
                 if (c.personality) fields.push(`性格：${c.personality}`);
                 if (c.appearance) fields.push(`外貌：${c.appearance.slice(0, 60)}`);
                 if (c.ability) fields.push(`能力：${c.ability.slice(0, 60)}`);
                 if (c.background) fields.push(`背景：${c.background.slice(0, 80)}`);
+                // 展示已有快照
+                if (c.snapshots?.length) {
+                    const snapAges = c.snapshots.map(s => `${s.age}岁`).join("、");
+                    fields.push(`[已有快照: ${snapAges}]`);
+                }
                 parts.push(`· ${fields.join(" ")}`);
             }
         }
@@ -151,6 +159,19 @@ export async function buildModuleContext(input: ChatContextInput): Promise<strin
                 parts.push(`· ${srcName} → ${tgtName} [${e.relation_type}] 亲密度: ${e.strength}/10${e.is_secret ? " (秘密)" : ""}`);
             }
         }
+        // 快照系统使用说明
+        parts.push("\n===== 📸 角色快照系统 =====");
+        parts.push("角色卡支持「年龄快照」——同一个角色在不同年龄有不同的性格/能力/外貌。");
+        parts.push("用户要求「创建 XX 岁的角色卡」时，**不要**覆盖原角色，而是输出 update_snapshot 指令。");
+        parts.push("");
+        parts.push("格式（放在 ---CHARACTERS--- 块中）：");
+        parts.push(`{"action":"update_snapshot","name":"角色名","changes":{"age":"30","personality":"新性格","ability":"新能力","appearance":"新外貌"}}`);
+        parts.push("");
+        parts.push("规则：");
+        parts.push("· 只在 changes 中写**变化的字段**，未变的字段不要写");
+        parts.push("· age 字段**必须**写在 changes 里（表示快照对应的年龄）");
+        parts.push("· 如果角色已有同年龄快照，会更新而非重复创建");
+        parts.push("· 如果要求创建**新角色**（不是已有角色），才用 create_character");
 
     } else if (mod === "plot-direction") {
         // 剧情走向：明暗线 + 连线 + 时间轴
@@ -190,35 +211,12 @@ export async function buildModuleContext(input: ChatContextInput): Promise<strin
             : chapters.find((c) => c.id === chapterId);
         const volumeName = plotChapter?.volumeName || "";
         const recentSummaries = await loadRecentSummaries(projectId, currentChapter);
+        const logStore = getLogStoreV2(projectId);
 
         const p1 = assembleP1(projectId, recentSummaries, currentChapter?.number);
         const p2 = assembleP2(styleGuide, projectId);
-        const p3 = assembleP3(currentChapter, volumeName);
-        const p4 = assembleP4(allCharacters, currentChapter?.number || 1, allEdges);
-        parts.push(p1, p2, p3, p4);
-
-        // P5: 本章正文
-        if (currentChapter) {
-            try {
-                const allPlotChapters = getJSONSync(`plot-chapters-${projectId}`, [] as any[]);
-                const thisCh = allPlotChapters.find((c: any) => c.id === chapterId);
-                if (thisCh?.content) {
-                    const body = thisCh.content.slice(0, 3000);
-                    parts.push(`\n━━━━ P5 · 当前章节正文（前3000字）━━━━\n${body}`);
-                }
-            } catch { /* ignore */ }
-            // 节拍卡片
-            try {
-                const beatCards = await api.listBeatCards(chapterId);
-                if (beatCards.length > 0) {
-                    parts.push("\n━━━━ 本章节拍卡片 ━━━━");
-                    const colLabel: Record<string, string> = { goal: "目标", conflict: "冲突", turn: "转折", hook: "钩子", reveal: "揭示" };
-                    for (const b of beatCards) {
-                        parts.push(`· [${colLabel[b.column_type] || b.column_type}] ${b.content}`);
-                    }
-                }
-            } catch { /* ignore */ }
-        }
+        const p3 = assembleP3(allCharacters, currentChapter?.number || 1, allEdges, logStore);
+        parts.push(p1, p2, p3);
 
     } else if (mod === "story-bible") {
         // 故事圣经：风格指南 + 铁则 + 版本
@@ -242,15 +240,7 @@ export async function buildModuleContext(input: ChatContextInput): Promise<strin
                 for (const e of storyBible.locked_events) parts.push(`· 第${e.chapter}章「${e.title}」：${e.description}`);
             }
         }
-        try {
-            const voices = getJSONSync(`novel-workbench-voices-${projectId}`, null as any[] | null);
-            if (voices) {
-                if (Array.isArray(voices) && voices.length > 0) {
-                    parts.push("\n===== 🎭 角色语言 =====");
-                    for (const v of voices) parts.push(`· ${v.char}：${v.voice}`);
-                }
-            }
-        } catch { /* ignore */ }
+        // voice_style 随 P3 角色池完整卡按需发送，此处不再全量加载
 
     } else {
         // chat(默认)：全量概要（保留当前行为）
@@ -370,40 +360,18 @@ export async function buildProjectContext(input: ContextEngineInput): Promise<Co
     const currentChapter = plotChapter ? { id: plotChapter.id, number: plotChapter.number, title: plotChapter.title, volume_id: "" } as Chapter : chapters.find((c) => c.id === chapterId);
     const volumeName = plotChapter?.volumeName || "";
     const recentSummaries = await loadRecentSummaries(projectId, currentChapter);
+    const logStore = getLogStoreV2(projectId);
 
-    // P0: 世界观背景
-    const p0 = assembleP0(projectId, styleGuide, storyBible, allWorldTerms);
-    // P1: 剧情走向 + 前情摘要
+    // P0: 世界观背景（上限 20 条 600 字，规则优先）
+    const p0 = assembleP0(projectId, styleGuide, storyBible, allWorldTerms, currentChapter?.number);
+    // P1: 剧情走向 + 前情摘要（±3 细纲，beat.chapters 精确映射）
     const p1 = assembleP1(projectId, recentSummaries, currentChapter?.number);
-    // P2: 风格指南 + 角色语言
+    // P2: 风格指南（voice_style 随 P3 按需发送）
     const p2 = assembleP2(styleGuide, projectId);
-    // P3: 全书结构
-    const p3 = assembleP3_BookStructure(projectId, currentChapter, volumeName, allCharacters);
-    // P4: 已出场角色池
-    const p4 = assembleP4(allCharacters, currentChapter?.number || 1, allEdges);
-    // P5: 本章已有正文（如果已经写了内容）
-    let p5 = "";
-    if (currentChapter) {
-        try {
-            // 从 plot-chapters 读本章已写的内容
-            const allPlotChapters = getJSONSync(`plot-chapters-${projectId}`, [] as any[]);
-            const thisCh = allPlotChapters.find((c: any) => c.id === chapterId);
-            if (thisCh?.content?.trim()) {
-                p5 = `━━━━ P5 · 本章已有正文（${thisCh.content.replace(/\s/g, "").length}字） ━━━━\n${thisCh.content}`;
-            }
-        } catch { /* ignore */ }
-        // 节拍卡片
-        try {
-            const beatCards = await api.listBeatCards(chapterId);
-            if (beatCards.length > 0) {
-                const colLabel: Record<string, string> = { goal: "目标", conflict: "冲突", turn: "转折", hook: "钩子", reveal: "揭示" };
-                const beatStr = beatCards.map(b => `· [${colLabel[b.column_type] || b.column_type}] ${b.content}`).join("\n");
-                p5 += `\n━━━━ 本章节拍卡片 ━━━━\n${beatStr}`;
-            }
-        } catch { /* ignore */ }
-    }
+    // P3: 角色池（三层调度：活跃完整卡 + 关系 + 全量名册）
+    const p3 = assembleP3(allCharacters, currentChapter?.number || 1, allEdges, logStore);
 
-    const layers: Record<string, string> = { p0, p1, p2, p3, p4, p5: p5 || "" };
+    const layers: Record<string, string> = { p0, p1, p2, p3 };
     const { text: clippedText, omitted } = enforceTokenBudget({ ...layers }, EFFECTIVE_MAX_TOKENS);
 
     // 提取关键词用于过滤
@@ -412,7 +380,7 @@ export async function buildProjectContext(input: ContextEngineInput): Promise<Co
 
     return {
         systemHint: clippedText,
-        layers: { p0, p1, p2, p3, p4, p5 },
+        layers: { p0, p1, p2, p3 },
         totalTokens: estimateTokens(clippedText),
         omitted,
         characters: allCharacters.map((c) => c.name),
@@ -457,18 +425,102 @@ async function loadRecentSummaries(projectId: string, currentChapter?: Chapter):
 
 // ===== P0：世界观背景 =====
 
-function assembleP0(projectId: string, _styleGuide: StyleGuide | null, storyBible: StoryBible | null, worldTerms: WorldTerm[]): string {
+function assembleP0(projectId: string, _styleGuide: StyleGuide | null, storyBible: StoryBible | null, worldTerms: WorldTerm[], currentChapterNumber?: number): string {
     const parts: string[] = ["━━━━ P0 · 世界观背景（不可违反） ━━━━"];
 
     // 世界观词条（优先使用已传入的参数，兼容 localStorage 回退）
     const terms = worldTerms.length > 0 ? worldTerms : loadWorldTerms(projectId);
     if (terms.length > 0) {
-        parts.push("【世界设定】");
-        const typeLabel: Record<string, string> = { rule: "规则", faction: "势力", place: "地点", item: "道具", system: "制度", other: "其他" };
-        for (const t of terms.slice(0, 20)) {
-            parts.push(`· [${typeLabel[t.term_type] || t.term_type}] ${t.title}：${t.one_liner || ""}`);
+        // 筛选逻辑：rule 类型全部保留 + termActivity 中 active 的
+        const activeTermIds = new Set<string>();
+        const logStore = getLogStoreV2(projectId);
+        const termActivity = logStore.termActivity || [];
+
+        // 所有 rule 类型无条件加载
+        for (const t of terms) {
+            if (t.term_type === "rule") activeTermIds.add(t.id);
         }
-        if (terms.length > 20) parts.push(`...共 ${terms.length} 个词条`);
+
+        // 第一章保底：按当前 beat 的 characters / location 匹配词条 title
+        if (currentChapterNumber) {
+            const termActivityForChapter = termActivity.filter(e => e.activeForChapter === currentChapterNumber);
+            if (termActivityForChapter.length > 0) {
+                for (const a of termActivityForChapter) {
+                    if (a.status === "active") activeTermIds.add(a.termId);
+                }
+            } else {
+                // 无 termActivity（第一章或尚未评估）：用 beat 直接引用的词条兜底
+                try {
+                    const chaps = getJSONSync(`plot-chapters-${projectId}`, [] as any[]);
+                    const segs = getJSONSync(`plot-segments-${projectId}`, [] as any[]);
+                    const currentChap = chaps.find((c: any) => c.number === currentChapterNumber);
+                    if (currentChap) {
+                        const vol = segs.find((s: any) => s.id === currentChap.volumeSegmentId && s.type === "bright");
+                        if (vol) {
+                            const volChaps = chaps.filter((c: any) => c.volumeSegmentId === vol.id).sort((a: any, b: any) => a.number - b.number);
+                            const idxInVol = volChaps.findIndex((c: any) => c.id === currentChap.id);
+                            const beats = vol.beats || [];
+                            const beat = beats.find((b: any) => b.number === idxInVol + 1);
+                            if (beat) {
+                                for (const t of terms) {
+                                    if (beat.characters?.includes(t.title) || beat.location?.includes(t.title)) {
+                                        activeTermIds.add(t.id);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } catch { /* ignore */ }
+            }
+        }
+
+        const filtered = terms.filter(t => activeTermIds.has(t.id));
+        const MAX_TERMS = 20;
+        const MAX_CHARS = 600;
+        const typeLabel: Record<string, string> = { rule: "规则", faction: "势力", place: "地点", item: "道具", system: "制度", other: "其他" };
+
+        if (filtered.length > 0) {
+            // 优先级：rule 无条件最高优，其余按原筛选
+            const prioritized = [
+                ...filtered.filter(t => t.term_type === "rule"),
+                ...filtered.filter(t => t.term_type !== "rule"),
+            ].slice(0, MAX_TERMS);
+
+            parts.push("【世界设定】");
+            let charCount = 0;
+            let shown = 0;
+            for (const t of prioritized) {
+                const line = `· [${typeLabel[t.term_type] || t.term_type}] ${t.title}：${(t.one_liner || "").slice(0, 30)}`;
+                if (charCount + line.length > MAX_CHARS) {
+                    parts.push(`...（还有 ${prioritized.length - shown} 条，已省略）`);
+                    break;
+                }
+                parts.push(line);
+                charCount += line.length;
+                shown++;
+            }
+            if (terms.length > shown) parts.push(`...共 ${terms.length} 个词条，本处展示 ${shown} 条`);
+        } else {
+            // 筛选后为空，兜底展示前 MAX_TERMS 条（规则优先）
+            const prioritized = [
+                ...terms.filter(t => t.term_type === "rule"),
+                ...terms.filter(t => t.term_type !== "rule"),
+            ].slice(0, MAX_TERMS);
+            parts.push("【世界设定】");
+            let charCount = 0;
+            let shown = 0;
+            for (const t of prioritized) {
+                const line = `· [${typeLabel[t.term_type] || t.term_type}] ${t.title}：${(t.one_liner || "").slice(0, 30)}`;
+                if (charCount + line.length > MAX_CHARS) {
+                    parts.push(`...（还有 ${prioritized.length - shown} 条，已省略）`);
+                    break;
+                }
+                parts.push(line);
+                charCount += line.length;
+                shown++;
+            }
+            parts.push(`（共 ${terms.length} 个词条，尚未评估相关性，展示 ${shown} 条）`);
+        }
         parts.push("");
     }
 
@@ -479,16 +531,6 @@ function assembleP0(projectId: string, _styleGuide: StyleGuide | null, storyBibl
             for (const r of storyBible.worldview_rules) parts.push(`· ${r}`);
             parts.push("");
         }
-        if (storyBible.inviolable_rules?.length) {
-            parts.push("【角色铁则】");
-            for (const r of storyBible.inviolable_rules) parts.push(`· ${r}`);
-            parts.push("");
-        }
-        if (storyBible.main_stages?.length) {
-            parts.push("【故事主要阶段】");
-            for (const s of storyBible.main_stages) parts.push(`· 第${s.chapter_range[0]}-${s.chapter_range[1]}章「${s.name}」：${s.description || ""}`);
-            parts.push("");
-        }
     }
 
     if (parts.length === 1) parts.push("（世界观设定未填写，请到大纲模块补充）");
@@ -496,6 +538,23 @@ function assembleP0(projectId: string, _styleGuide: StyleGuide | null, storyBibl
 }
 
 // ===== P1：剧情走向 + 前情摘要 =====
+
+/** 解析章节范围字符串如 "1-3" 或 "4,7-9" 为数字数组 */
+function parseChapterRange(range: string): number[] {
+    const nums: number[] = [];
+    if (!range) return nums;
+    const parts = range.split(/[,，]/);
+    for (const p of parts) {
+        const m = p.match(/(\d+)\s*[-−–—]\s*(\d+)/);
+        if (m) {
+            for (let i = parseInt(m[1]); i <= parseInt(m[2]); i++) nums.push(i);
+        } else {
+            const n = parseInt(p);
+            if (!isNaN(n)) nums.push(n);
+        }
+    }
+    return nums;
+}
 
 function assembleP1(projectId: string, recentSummaries: ChapterSummary[], currentChapterNumber?: number): string {
     const parts: string[] = ["━━━━ P1 · 剧情走向与前情摘要 ━━━━"];
@@ -513,19 +572,58 @@ function assembleP1(projectId: string, recentSummaries: ChapterSummary[], curren
             const bright = segs.filter((s: any) => s.type === "bright");
             const dark = segs.filter((s: any) => s.type === "dark");
 
-            // 当前卷：完整信息（含细纲）
+            // 当前卷：展示卷概要 + 全部细纲 + 标记当前章
             if (currentVolId) {
                 const vol = bright.find((s: any) => s.id === currentVolId);
                 if (vol) {
                     parts.push(`【当前卷 — ${vol.title}】`);
+                    parts.push(`卷概要：${vol.characters ? `角色：${vol.characters}  ` : ""}${vol.location ? `地点：${vol.location}  ` : ""}${vol.time ? `时间：${vol.time}  ` : ""}${vol.chapters ? `章节范围：${vol.chapters}  ` : ""}${vol.event ? `事件：${vol.event}` : ""}`);
                     const beats = vol.beats || [];
                     if (beats.length > 0) {
+                        // 卷内章节排序
+                        const volChapsSorted = chaps
+                            .filter((c: any) => c.volumeSegmentId === currentVolId)
+                            .sort((a: any, b2: any) => a.number - b2.number);
+                        // 找到当前章节对应的 beat（用 beat.chapters 精确匹配）
+                        const currentChapInVol = currentChapterNumber
+                            ? volChapsSorted.find(c => c.number === currentChapterNumber)
+                            : null;
+                        const currentBeatIdx = beats.findIndex(b => {
+                            const bc = parseChapterRange(b.chapters || "");
+                            return currentChapInVol ? bc.includes(currentChapInVol.number) : false;
+                        });
+                        const currentBeatNumber = currentBeatIdx >= 0 ? beats[currentBeatIdx].number : 0;
+
+                        const RANGE = 3;
+                        const startBeat = Math.max(1, currentBeatNumber - RANGE);
+                        const endBeat = Math.min(beats.length > 0 ? beats[beats.length - 1].number : 1, currentBeatNumber + RANGE);
+
+                        parts.push(`══════ 细纲（#${startBeat}-#${endBeat}，共 ${beats.length} 条）══════`);
+                        if (startBeat > 1) parts.push(`...（#1-#${startBeat - 1} 已省略）`);
+
                         for (const b of beats) {
-                            const pieces = [`· #${b.number} ${b.title}`];
-                            if (b.characters) pieces.push(`[${b.characters}]`);
-                            if (b.event) pieces.push(`：${b.event}`);
+                            if (b.number < startBeat || b.number > endBeat) continue;
+                            // 用 beat.chapters 精确匹配章节
+                            const beatChapters = parseChapterRange(b.chapters || "");
+                            const beatRelatedChaps = volChapsSorted.filter(c => beatChapters.includes(c.number));
+                            const isWritten = beatRelatedChaps.length > 0 && beatRelatedChaps.every(c => c.content?.trim());
+                            const isCurrent = beatRelatedChaps.some(c => c.number === currentChapterNumber);
+                            let marker = "";
+                            if (isCurrent) marker = "  ← 🔥 当前正在写的章";
+                            else if (isWritten) marker = "  ✓";
+
+                            const pieces = [`  #${b.number}「${b.title}」`];
+                            if (b.characters) pieces.push(`\n    角色：${b.characters}`);
+                            if (b.location) pieces.push(`\n    地点：${b.location}`);
+                            if (b.time) pieces.push(`\n    时间：${b.time}`);
+                            if (b.event) pieces.push(`\n    事件：${b.event}`);
+                            if (b.chapters) pieces.push(`\n    章节：${b.chapters}`);
+                            pieces.push(marker);
                             parts.push(pieces.join(""));
                         }
+
+                        if (endBeat < (beats.length > 0 ? beats[beats.length - 1].number : 1))
+                            parts.push(`...（#${endBeat + 1}-#${beats[beats.length - 1].number} 已省略）`);
                     } else {
                         parts.push(`· ${vol.event || "（暂无细纲）"}`);
                     }
@@ -533,13 +631,19 @@ function assembleP1(projectId: string, recentSummaries: ChapterSummary[], curren
                 }
             }
 
-            // 其他卷：只列标题（不加载细纲）
+            // 其他卷：只展示卷概要（不展开细纲）
             const otherBright = currentVolId ? bright.filter((s: any) => s.id !== currentVolId) : bright;
             if (otherBright.length > 0) {
                 if (currentVolId) parts.push("【其他卷】");
                 else parts.push("【明线】");
                 for (const s of otherBright) {
-                    parts.push(`· 「${s.title}」${s.chapters ? `（章节范围：${s.chapters}）` : ""}`);
+                    const segParts = [`· 「${s.title}」`];
+                    if (s.characters) segParts.push(`  角色：${s.characters}`);
+                    if (s.location) segParts.push(`  地点：${s.location}`);
+                    if (s.time) segParts.push(`  时间：${s.time}`);
+                    if (s.chapters) segParts.push(`  章节范围：${s.chapters}`);
+                    if (s.event) segParts.push(`  事件：${s.event}`);
+                    parts.push(segParts.join("\n"));
                 }
             }
             if (dark.length > 0) {
@@ -590,29 +694,22 @@ function assembleP2(styleGuide: StyleGuide | null, projectId: string): string {
         if (styleGuide.writing_tone) parts.push(`文笔基调：${styleGuide.writing_tone}`);
         if (styleGuide.writing_rules) parts.push(`写作红线：${styleGuide.writing_rules}`);
     }
-    try {
-        const voices = getJSONSync(`novel-workbench-voices-${projectId}`, null as any[] | null);
-        if (voices) {
-            if (Array.isArray(voices) && voices.length > 0) {
-                parts.push("【角色语言】");
-                for (const v of voices) parts.push(`· ${v.char}：${v.voice}`);
-            }
-        }
-    } catch { /* ignore */ }
+    // voice_style 随 P3 角色池完整卡按需发送，此处不再全量加载
     if (parts.length === 1) parts.push("（风格指南未填写，请到故事圣经模块设定）");
     parts.push("");
     return parts.join("\n");
 }
 
-// ===== P3：全书结构（v2.0 增强） =====
-
-import type { CharacterState, StorylineProgress, ForeshadowEntry } from "@/types";
+// ===== 日志库（供 P3 角色池使用）=====
 
 interface LogStoreV2 {
     summaries?: ChapterSummary[];
     characterStates?: CharacterState[];
     storylines?: StorylineProgress[];
     foreshadows?: ForeshadowEntry[];
+    termActivity?: { termId: string; status: string; activeForChapter: number; reason: string }[];
+    /** AI 预测下一章出场角色 */
+    nextChapterCharacters?: { forChapter: number; characterNames: string[]; updatedAt: string };
 }
 
 function getLogStoreV2(projectId: string): LogStoreV2 {
@@ -624,135 +721,142 @@ function getLogStoreV2(projectId: string): LogStoreV2 {
     } catch { return {}; }
 }
 
-function assembleP3_BookStructure(
-    projectId: string,
-    currentChapter: Chapter | undefined,
-    volumeName: string,
-    _allCharacters: Character[],
-): string {
-    const currentNum = currentChapter?.number ?? 0;
-    const parts: string[] = ["━━━━ P3 · 全书结构 ━━━━"];
+// ===== P3：角色池（三层调度） =====
 
-    // 1. 卷章树
+function assembleP3(allCharacters: Character[], currentChapterNumber: number, allEdges: RelationshipEdge[] = [], logStore: LogStoreV2 = {}): string {
+    const parts: string[] = ["━━━━ P3 · 角色池 ━━━━"];
+    const charMap = new Map(allCharacters.map(c => [c.id, c.name]));
+
+    // === 活跃角色来源 ===
+    const activeCharNames = new Set<string>();
+    const charLastChapter = new Map<string, number>();
+
+    // 来源1: characterStates 中近 10 章活跃的
+    for (const s of logStore.characterStates || []) {
+        charLastChapter.set(s.character_name, s.last_active_chapter);
+        if (s.last_active_chapter >= currentChapterNumber - 10) {
+            activeCharNames.add(s.character_name);
+        }
+    }
+
+    // 来源2: beat.characters 中引用的（从当前卷细纲匹配）
     try {
-        const allPlotChapters = getJSONSync(`plot-chapters-${projectId}`, [] as any[]);
-        const segs = getJSONSync(`plot-segments-${projectId}`, [] as any[]);
-        const bright = segs.filter((s: any) => s.type === "bright");
-        if (bright.length > 0 && allPlotChapters.length > 0) {
-            parts.push("【卷章结构】");
-            const volumeOrder = new Map<string, number>();
-            bright.forEach((b: any, i: number) => volumeOrder.set(b.id, i));
-            const sorted = [...allPlotChapters].sort((a: any, b: any) => {
-                const oa = volumeOrder.get(a.volumeSegmentId) ?? 999;
-                const ob = volumeOrder.get(b.volumeSegmentId) ?? 999;
-                if (oa !== ob) return oa - ob;
-                return a.number - b.number;
-            });
-            for (const ch of sorted) {
-                const vol = bright.find((b: any) => b.id === ch.volumeSegmentId);
-                const volPrefix = vol ? `【${vol.title}】` : "";
-                const marker = ch.id === currentChapter?.id ? "← 当前章" : (ch.content ? "✓" : "☐");
-                parts.push(`  ${volPrefix}第${ch.number}章「${ch.title || "未命名"}」${marker}`);
+        const segs = getJSONSync(`plot-segments-${allCharacters[0]?.project_id || ""}`, [] as any[]);
+        const chaps = getJSONSync(`plot-chapters-${allCharacters[0]?.project_id || ""}`, [] as any[]);
+        const currentChap = chaps.find((c: any) => c.number === currentChapterNumber);
+        if (currentChap) {
+            const vol = segs.find((s: any) => s.id === currentChap.volumeSegmentId && s.type === "bright");
+            if (vol) {
+                const volChapsSorted = chaps.filter((c: any) => c.volumeSegmentId === vol.id).sort((a: any, b2: any) => a.number - b2.number);
+                const beat = vol.beats?.find((b: any) => {
+                    const bc = parseChapterRange(b.chapters || "");
+                    return bc.includes(currentChapterNumber);
+                });
+                if (beat?.characters) {
+                    for (const name of beat.characters.split(/[,，、]/)) {
+                        const trimmed = name.trim();
+                        if (trimmed) activeCharNames.add(trimmed);
+                    }
+                }
             }
-            parts.push("");
         }
     } catch { /* ignore */ }
 
-    // 2. 写作进度 + 卷信息
-    if (volumeName) {
-        parts.push(`当前：${volumeName} · 第${currentNum}章「${currentChapter?.title || ""}」`);
-    } else if (currentChapter) {
-        parts.push(`当前：第${currentNum}章「${currentChapter.title}」`);
-    }
-    parts.push("");
-
-    // 3. 活跃角色状态
-    const logStore = getLogStoreV2(projectId);
-    if (logStore.characterStates && logStore.characterStates.length > 0) {
-        const active = logStore.characterStates.filter(c => c.last_active_chapter >= currentNum - 10);
-        if (active.length > 0) {
-            parts.push("【活跃角色状态】");
-            for (const c of active) {
-                parts.push(`· ${c.character_name}：${c.current_status}（${c.current_location || "未知"}）`);
-            }
-            parts.push("");
+    // 来源3: AI 预测的下一章角色
+    if (logStore.nextChapterCharacters?.forChapter === currentChapterNumber) {
+        for (const name of logStore.nextChapterCharacters.characterNames) {
+            if (name?.trim()) activeCharNames.add(name.trim());
         }
     }
 
-    // 4. 故事线进度
-    if (logStore.storylines && logStore.storylines.length > 0) {
-        const activeLines = logStore.storylines.filter(s => s.status === "active");
-        if (activeLines.length > 0) {
-            parts.push("【故事线进度】");
-            for (const s of activeLines) {
-                parts.push(`· ${s.storyline_name}：${s.progress_percent}%（${s.next_milestone || "推进中"}）`);
-            }
-            parts.push("");
-        }
+    // 首章兜底：characterStates 为空 → 取 weight 最高的前 5 人
+    if (activeCharNames.size === 0 && allCharacters.length > 0) {
+        const top5 = [...allCharacters].sort((a, b) => (b.weight || 0) - (a.weight || 0)).slice(0, 5);
+        for (const c of top5) activeCharNames.add(c.name);
     }
 
-    // 5. 待收伏笔提醒
-    if (logStore.foreshadows && logStore.foreshadows.length > 0) {
-        const pending = logStore.foreshadows.filter(f => f.status === "pending" && f.expected_resolve_chapter >= currentNum - 3);
-        if (pending.length > 0) {
-            parts.push("【伏笔提醒】");
-            for (const f of pending) {
-                const overdue = f.expected_resolve_chapter < currentNum ? " ⚠ 已逾期" : "";
-                parts.push(`· ${f.description}（预期第${f.expected_resolve_chapter}章回收）${overdue}`);
+    // === 第一层：活跃角色完整卡 ===
+    const activeChars = allCharacters.filter(c => activeCharNames.has(c.name));
+    if (activeChars.length > 0) {
+        parts.push("【本章活跃角色】（完整卡）");
+        for (const c of activeChars) {
+            // 应用最新快照（年龄最大），字段级合并到角色卡
+            const merged = { ...c };
+            if (merged.snapshots?.length) {
+                const latest = [...merged.snapshots].sort((a, b) => parseInt(b.age) - parseInt(a.age))[0];
+                if (latest.changes.personality) merged.personality = latest.changes.personality;
+                if (latest.changes.ability) merged.ability = latest.changes.ability;
+                if (latest.changes.appearance) merged.appearance = latest.changes.appearance;
+                if (latest.changes.background) merged.background = latest.changes.background;
+                if (latest.changes.style) merged.style = latest.changes.style;
+                if (latest.changes.interests) merged.interests = latest.changes.interests;
+                if (latest.changes.desire) merged.desire = latest.changes.desire;
+                if (latest.changes.fear) merged.fear = latest.changes.fear;
+                if (latest.changes.flaw) merged.flaw = latest.changes.flaw;
+                if (latest.changes.arc) merged.arc = latest.changes.arc;
+                if (latest.changes.voice_style) merged.voice_style = latest.changes.voice_style;
+                if (latest.changes.faction) merged.faction = latest.changes.faction;
+                if (latest.changes.race) merged.race = latest.changes.race;
+                if (latest.age) merged.age = latest.age;
             }
-            parts.push("");
-        }
-    }
-
-    parts.push("请根据以上全书结构和当前状态，推动剧情发展。注意维护角色状态和故事线的一致性。");
-    return parts.join("\n");
-}
-
-/** 保留旧 P3 用于兼容 */
-function assembleP3(
-    currentChapter: Chapter | undefined,
-    volumeName: string,
-): string { return assembleP3_BookStructure("", currentChapter, volumeName, []); }
-
-// ===== P4：已出场角色池 =====
-
-function assembleP4(allCharacters: Character[], currentChapterNumber: number, allEdges: RelationshipEdge[] = []): string {
-    const parts: string[] = ["━━━━ P4 · 已出场角色池 ━━━━"];
-    const appeared = allCharacters.filter(c => {
-        if (!c.first_appearance_chapter) return true;
-        return c.first_appearance_chapter <= currentChapterNumber;
-    });
-    if (appeared.length > 0) {
-        for (const c of appeared) {
-            const info = [c.name];
-            if (c.faction) info.push(`（${c.faction}）`);
-            if (c.personality) info.push(`性格：${c.personality}`);
-            if (c.one_liner) info.push(`简介：${c.one_liner}`);
-            if (c.appearance) info.push(`外貌：${c.appearance.slice(0, 60)}`);
-            if (c.ability) info.push(`能力：${c.ability.slice(0, 60)}`);
-            if (c.background) info.push(`背景：${c.background.slice(0, 80)}`);
-            if (c.desire) info.push(`渴望：${c.desire.slice(0, 40)}`);
-            if (c.fear) info.push(`恐惧：${c.fear.slice(0, 40)}`);
-            if (c.flaw) info.push(`缺陷：${c.flaw.slice(0, 40)}`);
-            parts.push(`· ${info.join(" ")}`);
-        }
-        // 人物关系网
-        if (allEdges.length > 0) {
-            parts.push("");
-            parts.push("【人物关系】");
-            const charMap = new Map(allCharacters.map(c => [c.id, c.name]));
-            for (const e of allEdges) {
-                const srcName = charMap.get(e.source_id) || "未知";
-                const tgtName = charMap.get(e.target_id) || "未知";
-                parts.push(`· ${srcName} → ${tgtName} [${e.relation_type}] 亲密度: ${e.strength}/10${e.is_secret ? " (秘密关系)" : ""}`);
-            }
+            const fields: string[] = [merged.name];
+            if (merged.gender) fields.push(merged.gender);
+            if (merged.age) fields.push(`${merged.age}岁`);
+            if (merged.race) fields.push(merged.race);
+            if (merged.faction) fields.push(`【${merged.faction}】`);
+            // 来自 characterStates 的状态
+            const state = (logStore.characterStates || []).find(s => s.character_name === merged.name);
+            if (state) fields.push(`状态：${state.current_status} · ${state.current_location || "未知"}`);
+            if (merged.personality) fields.push(`性格：${merged.personality}`);
+            if (merged.appearance) fields.push(`外貌：${merged.appearance.slice(0, 60)}`);
+            if (merged.ability) fields.push(`能力：${merged.ability.slice(0, 60)}`);
+            if (merged.background) fields.push(`背景：${merged.background.slice(0, 80)}`);
+            if (merged.style) fields.push(`着装：${merged.style.slice(0, 40)}`);
+            if (merged.interests) fields.push(`爱好：${merged.interests.slice(0, 40)}`);
+            if (merged.desire) fields.push(`渴望：${merged.desire.slice(0, 40)}`);
+            if (merged.fear) fields.push(`恐惧：${merged.fear.slice(0, 40)}`);
+            if (merged.flaw) fields.push(`缺陷：${merged.flaw.slice(0, 40)}`);
+            if (merged.voice_style) fields.push(`口吻：${merged.voice_style.slice(0, 40)}`);
+            if (merged.arc) fields.push(`弧线：${merged.arc.slice(0, 50)}`);
+            parts.push(`· ${fields.join(" ")}`);
         }
         parts.push("");
-        parts.push("AI 可以复用以上已出场角色及其关系，也可以创造新的配角。重要新角色需用户确认。");
-    } else {
-        parts.push("（暂无已出场角色）");
-        parts.push("AI 可以自由创造本章出场角色。");
     }
+
+    // === 第二层：角色关系（仅活跃角色之间） ===
+    if (allEdges.length > 0 && activeChars.length > 1) {
+        const activeIds = new Set(activeChars.map(c => c.id));
+        const appearedEdges = allEdges
+            .filter(e => activeIds.has(e.source_id) && activeIds.has(e.target_id))
+            .sort((a, b) => b.strength - a.strength)
+            .slice(0, 20);
+        if (appearedEdges.length > 0) {
+            parts.push("【角色关系】");
+            for (const e of appearedEdges) {
+                const srcName = charMap.get(e.source_id) || "未知";
+                const tgtName = charMap.get(e.target_id) || "未知";
+                parts.push(`· ${srcName} → ${tgtName} [${e.relation_type}] 亲密度: ${e.strength}/10${e.is_secret ? " (秘密)" : ""}`);
+            }
+            parts.push("");
+        }
+    }
+
+    // === 第三层：角色名册（全量，仅 summary） ===
+    if (allCharacters.length > 0) {
+        parts.push(`【角色名册】（共 ${allCharacters.length} 人，AI 可按需调用）`);
+        for (const c of allCharacters) {
+            const summary = c.summary || `性别：${c.gender || "?"} | ${c.personality || c.faction || ""}`;
+            let lastInfo = "";
+            if (charLastChapter.has(c.name)) {
+                lastInfo = ` | 上次：第${charLastChapter.get(c.name)}章`;
+            } else if (!activeCharNames.has(c.name)) {
+                lastInfo = " | 尚未出场";
+            }
+            parts.push(`· ${c.name}（${c.faction || "无"}）${lastInfo} | ${summary}`);
+        }
+        parts.push("");
+    }
+
     return parts.join("\n");
 }
 
@@ -760,16 +864,14 @@ function assembleP4(allCharacters: Character[], currentChapterNumber: number, al
 
 /** 各层 Token 预算 */
 const LAYER_BUDGET: Record<string, { max: number; fixed: boolean }> = {
-    p0: { max: 1_500, fixed: true },   // 铁则，不可裁
-    p1: { max: 8_000, fixed: true },   // 前情，不可裁
-    p3: { max: 1_500, fixed: true },   // 全书结构，不可裁
-    p2: { max: 1_000, fixed: false },  // 风格，可压缩
-    p4: { max: 8_000, fixed: false },  // 角色池，可裁数量
-    p5: { max: 3_000, fixed: false },  // 当前章正文，可压缩
+    p0: { max: 2_000, fixed: true },   // 铁则，不可裁
+    p1: { max: 15_000, fixed: false },  // 剧情走向
+    p2: { max: 1_000, fixed: false },   // 风格，可压缩
+    p3: { max: 8_000, fixed: false },   // 角色池
 };
 
 /** 裁剪顺序（优先级从低到高，先裁后面的） */
-const LAYER_CULL_ORDER = ["p5", "p4", "p2"];
+const LAYER_CULL_ORDER = ["p3", "p2", "p1"];
 
 /**
  * 按层级优先级裁剪，确保 P0/P1/P3 不被裁剪。

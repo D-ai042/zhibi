@@ -137,7 +137,15 @@ export function AiWritingDialog({
                 if (allChars.length > 0) {
                     projectContextStr += "【项目角色】\n";
                     for (const c of allChars) {
-                        projectContextStr += `· ${c.name}${c.faction ? `（${c.faction}）` : ""}${c.personality ? `：${c.personality}` : ""}\n`;
+                        const fields: string[] = [c.name];
+                        if (c.gender) fields.push(c.gender);
+                        if (c.age) fields.push(`${c.age}岁`);
+                        if (c.faction) fields.push(`【${c.faction}】`);
+                        if (c.personality) fields.push(`性格：${c.personality}`);
+                        if (c.appearance) fields.push(`外貌：${(c.appearance || "").slice(0, 40)}`);
+                        if (c.ability) fields.push(`能力：${(c.ability || "").slice(0, 40)}`);
+                        if (c.voice_style) fields.push(`口吻：${(c.voice_style || "").slice(0, 30)}`);
+                        projectContextStr += `· ${fields.join(" ")}\n`;
                     }
                 }
                 if (allEdges.length > 0) {

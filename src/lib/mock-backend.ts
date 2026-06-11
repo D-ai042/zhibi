@@ -74,22 +74,12 @@ function load(): MockStore {
   const raw = localStorage.getItem(STORAGE_KEY);
   if (raw) {
     const data = JSON.parse(raw) as MockStore;
-    // 反混淆 API Key
+    // 反混淆 API Key（每次 load 都需要）
     if (data.apiConfig.api_key) data.apiConfig.api_key = deobfuscate(data.apiConfig.api_key);
     if (data.apiConfig.provider_keys) {
       for (const k of Object.keys(data.apiConfig.provider_keys)) {
         if (data.apiConfig.provider_keys[k]) data.apiConfig.provider_keys[k] = deobfuscate(data.apiConfig.provider_keys[k]);
       }
-    }
-    // 迁移旧 STT 结构（flat → providers）
-    if (data.apiConfig.stt && !(data.apiConfig.stt as any).providers) {
-      const old = data.apiConfig.stt as any;
-      const pName = old.provider || "openai";
-      data.apiConfig.stt = {
-        activeProvider: pName,
-        providers: { [pName]: { api_key: old.api_key || "", secret_key: old.secret_key || "", base_url: old.base_url || "https://api.openai.com/v1", model: old.model || "whisper-1" } },
-        enabled: old.enabled || false,
-      } as any;
     }
     if (data.apiConfig.stt?.providers) {
       for (const p of Object.keys(data.apiConfig.stt.providers)) {
@@ -97,22 +87,52 @@ function load(): MockStore {
         if (data.apiConfig.stt.providers[p].secret_key) data.apiConfig.stt.providers[p].secret_key = deobfuscate(data.apiConfig.stt.providers[p].secret_key);
       }
     }
-    // 迁移：旧数据没有 provider_keys 字段
-    if (!data.apiConfig.provider_keys) data.apiConfig.provider_keys = {};
-    if (!data.apiConfig.provider_base_urls) data.apiConfig.provider_base_urls = {};
-    if (!data.apiConfig.provider_models) data.apiConfig.provider_models = {};
-    // 迁移：确保所有数组字段存在
-    if (!data.worldTerms) data.worldTerms = [];
-    if (!data.characters) data.characters = [];
-    if (!data.edges) data.edges = [];
-    if (!data.plotEvents) data.plotEvents = [];
-    if (!data.timelineNodes) data.timelineNodes = [];
-    if (!data.volumes) data.volumes = [];
-    if (!data.chapters) data.chapters = [];
-    if (!data.beatCards) data.beatCards = [];
-    if (!data.chapterContents) data.chapterContents = [];
-    if (!data.lockedFields) data.lockedFields = [];
-    if (!data.apiConfig.provider_models) data.apiConfig.provider_models = {};
+    // 一次性迁移（只跑一次）
+    if (!data._migrated_v2) {
+      // 迁移旧 STT 结构（flat → providers）
+      if (data.apiConfig.stt && !(data.apiConfig.stt as any).providers) {
+        const old = data.apiConfig.stt as any;
+        const pName = old.provider || "openai";
+        data.apiConfig.stt = {
+          activeProvider: pName,
+          providers: { [pName]: { api_key: old.api_key || "", secret_key: old.secret_key || "", base_url: old.base_url || "https://api.openai.com/v1", model: old.model || "whisper-1" } },
+          enabled: old.enabled || false,
+        } as any;
+      }
+      // 迁移：旧数据没有 provider_keys 字段
+      if (!data.apiConfig.provider_keys) data.apiConfig.provider_keys = {};
+      if (!data.apiConfig.provider_base_urls) data.apiConfig.provider_base_urls = {};
+      if (!data.apiConfig.provider_models) data.apiConfig.provider_models = {};
+      if (!data.worldTerms) data.worldTerms = [];
+      if (!data.characters) data.characters = [];
+      if (!data.edges) data.edges = [];
+      if (!data.plotEvents) data.plotEvents = [];
+      if (!data.timelineNodes) data.timelineNodes = [];
+      if (!data.volumes) data.volumes = [];
+      if (!data.chapters) data.chapters = [];
+      if (!data.beatCards) data.beatCards = [];
+      if (!data.chapterContents) data.chapterContents = [];
+      if (!data.lockedFields) data.lockedFields = [];
+      if (!data.apiConfig.provider_models) data.apiConfig.provider_models = {};
+      data._migrated_v2 = true;
+      // 保存迁移结果：先混淆 API keys 再存
+      try {
+        const saveData = JSON.parse(JSON.stringify(data));
+        if (saveData.apiConfig.api_key) saveData.apiConfig.api_key = obfuscate(saveData.apiConfig.api_key);
+        if (saveData.apiConfig.provider_keys) {
+          for (const k of Object.keys(saveData.apiConfig.provider_keys)) {
+            if (saveData.apiConfig.provider_keys[k]) saveData.apiConfig.provider_keys[k] = obfuscate(saveData.apiConfig.provider_keys[k]);
+          }
+        }
+        if (saveData.apiConfig.stt?.providers) {
+          for (const p of Object.keys(saveData.apiConfig.stt.providers)) {
+            if (saveData.apiConfig.stt.providers[p].api_key) saveData.apiConfig.stt.providers[p].api_key = obfuscate(saveData.apiConfig.stt.providers[p].api_key);
+            if (saveData.apiConfig.stt.providers[p].secret_key) saveData.apiConfig.stt.providers[p].secret_key = obfuscate(saveData.apiConfig.stt.providers[p].secret_key);
+          }
+        }
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(saveData));
+      } catch { /* ignore */ }
+    }
     _mockStoreCache = data;
     return data;
   }
@@ -145,23 +165,22 @@ function load(): MockStore {
 }
 
 function save(s: MockStore) {
-  // 保存前混淆 API Key
-  const clone = JSON.parse(JSON.stringify(s)) as MockStore;
-  if (clone.apiConfig.api_key) clone.apiConfig.api_key = obfuscate(clone.apiConfig.api_key);
-  if (clone.apiConfig.provider_keys) {
-    for (const k of Object.keys(clone.apiConfig.provider_keys)) {
-      if (clone.apiConfig.provider_keys[k]) clone.apiConfig.provider_keys[k] = obfuscate(clone.apiConfig.provider_keys[k]);
-    }
-  }
-  if (clone.apiConfig.stt?.providers) {
-    for (const p of Object.keys(clone.apiConfig.stt.providers)) {
-      if (clone.apiConfig.stt.providers[p].api_key) clone.apiConfig.stt.providers[p].api_key = obfuscate(clone.apiConfig.stt.providers[p].api_key);
-      if (clone.apiConfig.stt.providers[p].secret_key) clone.apiConfig.stt.providers[p].secret_key = obfuscate(clone.apiConfig.stt.providers[p].secret_key);
-    }
-  }
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(clone));
   // 缓存变脏，下次 load() 重新解析
   _mockStoreCache = null;
+  // 只混淆需要混淆的字段，不深克隆整个 store
+  if (s.apiConfig.api_key) s.apiConfig.api_key = obfuscate(s.apiConfig.api_key);
+  if (s.apiConfig.provider_keys) {
+    for (const k of Object.keys(s.apiConfig.provider_keys)) {
+      if (s.apiConfig.provider_keys[k]) s.apiConfig.provider_keys[k] = obfuscate(s.apiConfig.provider_keys[k]);
+    }
+  }
+  if (s.apiConfig.stt?.providers) {
+    for (const p of Object.keys(s.apiConfig.stt.providers)) {
+      if (s.apiConfig.stt.providers[p].api_key) s.apiConfig.stt.providers[p].api_key = obfuscate(s.apiConfig.stt.providers[p].api_key);
+      if (s.apiConfig.stt.providers[p].secret_key) s.apiConfig.stt.providers[p].secret_key = obfuscate(s.apiConfig.stt.providers[p].secret_key);
+    }
+  }
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(s));
 }
 
 function progressFor(projectId: string, s: MockStore): FrameworkProgress {
@@ -909,6 +928,92 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
         beatCards: (s.beatCards || []).filter(b => chapterIds.has(b.chapter_id)) as Record<string, unknown>[],
         chapterContents: (s.chapterContents || []).filter(cc => chapterIds.has(cc.chapter_id)) as Record<string, unknown>[],
       } as T;
+    }
+
+    case "import_project": {
+      const { projectData } = args as { projectData: Record<string, unknown> };
+      const proj = projectData.project as Record<string, unknown> | undefined;
+      if (!proj || !proj.id) throw new Error("无效的项目数据");
+
+      const pid = proj.id as string;
+
+      // 清理旧 mock 数据
+      for (const key of Object.keys(s)) {
+        if (Array.isArray((s as any)[key])) {
+          (s as any)[key] = (s as any)[key].filter((item: any) => item.project_id !== pid && item.projectId !== pid);
+        }
+      }
+      // 移除旧 project
+      s.projects = s.projects.filter((p: any) => p.id !== pid);
+
+      // 添加 project
+      s.projects.push(proj as any);
+
+      // 批量导入各表
+      const importMap: Record<string, string> = {
+        worldTerms: "worldTerms",
+        characters: "characters",
+        relationships: "edges",
+        plotEvents: "plotEvents",
+        timelineNodes: "timelineNodes",
+        volumes: "volumes",
+      };
+      for (const [jsonKey, stateKey] of Object.entries(importMap)) {
+        const items = projectData[jsonKey] as any[] | undefined;
+        if (items) {
+          if (!(s as any)[stateKey]) (s as any)[stateKey] = [];
+          (s as any)[stateKey] = (s as any)[stateKey].filter((item: any) => item.project_id !== pid);
+          (s as any)[stateKey].push(...items);
+        }
+      }
+
+      // 导入 chapters
+      const chapters = projectData.chapters as any[] | undefined;
+      if (chapters) {
+        s.chapters = s.chapters.filter((c: any) => {
+          const vol = s.volumes.find((v: any) => v.id === c.volume_id);
+          return vol && vol.project_id !== pid;
+        });
+        s.chapters.push(...chapters);
+      }
+
+      // beatCards + chapterContents
+      const beatCards = projectData.beatCards as any[] | undefined;
+      if (beatCards) {
+        s.beatCards = s.beatCards || [];
+        s.beatCards.push(...beatCards);
+      }
+      const chapterContents = projectData.chapterContents as any[] | undefined;
+      if (chapterContents) {
+        s.chapterContents = s.chapterContents || [];
+        s.chapterContents.push(...chapterContents);
+      }
+
+      save(s);
+      return `项目 ${proj.name || pid} 导入成功` as T;
+    }
+
+    case "list_app_settings": {
+      // 浏览器模式：从 localStorage 收集匹配前缀的 key
+      const prefixes = [
+        "novel-workbench-style-", "novel-workbench-bible-", "novel-workbench-voices-",
+        "novel-workbench-log-", "novel-workbench-chat-", "plot-chapters-",
+        "plot-segments-", "plot-edges-", "worldview-edges-", "worldview-groups-",
+        "material-", "ai-pending-chars-", "ai-pending-world-terms-",
+        "inspiration-cards-", "char-groups-", "writing-sidebar-width-",
+        "novel-workbench-mock", "novel-workbench-snapshots-",
+      ];
+      const result: { key: string; value: string }[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (!key) continue;
+        const matched = prefixes.some((p) => key === p || key.startsWith(p));
+        if (matched) {
+          const value = localStorage.getItem(key);
+          if (value) result.push({ key, value });
+        }
+      }
+      return result as T;
     }
 
     case "set_provider_models": {

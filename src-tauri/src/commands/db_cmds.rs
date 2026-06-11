@@ -914,6 +914,9 @@ pub fn list_locked_fields(project_id: String, state: State<'_, DbState>) -> Resu
 
 #[tauri::command]
 pub fn export_project(project_id: String, state: State<'_, DbState>) -> Result<Value, String> {
+    // 先打开该项目的数据库
+    open_project_db(&project_id, &state).map_err(|e| format!("打开项目数据库失败: {}", e))?;
+
     with_conn(&state, |conn| {
         let proj: Option<Project> = conn.query_row(
             "SELECT id, name, stage, framework_locked_at, created_at, updated_at FROM projects WHERE id=?1",
@@ -991,6 +994,214 @@ pub fn set_setting(key: String, value: String, _state: State<'_, DbState>) -> Re
         params![key, value],
     ).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+#[tauri::command]
+pub fn list_app_settings(_state: State<'_, DbState>) -> Result<Vec<serde_json::Value>, String> {
+    let conn = open_or_create_settings_db();
+    let mut stmt = conn.prepare("SELECT key, value FROM app_settings")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt.query_map([], |row| {
+        Ok(serde_json::json!({
+            "key": row.get::<_, String>(0)?,
+            "value": row.get::<_, String>(1)?,
+        }))
+    }).map_err(|e| e.to_string())?;
+    let result: Vec<serde_json::Value> = rows.filter_map(|r| r.ok()).collect();
+    Ok(result)
+}
+
+#[tauri::command]
+pub fn import_project(project_data: serde_json::Value, state: State<'_, DbState>) -> Result<String, String> {
+    let project = project_data.get("project").ok_or("缺少 project 字段")?;
+    let project_id = project.get("id").and_then(|v| v.as_str()).ok_or("缺少 project.id")?.to_string();
+    let project_name = project.get("name").and_then(|v| v.as_str()).unwrap_or("导入的项目").to_string();
+
+    // 先打开该项目的数据库
+    open_project_db(&project_id, &state).map_err(|e| format!("打开项目数据库失败: {}", e))?;
+
+    with_conn(&state, |conn| {
+        // 清理旧数据（如果已存在相同 project_id）
+        // 注意：部分表没有直接的 project_id 列，需要通过关联删除
+        conn.execute("DELETE FROM beat_cards WHERE chapter_id IN (SELECT c.id FROM chapters c JOIN volumes v ON c.volume_id=v.id WHERE v.project_id=?1)", params![project_id]).ok();
+        conn.execute("DELETE FROM chapter_contents WHERE chapter_id IN (SELECT c.id FROM chapters c JOIN volumes v ON c.volume_id=v.id WHERE v.project_id=?1)", params![project_id]).ok();
+        conn.execute("DELETE FROM chapters WHERE volume_id IN (SELECT id FROM volumes WHERE project_id=?1)", params![project_id]).ok();
+        conn.execute("DELETE FROM volumes WHERE project_id=?1", params![project_id]).ok();
+        conn.execute("DELETE FROM plot_events WHERE project_id=?1", params![project_id]).ok();
+        conn.execute("DELETE FROM timeline_nodes WHERE project_id=?1", params![project_id]).ok();
+        conn.execute("DELETE FROM relationship_edges WHERE project_id=?1", params![project_id]).ok();
+        conn.execute("DELETE FROM characters WHERE project_id=?1", params![project_id]).ok();
+        conn.execute("DELETE FROM world_terms WHERE project_id=?1", params![project_id]).ok();
+        // locked_fields 没有 project_id 关联，暂不清理
+
+        // 插入或替换 project
+        conn.execute(
+            "INSERT OR REPLACE INTO projects (id, name, stage, framework_locked_at, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                project_id,
+                project_name,
+                project.get("stage").and_then(|v| v.as_str()).unwrap_or("ideation"),
+                project.get("framework_locked_at").and_then(|v| v.as_str()).unwrap_or(""),
+                project.get("created_at").and_then(|v| v.as_str()).unwrap_or(""),
+                project.get("updated_at").and_then(|v| v.as_str()).unwrap_or(""),
+            ],
+        )?;
+
+        // 从 serde_json::Value 中提取字符串值
+        fn json_str(val: &serde_json::Value, field: &str) -> String {
+            val.get(field).and_then(|v| match v {
+                serde_json::Value::String(s) => Some(s.clone()),
+                serde_json::Value::Number(n) => Some(n.to_string()),
+                serde_json::Value::Bool(b) => Some(b.to_string()),
+                serde_json::Value::Null => Some(String::new()),
+                _ => Some(v.to_string()),
+            }).unwrap_or_default()
+        }
+
+        /// 从 serde_json::Value 中提取 i64 值
+        fn json_i64(val: &serde_json::Value, field: &str) -> i64 {
+            val.get(field).and_then(|v| v.as_i64()).unwrap_or(0)
+        }
+
+        // 批量插入各表（列名需与 schema.sql 一致）
+        if let Some(items) = project_data.get("worldTerms").and_then(|v| v.as_array()) {
+            for item in items {
+                conn.execute(
+                    "INSERT OR REPLACE INTO world_terms (id, project_id, term_type, title, one_liner, detail, ring_level, forbidden_json, is_locked, layout_x, layout_y) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+                    params![
+                        json_str(item, "id"), json_str(item, "project_id"), json_str(item, "term_type"),
+                        json_str(item, "title"), json_str(item, "one_liner"), json_str(item, "detail"),
+                        json_i64(item, "ring_level"), json_str(item, "forbidden_json"),
+                        json_i64(item, "is_locked"), json_str(item, "layout_x"), json_str(item, "layout_y"),
+                    ],
+                ).ok();
+            }
+        }
+
+        // characters
+        if let Some(items) = project_data.get("characters").and_then(|v| v.as_array()) {
+            for item in items {
+                conn.execute(
+                    "INSERT OR REPLACE INTO characters (id, project_id, name, gender, age, race, appearance, personality, background, ability, style, interests, faction, weight, desire, fear, flaw, arc, voice_style, ending_node_id, avatar_path, layout_x, layout_y, is_locked) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24)",
+                    params![
+                        json_str(item, "id"), json_str(item, "project_id"), json_str(item, "name"),
+                        json_str(item, "gender"), json_str(item, "age"), json_str(item, "race"),
+                        json_str(item, "appearance"), json_str(item, "personality"), json_str(item, "background"),
+                        json_str(item, "ability"), json_str(item, "style"), json_str(item, "interests"),
+                        json_str(item, "faction"), json_i64(item, "weight"),
+                        json_str(item, "desire"), json_str(item, "fear"), json_str(item, "flaw"),
+                        json_str(item, "arc"), json_str(item, "voice_style"), json_str(item, "ending_node_id"),
+                        json_str(item, "avatar_path"), json_str(item, "layout_x"), json_str(item, "layout_y"),
+                        json_i64(item, "is_locked"),
+                    ],
+                ).ok();
+            }
+        }
+
+        // relationship_edges
+        if let Some(items) = project_data.get("relationships").and_then(|v| v.as_array()) {
+            for item in items {
+                conn.execute(
+                    "INSERT OR REPLACE INTO relationship_edges (id, project_id, source_id, target_id, relation_type, strength, is_secret) VALUES (?1,?2,?3,?4,?5,?6,?7)",
+                    params![
+                        json_str(item, "id"), json_str(item, "project_id"),
+                        json_str(item, "source_id"), json_str(item, "target_id"),
+                        json_str(item, "relation_type"), json_i64(item, "strength"),
+                        json_i64(item, "is_secret"),
+                    ],
+                ).ok();
+            }
+        }
+
+        // plot_events
+        if let Some(items) = project_data.get("plotEvents").and_then(|v| v.as_array()) {
+            for item in items {
+                conn.execute(
+                    "INSERT OR REPLACE INTO plot_events (id, project_id, line_type, title, chapter_start, chapter_end, reader_knowledge, truth_content, plant_method, convergence_chapter, is_locked, character_ids_json) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+                    params![
+                        json_str(item, "id"), json_str(item, "project_id"), json_str(item, "line_type"),
+                        json_str(item, "title"), json_i64(item, "chapter_start"), json_i64(item, "chapter_end"),
+                        json_str(item, "reader_knowledge"), json_str(item, "truth_content"),
+                        json_str(item, "plant_method"), json_i64(item, "convergence_chapter"),
+                        json_i64(item, "is_locked"), json_str(item, "character_ids_json"),
+                    ],
+                ).ok();
+            }
+        }
+
+        // timeline_nodes
+        if let Some(items) = project_data.get("timelineNodes").and_then(|v| v.as_array()) {
+            for item in items {
+                conn.execute(
+                    "INSERT OR REPLACE INTO timeline_nodes (id, project_id, type, title, summary, volume_id, sort_order, is_locked, layout_y, must_achieve_json, character_ids_json, linked_chapter_id) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+                    params![
+                        json_str(item, "id"), json_str(item, "project_id"), json_str(item, "type"),
+                        json_str(item, "title"), json_str(item, "summary"), json_str(item, "volume_id"),
+                        json_i64(item, "sort_order"), json_i64(item, "is_locked"), json_str(item, "layout_y"),
+                        json_str(item, "must_achieve_json"), json_str(item, "character_ids_json"),
+                        json_str(item, "linked_chapter_id"),
+                    ],
+                ).ok();
+            }
+        }
+
+        // volumes
+        if let Some(items) = project_data.get("volumes").and_then(|v| v.as_array()) {
+            for item in items {
+                conn.execute(
+                    "INSERT OR REPLACE INTO volumes (id, project_id, title, sort_order) VALUES (?1,?2,?3,?4)",
+                    params![
+                        json_str(item, "id"), json_str(item, "project_id"),
+                        json_str(item, "title"), json_i64(item, "sort_order"),
+                    ],
+                ).ok();
+            }
+        }
+
+        // chapters
+        if let Some(chapters) = project_data.get("chapters").and_then(|v| v.as_array()) {
+            for ch in chapters {
+                conn.execute(
+                    "INSERT OR REPLACE INTO chapters (id, volume_id, number, title, status, word_count) VALUES (?1,?2,?3,?4,?5,?6)",
+                    params![
+                        json_str(ch, "id"), json_str(ch, "volume_id"), json_i64(ch, "number"),
+                        json_str(ch, "title"), json_str(ch, "status"), json_i64(ch, "word_count"),
+                    ],
+                ).ok();
+            }
+        }
+
+        // beatCards
+        if let Some(cards) = project_data.get("beatCards").and_then(|v| v.as_array()) {
+            for card in cards {
+                conn.execute(
+                    "INSERT OR REPLACE INTO beat_cards (id, chapter_id, column_type, content, sort_order) VALUES (?1,?2,?3,?4,?5)",
+                    params![
+                        json_str(card, "id"), json_str(card, "chapter_id"),
+                        json_str(card, "column_type"), json_str(card, "content"),
+                        json_i64(card, "sort_order"),
+                    ],
+                ).ok();
+            }
+        }
+
+        // chapterContents
+        if let Some(contents) = project_data.get("chapterContents").and_then(|v| v.as_array()) {
+            for content in contents {
+                conn.execute(
+                    "INSERT OR REPLACE INTO chapter_contents (chapter_id, body_json, body_html, updated_at) VALUES (?1,?2,?3,?4)",
+                    params![
+                        json_str(content, "chapter_id"), json_str(content, "body_json"),
+                        json_str(content, "body_html"), json_str(content, "updated_at"),
+                    ],
+                ).ok();
+            }
+        }
+
+        Ok(project_id)
+    })
+    .map(|pid| format!("项目 {} 导入成功", pid))
+    .map_err(|e| e.to_string())
 }
 
 fn open_or_create_settings_db() -> rusqlite::Connection {

@@ -58,7 +58,9 @@ pub fn run() {
             commands::stt_transcribe,
             commands::export_zip,
             commands::export_project,
+            commands::import_project,
             commands::save_export_file,
+            commands::list_app_settings,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

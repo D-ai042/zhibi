@@ -115,7 +115,34 @@ export interface Character {
   layout_y: number;
   is_locked: boolean;
   first_appearance_chapter?: number;
+  /** AI 生成的一句话身份标识，创建/编辑时自动填充，不暴露在 UI */
+  summary?: string;
+  /** 角色随时间变化的快照（字段级差异），按 age 排序 */
+  snapshots?: CharacterSnapshot[];
   [key: string]: any;
+}
+
+/** 角色在某个年龄时的字段变化快照 */
+export interface CharacterSnapshot {
+  /** 角色在该快照时的年龄（如"20"、"30"） */
+  age: string;
+  /** 本章变化的具体字段 */
+  changes: {
+    personality?: string;
+    ability?: string;
+    appearance?: string;
+    background?: string;
+    style?: string;
+    interests?: string;
+    desire?: string;
+    fear?: string;
+    flaw?: string;
+    arc?: string;
+    voice_style?: string;
+    faction?: string;
+    race?: string;
+    gender?: string;
+  };
 }
 
 export interface RelationshipEdge {
@@ -345,8 +372,6 @@ export interface ContextEngineOutput {
     p1: string;
     p2: string;
     p3: string;
-    p4: string;
-    p5: string;
   };
   totalTokens: number;
   omitted: string[];

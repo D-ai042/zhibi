@@ -172,6 +172,46 @@
 				"--port",
 				"1430"
 			]
+		},
+		{
+			"label": "tauri-build",
+			"type": "shell",
+			"command": "npm.cmd",
+			"args": [
+				"run",
+				"tauri:build"
+			],
+			"group": "build",
+			"problemMatcher": [
+				"$rustc"
+			],
+			"options": {
+				"cwd": "F:\\Projects\\ai-novel-writer"
+			},
+			"isBackground": true
+		},
+		{
+			"label": "tauri-build-now",
+			"type": "shell",
+			"command": "npm.cmd",
+			"args": [
+				"run",
+				"tauri:build"
+			],
+			"isBackground": true,
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "tauri-build-foreground",
+			"type": "shell",
+			"command": "npm.cmd",
+			"args": [
+				"run",
+				"tauri:build"
+			],
+			"problemMatcher": [],
+			"group": "build"
 		}
 	]
 }

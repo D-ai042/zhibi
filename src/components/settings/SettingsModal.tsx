@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { X, Eye, EyeOff, Check, Settings2, Mic, History, RotateCcw, AlertTriangle, Download, Upload } from "lucide-react";
-import { api } from "@/lib/api";
+import { api, isTauri } from "@/lib/api";
 import { useAppStore } from "@/stores/app-store";
 import { listSnapshots, restoreSnapshot, createSnapshot } from "@/lib/memory-updater";
 import type { SttConfig } from "@/types";
@@ -605,44 +605,86 @@ function SnapshotManager() {
   );
 }
 
-/** 数据迁移：导出/导入全部 localStorage 数据 */
+/** 数据迁移：导出/导入全部数据（localStorage + SQLite app_settings） */
 function DataMigration() {
   const [msg, setMsg] = useState("");
   const [importing, setImporting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  /** 收集所有项目相关 localStorage key */
-  const collectKeys = useCallback((): { key: string; value: string }[] => {
+  /** 判断 key 是否属于应用数据前缀 */
+  const isAppKey = (key: string): boolean => {
+    return (
+      key === "novel-workbench-mock" ||
+      key.startsWith("novel-workbench-") ||
+      key.startsWith("plot-") ||
+      key.startsWith("char-groups-") ||
+      key.startsWith("worldview-edges-") ||
+      key.startsWith("worldview-groups-") ||
+      key.startsWith("inspiration-cards-") ||
+      key.startsWith("material-") ||
+      key.startsWith("writing-sidebar-width-") ||
+      key.startsWith("ai-pending-chars-") ||
+      key.startsWith("ai-pending-world-terms-")
+    );
+  };
+
+  /** 收集所有应用相关 key（localStorage + EXE 模式额外从 SQLite 收集） */
+  const collectKeys = useCallback(async (): Promise<{ key: string; value: string }[]> => {
+    const seen = new Set<string>();
     const keys: { key: string; value: string }[] = [];
+
+    // 1. 从 localStorage 收集
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
-      if (!key) continue;
-      // 只导出应用相关数据
-      if (
-        key === "novel-workbench-mock" ||
-        key.startsWith("novel-workbench-") ||
-        key.startsWith("plot-") ||
-        key.startsWith("char-groups-") ||
-        key.startsWith("inspiration-cards-") ||
-        key.startsWith("material-") ||
-        key.startsWith("writing-sidebar-width-") ||
-        key.startsWith("ai-pending-chars-") ||
-        key.startsWith("ai-pending-world-terms-")
-      ) {
-        const value = localStorage.getItem(key);
-        if (value) keys.push({ key, value });
+      if (!key || !isAppKey(key)) continue;
+      const value = localStorage.getItem(key);
+      if (value) {
+        seen.add(key);
+        keys.push({ key, value });
       }
     }
+
+    // 2. EXE 模式：额外从 SQLite app_settings 收集 localStorage 没有的 key
+    if (isTauri()) {
+      try {
+        const sqliteKeys = await api.listAppSettings();
+        for (const { key, value } of sqliteKeys) {
+          if (isAppKey(key) && !seen.has(key)) {
+            keys.push({ key, value });
+          }
+        }
+      } catch (e) {
+        console.warn("[DataMigration] 读取 SQLite 设置失败:", e);
+      }
+    }
+
     return keys;
   }, []);
 
   /** 导出全部数据为 JSON 文件 */
   const handleExport = useCallback(async () => {
-    const data = {
-      version: "1.0",
+    const collected = await collectKeys();
+    const data: Record<string, unknown> = {
+      version: "2.0",
       exportedAt: new Date().toISOString(),
-      keys: collectKeys(),
+      keys: collected,
     };
+
+    // EXE 模式：额外导出项目核心数据（SQLite 项目表）
+    if (isTauri()) {
+      try {
+        const projects = await api.getProjects();
+        const projectsData: Record<string, unknown>[] = [];
+        for (const p of projects) {
+          const projectData = await api.exportProject(p.id);
+          projectsData.push(projectData);
+        }
+        data.projectsData = projectsData;
+      } catch (e) {
+        console.warn("[DataMigration] 读取项目数据失败:", e);
+      }
+    }
+
     const jsonStr = JSON.stringify(data, null, 2);
     const defaultFilename = `执笔数据备份_${new Date().toLocaleDateString("zh-CN").replace(/\//g, "-")}.json`;
 
@@ -685,6 +727,20 @@ function DataMigration() {
     setTimeout(() => setMsg(""), 2000);
   }, [collectKeys]);
 
+  /** 写入一条 key-value 到所有存储层（localStorage + EXE 模式额外写入 SQLite） */
+  const writeKey = useCallback(async (key: string, value: string) => {
+    // 始终写入 localStorage（兼容直接读 localStorage 的代码）
+    localStorage.setItem(key, value);
+    // EXE 模式：同步写入 SQLite（兼容通过 api.getSetting 读的代码）
+    if (isTauri()) {
+      try {
+        await api.setSetting(key, value);
+      } catch (e) {
+        console.warn(`[DataMigration] 写入 SQLite 失败: ${key}`, e);
+      }
+    }
+  }, []);
+
   /** 导入数据文件 */
   const handleImport = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -699,18 +755,52 @@ function DataMigration() {
         setImporting(false);
         return;
       }
-      // 逐个写入 localStorage
+      // 逐个写入（localStorage + SQLite）
+      let written = 0;
       for (const { key, value } of data.keys) {
-        if (key && value) localStorage.setItem(key, value);
+        if (key && value) {
+          await writeKey(key, value);
+          written++;
+        }
       }
-      setMsg(`✅ 成功导入 ${data.keys.length} 项数据，请刷新页面生效`);
+
+      // 恢复项目核心数据（EXE 模式）
+      let projectCount = 0;
+      if (data.projectsData && Array.isArray(data.projectsData) && isTauri()) {
+        for (const projectData of data.projectsData) {
+          if (projectData && typeof projectData === 'object' && (projectData as Record<string, unknown>).project) {
+            try {
+              await api.importProject(projectData as Record<string, unknown>);
+              projectCount++;
+            } catch (e) {
+              console.warn("[DataMigration] 恢复项目失败:", e);
+            }
+          }
+        }
+        // 导入后刷新项目列表（自动同步到前端）
+        if (projectCount > 0) {
+          try {
+            const projects = await api.getProjects();
+            useAppStore.getState().setProjects(projects);
+          } catch (e) {
+            console.warn("[DataMigration] 刷新项目列表失败:", e);
+          }
+        }
+      }
+
+      if (projectCount === 0 && isTauri() && (!data.projectsData || !Array.isArray(data.projectsData))) {
+        setMsg(`✅ 成功导入 ${written} 项配置。⚠️ 备份文件不含项目数据，请重新导出。`);
+      } else {
+        const extra = projectCount > 0 ? `，恢复 ${projectCount} 个项目` : "";
+        setMsg(`✅ 成功导入 ${written} 项配置${extra}。${projectCount > 0 ? "项目列表已刷新。" : "请刷新页面生效。"}`);
+      }
     } catch (e) {
       setMsg(`❌ 导入失败：${e instanceof Error ? e.message : "文件格式错误"}`);
     }
     setImporting(false);
     // 清空 input 以便再次选择同一文件
     if (fileInputRef.current) fileInputRef.current.value = "";
-  }, []);
+  }, [writeKey]);
 
   return (
     <div className="space-y-4">

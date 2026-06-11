@@ -23,14 +23,14 @@ export function StoryBibleModule() {
                 <TabButton active={activeTab === "style"} icon={<Palette className="h-4 w-4" />} label="风格指南" onClick={() => setActiveTab("style")} />
                 <TabButton active={activeTab === "rules"} icon={<Shield className="h-4 w-4" />} label="故事铁则" onClick={() => setActiveTab("rules")} />
                 <TabButton active={activeTab === "voices"} icon={<MessageCircle className="h-4 w-4" />} label="角色语言" onClick={() => setActiveTab("voices")} />
-                <TabButton active={activeTab === "summary"} icon={<FileText className="h-4 w-4" />} label="上下文摘要" onClick={() => setActiveTab("summary")} />
+                <TabButton active={activeTab === "summary"} icon={<FileText className="h-4 w-4" />} label="上下文编辑器" onClick={() => setActiveTab("summary")} />
                 <TabButton active={activeTab === "versions"} icon={<History className="h-4 w-4" />} label="版本记录" onClick={() => setActiveTab("versions")} />
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto p-4">
                 {activeTab === "style" && <StyleGuideEditor projectId={currentProject.id} />}
                 {activeTab === "rules" && <BibleRulesEditor projectId={currentProject.id} />}
                 {activeTab === "voices" && <CharacterVoiceEditor projectId={currentProject.id} />}
-                {activeTab === "summary" && <StyleSummary projectId={currentProject.id} />}
+                {activeTab === "summary" && <ContextEditor projectId={currentProject.id} />}
                 {activeTab === "versions" && <VersionHistory projectId={currentProject.id} />}
             </div>
         </div>
@@ -490,9 +490,9 @@ function CharacterVoiceEditor({ projectId }: { projectId: string }) {
     );
 }
 
-// ===== 上下文摘要 =====
+// ===== 上下文编辑器 =====
 
-function StyleSummary({ projectId }: { projectId: string }) {
+function ContextEditor({ projectId }: { projectId: string }) {
     const [ctx, setCtx] = useState<{
         chapterLabel: string;
         totalTokens: number;
@@ -502,8 +502,11 @@ function StyleSummary({ projectId }: { projectId: string }) {
     const [loading, setLoading] = useState(false);
     const [chapters, setChapters] = useState(getVolumeGroupedChapterOptions(projectId));
     const [selectedId, setSelectedId] = useState("");
+    // 编辑模式：每层独立可编辑
+    const [edits, setEdits] = useState<Record<string, string>>({});
+    const [editingLayer, setEditingLayer] = useState<string | null>(null);
+    const [savedOverride, setSavedOverride] = useState(false);
 
-    // 如果 localStorage 没有章节数据（Tauri 模式），从 API 加载
     useEffect(() => {
         if (chapters.length > 0) return;
         (async () => {
@@ -527,100 +530,104 @@ function StyleSummary({ projectId }: { projectId: string }) {
             const { buildProjectContext } = await import("@/lib/context-engine");
             const ctx = await buildProjectContext({ projectId, chapterId: selectedId });
             const ch = chapters.find(c => c.value === selectedId);
+            // 加载用户自定义覆盖（如果有）
+            const overrides = getJSONSync(`novel-workbench-bible-${projectId}`, null) as any;
+            const customCtx = overrides?.customContextOverrides?.[selectedId];
             setCtx({
                 chapterLabel: ch ? (ch.volumeName ? "【" + ch.volumeName + "】" : "") + ch.label : "未知章节",
                 totalTokens: ctx.totalTokens,
                 omitted: ctx.omitted,
                 layers: ctx.layers,
             });
+            setEdits(customCtx?.layers || {});
         } catch (e: any) { setCtx(null); alert(`获取失败：${e.message || e}`); }
         finally { setLoading(false); }
     }, [projectId, selectedId, chapters]);
 
+    const handleSave = useCallback(() => {
+        if (!selectedId || !ctx) return;
+        const bible = getJSONSync(`novel-workbench-bible-${projectId}`, null) as any || {};
+        bible.customContextOverrides = bible.customContextOverrides || {};
+        bible.customContextOverrides[selectedId] = {
+            layers: edits,
+            savedAt: new Date().toISOString(),
+        };
+        setJSONSync(`novel-workbench-bible-${projectId}`, bible);
+        setJSON(`novel-workbench-bible-${projectId}`, bible);
+        setSavedOverride(true);
+        setTimeout(() => setSavedOverride(false), 2000);
+    }, [projectId, selectedId, ctx, edits]);
+
+    const layers = [
+        { key: "p0", color: "blue", label: "世界观背景", icon: "🌍" },
+        { key: "p1", color: "amber", label: "剧情走向与前情摘要", icon: "📜" },
+        { key: "p2", color: "emerald", label: "风格指南", icon: "✍️" },
+        { key: "p3", color: "purple", label: "角色池", icon: "👤" },
+    ];
+
     return (
         <div className="max-w-5xl">
             <div className="mb-4 flex items-center gap-3">
-                <h3 className="text-sm font-semibold text-slate-700">上下文摘要</h3>
-                <select className="rounded border border-slate-200 px-2 py-1.5 text-xs outline-none focus:border-violet-400" value={selectedId} onChange={e => { setSelectedId(e.target.value); setCtx(null); }}>
+                <h3 className="text-sm font-semibold text-slate-700">上下文编辑器</h3>
+                <select className="rounded border border-slate-200 px-2 py-1.5 text-xs outline-none focus:border-violet-400" value={selectedId} onChange={e => { setSelectedId(e.target.value); setCtx(null); setEdits({}); }}>
                     <option value="">— 选择章节 —</option>
                     {chapters.map(ch => <option key={ch.value} value={ch.value}>{ch.volumeName ? "【" + ch.volumeName + "】" : ""}{ch.label}</option>)}
                 </select>
                 <button type="button" className="rounded-md bg-violet-600 px-3 py-1.5 text-xs text-white hover:bg-violet-700 disabled:opacity-50" onClick={handleGenerate} disabled={loading || !selectedId}>
-                    {loading ? "正在生成..." : "查看发给 AI 的内容"}
+                    {loading ? "正在生成..." : "加载上下文"}
                 </button>
-                <span className="text-xs text-slate-400">选择不同章节，对比每章收到的上下文是否不同</span>
+                {ctx && Object.keys(edits).length > 0 && (
+                    <button type="button" className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs text-white hover:bg-emerald-700" onClick={handleSave}>
+                        {savedOverride ? "✅ 已保存" : "保存修改"}
+                    </button>
+                )}
+                <span className="text-xs text-slate-400">AI 写文时优先使用你编辑后的版本</span>
             </div>
 
             {ctx ? (
                 <div className="space-y-4">
-                    {/* 概览信息卡片 */}
                     <div className="rounded-lg border border-slate-200 bg-white p-3">
                         <div className="flex items-center gap-4 text-xs">
                             <span className="font-medium text-slate-700">📖 {ctx.chapterLabel}</span>
                             <span className="text-slate-400">|</span>
                             <span>Token 约 <strong className="text-violet-600">{ctx.totalTokens}</strong></span>
                             {ctx.omitted.length > 0 && (
-                                <span className="text-amber-600">⚠ 裁剪 {ctx.omitted.length} 项：{ctx.omitted.join("、")}</span>
+                                <span className="text-amber-600">⚠ 已裁剪 {ctx.omitted.length} 项</span>
                             )}
-                            {ctx.omitted.length === 0 && <span className="text-emerald-600">✓ 未裁剪</span>}
                         </div>
                     </div>
 
-                    {/* P0 世界观 */}
-                    <details className="rounded-lg border border-slate-200 bg-white" open>
-                        <summary className="flex cursor-pointer items-center gap-2 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50">
-                            <span className="rounded bg-blue-100 px-1.5 py-0.5 text-[10px] text-blue-700">P0</span>
-                            世界观背景（不可违反）
-                            <span className="ml-auto text-slate-400">{ctx.layers.p0.split("\n").filter(l => l.startsWith("·")).length} 条设定</span>
-                        </summary>
-                        <pre className="max-h-48 overflow-y-auto p-3 text-xs leading-relaxed text-slate-600 font-mono whitespace-pre-wrap">{ctx.layers.p0}</pre>
-                    </details>
-
-                    {/* P1 剧情走向 + 前情摘要 */}
-                    <details className="rounded-lg border border-slate-200 bg-white" open>
-                        <summary className="flex cursor-pointer items-center gap-2 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50">
-                            <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-700">P1</span>
-                            剧情走向与前情摘要
-                            <span className="ml-auto text-slate-400">{
-                                (ctx.layers.p1.match(/【前 \d+ 章剧情摘要】/) ? "含前情摘要 · " : "") +
-                                (ctx.layers.p1.match(/【明线】/) ? "有明线 · " : "") +
-                                (ctx.layers.p1.match(/【暗线】/) ? "有暗线" : "")
-                            }</span>
-                        </summary>
-                        <pre className="max-h-64 overflow-y-auto p-3 text-xs leading-relaxed text-slate-600 font-mono whitespace-pre-wrap">{ctx.layers.p1}</pre>
-                    </details>
-
-                    {/* P2 风格指南 */}
-                    <details className="rounded-lg border border-slate-200 bg-white">
-                        <summary className="flex cursor-pointer items-center gap-2 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50">
-                            <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] text-emerald-700">P2</span>
-                            风格指南（写作腔调）
-                        </summary>
-                        <pre className="max-h-48 overflow-y-auto p-3 text-xs leading-relaxed text-slate-600 font-mono whitespace-pre-wrap">{ctx.layers.p2}</pre>
-                    </details>
-
-                    {/* P3 写作进度 */}
-                    <details className="rounded-lg border border-slate-200 bg-white">
-                        <summary className="flex cursor-pointer items-center gap-2 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50">
-                            <span className="rounded bg-purple-100 px-1.5 py-0.5 text-[10px] text-purple-700">P3</span>
-                            写作进度
-                        </summary>
-                        <pre className="max-h-32 overflow-y-auto p-3 text-xs leading-relaxed text-slate-600 font-mono whitespace-pre-wrap">{ctx.layers.p3}</pre>
-                    </details>
-
-                    {/* P4 角色池 */}
-                    <details className="rounded-lg border border-slate-200 bg-white">
-                        <summary className="flex cursor-pointer items-center gap-2 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50">
-                            <span className="rounded bg-rose-100 px-1.5 py-0.5 text-[10px] text-rose-700">P4</span>
-                            已出场角色池
-                            <span className="ml-auto text-slate-400">{ctx.layers.p4.split("\n").filter(l => l.startsWith("·")).length} 个角色</span>
-                        </summary>
-                        <pre className="max-h-48 overflow-y-auto p-3 text-xs leading-relaxed text-slate-600 font-mono whitespace-pre-wrap">{ctx.layers.p4}</pre>
-                    </details>
+                    {layers.map(({ key, color, label, icon }) => (
+                        <div key={key} className="rounded-lg border border-slate-200 bg-white">
+                            <div className="flex items-center gap-2 px-3 py-2 border-b border-slate-100">
+                                <span className="rounded bg-${color}-100 px-1.5 py-0.5 text-[10px] text-${color}-700 font-medium">P{key.slice(1).toUpperCase()}</span>
+                                <span className="text-xs font-medium text-slate-700">{icon} {label}</span>
+                                <div className="ml-auto flex items-center gap-1">
+                                    <button type="button"
+                                        className={`rounded px-2 py-0.5 text-[10px] ${editingLayer === key ? "bg-violet-100 text-violet-700" : "text-slate-400 hover:bg-slate-100"}`}
+                                        onClick={() => setEditingLayer(editingLayer === key ? null : key)}>
+                                        {editingLayer === key ? "完成编辑" : "编辑"}
+                                    </button>
+                                </div>
+                            </div>
+                            {editingLayer === key ? (
+                                <textarea
+                                    className="w-full p-3 text-xs leading-relaxed text-slate-700 font-mono outline-none resize-y min-h-[120px]"
+                                    rows={8}
+                                    value={edits[key] ?? ctx.layers[key]}
+                                    onChange={e => setEdits(prev => ({ ...prev, [key]: e.target.value }))}
+                                />
+                            ) : (
+                                <pre className="max-h-64 overflow-y-auto p-3 text-xs leading-relaxed text-slate-600 font-mono whitespace-pre-wrap">
+                                    {edits[key] ?? ctx.layers[key]}
+                                </pre>
+                            )}
+                        </div>
+                    ))}
                 </div>
             ) : (
                 <div className="flex h-48 items-center justify-center rounded-lg border border-dashed border-slate-200 text-sm text-slate-400">
-                    选择章节后点击「查看发给 AI 的内容」，清晰看到写本章时 AI 收到了什么
+                    选择章节后点击「加载上下文」，可预览并编辑发给 AI 的内容
                 </div>
             )}
         </div>
