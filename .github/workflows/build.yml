@@ -66,16 +66,28 @@ jobs:
           ls -la "$BUNDLE_DIR" 2>/dev/null || echo "No bundle dir at $BUNDLE_DIR"
           case "${{ matrix.ext }}" in
             dmg) SRC=$(find "$BUNDLE_DIR" -name "*.dmg" | head -1) ;;
-            nsis) SRC=$(find "$BUNDLE_DIR" -name "*.exe" -o -name "*.msi" | head -1) ;;
+            nsis) SRC=$(find "$BUNDLE_DIR" -name "*.exe" | head -1) ;;
           esac
+          if [ -z "$SRC" ]; then
+            echo "No primary artifact, trying secondary..."
+            case "${{ matrix.ext }}" in
+              dmg) SRC=$(find "$BUNDLE_DIR" -name "*.dmg" | head -1) ;;
+              nsis) SRC=$(find "$BUNDLE_DIR" -name "*.msi" | head -1) ;;
+            esac
+          fi
           if [ -z "$SRC" ]; then
             echo "No artifact found, checking default bundle path..."
             BUNDLE_DIR="src-tauri/target/release/bundle"
             ls -la "$BUNDLE_DIR" 2>/dev/null || echo "No bundle dir there either"
             case "${{ matrix.ext }}" in
               dmg) SRC=$(find "$BUNDLE_DIR" -name "*.dmg" | head -1) ;;
-              nsis) SRC=$(find "$BUNDLE_DIR" -name "*.exe" -o -name "*.msi" | head -1) ;;
+              nsis) SRC=$(find "$BUNDLE_DIR" -name "*.exe" | head -1) ;;
             esac
+            if [ -z "$SRC" ]; then
+              case "${{ matrix.ext }}" in
+                nsis) SRC=$(find "$BUNDLE_DIR" -name "*.msi" | head -1) ;;
+              esac
+            fi
           fi
           if [ -z "$SRC" ]; then echo "No artifact found!"; exit 1; fi
           EXT="${SRC##*.}"
@@ -103,7 +115,18 @@ jobs:
           VERSION="${TAG#v}"
 
           # 构建下载 URL（通过 ghfast.top 镜像加速国内访问）
-          WIN_URL="https://ghfast.top/github.com/D-ai042/zhibi/releases/download/$TAG/zhibi-$TAG-nsis.exe"
+          # 找出实际上传的 Windows 文件扩展名（优先 .exe）
+          WIN_EXT="msi"
+          for f in zhibi-$TAG-nsis.*; do
+            if [ -f "$f" ]; then
+              case "$f" in
+                *.exe) WIN_EXT="exe" ;;
+                *.msi) WIN_EXT="msi" ;;
+              esac
+              break
+            fi
+          done
+          WIN_URL="https://ghfast.top/github.com/D-ai042/zhibi/releases/download/$TAG/zhibi-$TAG-nsis.$WIN_EXT"
           MAC_INTEL_URL="https://ghfast.top/github.com/D-ai042/zhibi/releases/download/$TAG/zhibi-$TAG-dmg.dmg"
           MAC_ARM_URL="https://ghfast.top/github.com/D-ai042/zhibi/releases/download/$TAG/zhibi-$TAG-dmg.dmg"
 
