@@ -507,28 +507,12 @@ function ContextEditor({ projectId }: { projectId: string }) {
         layers: { p0: string; p1: string; p2: string; p3: string; p4: string };
     } | null>(null);
     const [loading, setLoading] = useState(false);
-    const [chapters, setChapters] = useState(getVolumeGroupedChapterOptions(projectId));
+    const [chapters] = useState(() => getVolumeGroupedChapterOptions(projectId));
     const [selectedId, setSelectedId] = useState("");
     // 编辑模式：每层独立可编辑
     const [edits, setEdits] = useState<Record<string, string>>({});
     const [editingLayer, setEditingLayer] = useState<string | null>(null);
     const [savedOverride, setSavedOverride] = useState(false);
-
-    useEffect(() => {
-        if (chapters.length > 0) return;
-        (async () => {
-            try {
-                const chs = await api.listChapters(projectId);
-                if (chs.length > 0) {
-                    setChapters(chs.map(c => ({
-                        value: c.id,
-                        label: `第${c.number}章「${c.title || "未命名"}」`,
-                        volumeName: "",
-                    })));
-                }
-            } catch { /* ignore */ }
-        })();
-    }, [projectId, chapters.length]);
 
     const handleGenerate = useCallback(async () => {
         if (!selectedId) return;
@@ -565,11 +549,20 @@ function ContextEditor({ projectId }: { projectId: string }) {
         setTimeout(() => setSavedOverride(false), 2000);
     }, [projectId, selectedId, ctx, edits]);
 
+    const BADGE_COLORS: Record<string, string> = {
+        slate: "bg-slate-100 text-slate-700",
+        blue: "bg-blue-100 text-blue-700",
+        purple: "bg-purple-100 text-purple-700",
+        emerald: "bg-emerald-100 text-emerald-700",
+        amber: "bg-amber-100 text-amber-700",
+    };
+
     const layers = [
-        { key: "p0", color: "blue", label: "世界观背景", icon: "🌍" },
-        { key: "p1", color: "amber", label: "剧情走向与前情摘要", icon: "📜" },
+        { key: "p4", color: "slate", label: "前一章正文", icon: "📄" },
+        { key: "p0", color: "blue", label: "世界观背景（不可违反）", icon: "🌍" },
+        { key: "p3", color: "purple", label: "角色池", icon: "👥" },
         { key: "p2", color: "emerald", label: "风格指南", icon: "✍️" },
-        { key: "p3", color: "purple", label: "角色池", icon: "👤" },
+        { key: "p1", color: "amber", label: "剧情走向与前情摘要", icon: "📜" },
     ];
 
     return (
@@ -604,10 +597,10 @@ function ContextEditor({ projectId }: { projectId: string }) {
                         </div>
                     </div>
 
-                    {layers.map(({ key, color, label, icon }) => (
+                    {layers.filter(l => !!(edits[l.key] ?? ctx.layers[l.key])).map(({ key, color, label, icon }) => (
                         <div key={key} className="rounded-lg border border-slate-200 bg-white">
                             <div className="flex items-center gap-2 px-3 py-2 border-b border-slate-100">
-                                <span className="rounded bg-${color}-100 px-1.5 py-0.5 text-[10px] text-${color}-700 font-medium">P{key.slice(1).toUpperCase()}</span>
+                                <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${BADGE_COLORS[color] || "bg-slate-100 text-slate-700"}`}>P{key.slice(1).toUpperCase()}</span>
                                 <span className="text-xs font-medium text-slate-700">{icon} {label}</span>
                                 <div className="ml-auto flex items-center gap-1">
                                     <button type="button"

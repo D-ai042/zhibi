@@ -4,7 +4,7 @@ import { api, isTauri } from "@/lib/api";
 import { useAppStore } from "@/stores/app-store";
 import { listSnapshots, restoreSnapshot, createSnapshot } from "@/lib/memory-updater";
 import type { SttConfig } from "@/types";
-import { getCurrentVersion, checkForUpdate, markDismissed, type VersionInfo } from "@/lib/version-check";
+import { getCurrentVersion, checkForUpdate, markDismissed, clearDismissed, type VersionInfo } from "@/lib/version-check";
 
 /** 厂商配置 */
 const PROVIDERS = [
@@ -47,6 +47,8 @@ export function SettingsModal() {
   // 版本检查
   const [updateInfo, setUpdateInfo] = useState<VersionInfo | null>(null);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
+  /** 检查结果状态：idle=初始, error=检查失败, up-to-date=已最新, available=有新版本 */
+  const [updateStatus, setUpdateStatus] = useState<"idle" | "error" | "up-to-date" | "available">("idle");
 
   // STT 状态（多 provider 架构）
   const [sttProviders, setSttProviders] = useState<Record<string, { api_key: string; secret_key: string; base_url: string; model: string }>>({});
@@ -516,9 +518,21 @@ export function SettingsModal() {
                     disabled={checkingUpdate}
                     onClick={async () => {
                       setCheckingUpdate(true);
+                      setUpdateStatus("idle");
                       try {
+                        // 手动检查：清除旧忽略标记，确保能重新检测
+                        clearDismissed();
                         const info = await checkForUpdate();
-                        setUpdateInfo(info);
+                        if (info) {
+                          setUpdateInfo(info);
+                          setUpdateStatus("available");
+                        } else {
+                          setUpdateInfo(null);
+                          setUpdateStatus("up-to-date");
+                        }
+                      } catch {
+                        setUpdateInfo(null);
+                        setUpdateStatus("error");
                       } finally {
                         setCheckingUpdate(false);
                       }
@@ -528,7 +542,7 @@ export function SettingsModal() {
                     {checkingUpdate ? "检查中…" : "检查更新"}
                   </button>
                 </div>
-                {updateInfo && (
+                {updateStatus === "available" && updateInfo && (
                   <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3">
                     <p className="text-sm font-medium text-amber-800">
                       🎉 新版本 v{updateInfo.version} 可用
@@ -550,6 +564,7 @@ export function SettingsModal() {
                         onClick={() => {
                           markDismissed(updateInfo.version);
                           setUpdateInfo(null);
+                          setUpdateStatus("idle");
                         }}
                         className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs text-slate-500 hover:bg-slate-50"
                       >
@@ -558,14 +573,21 @@ export function SettingsModal() {
                     </div>
                   </div>
                 )}
-                {!updateInfo && !checkingUpdate && (
+                {updateStatus === "idle" && !checkingUpdate && (
                   <p className="text-xs text-slate-400">点击按钮检查服务器上是否有新版本。</p>
+                )}
+                {checkingUpdate && (
+                  <p className="text-xs text-slate-400">⏳ 正在连接更新服务器…</p>
+                )}
+                {updateStatus === "up-to-date" && (
+                  <p className="text-xs text-emerald-600">✅ 已是最新版本 v{getCurrentVersion()}</p>
+                )}
+                {updateStatus === "error" && (
+                  <p className="text-xs text-red-500">⚠️ 检查失败：无法连接更新服务器，请稍后重试</p>
                 )}
               </div>
 
               <div className="text-xs text-slate-400 space-y-1">
-                <p>更新清单地址：{/* VERSION_CHECK_URL — 不暴露服务器路径给用户直观显示 */}
-                  服务器：175.178.18.102:8000</p>
                 <p>如有问题请联系开发者。</p>
               </div>
             </div>
@@ -841,16 +863,8 @@ function DataMigration() {
         setImporting(false);
         return;
       }
-      // 逐个写入（localStorage + SQLite）
-      let written = 0;
-      for (const { key, value } of data.keys) {
-        if (key && value) {
-          await writeKey(key, value);
-          written++;
-        }
-      }
 
-      // 恢复项目核心数据（EXE 模式）
+      // ★ 先恢复项目核心数据（必要时会写 mock store）
       let projectCount = 0;
       if (data.projectsData && Array.isArray(data.projectsData) && isTauri()) {
         for (const projectData of data.projectsData) {
@@ -863,23 +877,41 @@ function DataMigration() {
             }
           }
         }
-        // 导入后刷新项目列表（自动同步到前端）
-        if (projectCount > 0) {
-          try {
-            const projects = await api.getProjects();
-            useAppStore.getState().setProjects(projects);
-          } catch (e) {
-            console.warn("[DataMigration] 刷新项目列表失败:", e);
-          }
+      }
+
+      // ★ 再写入 localStorage keys（会覆盖 importProject 产生的中间写入，确保数据完整）
+      let written = 0;
+      for (const { key, value } of data.keys) {
+        if (key && value) {
+          await writeKey(key, value);
+          written++;
         }
       }
 
-      if (projectCount === 0 && isTauri() && (!data.projectsData || !Array.isArray(data.projectsData))) {
-        setMsg(`✅ 成功导入 ${written} 项配置。⚠️ 备份文件不含项目数据，请重新导出。`);
-      } else {
-        const extra = projectCount > 0 ? `，恢复 ${projectCount} 个项目` : "";
-        setMsg(`✅ 成功导入 ${written} 项配置${extra}。${projectCount > 0 ? "项目列表已刷新。" : "请刷新页面生效。"}`);
+      // 导入后刷新项目列表（自动同步到前端）
+      if (projectCount > 0) {
+        try {
+          const projects = await api.getProjects();
+          useAppStore.getState().setProjects(projects);
+        } catch (e) {
+          console.warn("[DataMigration] 刷新项目列表失败:", e);
+        }
       }
+
+      // ★ 浏览器模式：清空 mock store 缓存，强制从 localStorage 重新加载
+      if (!isTauri()) {
+        try {
+          const { clearMockStoreCache } = await import("@/lib/mock-backend");
+          clearMockStoreCache();
+          const projects = await api.getProjects();
+          useAppStore.getState().setProjects(projects);
+          projectCount = projects.length;
+        } catch (e) {
+          console.warn("[DataMigration] 刷新 mock 缓存失败:", e);
+        }
+      }
+
+      setMsg(`✅ 成功导入 ${written} 项配置，恢复 ${projectCount} 个项目。欢迎页列表已刷新。`);
     } catch (e) {
       setMsg(`❌ 导入失败：${e instanceof Error ? e.message : "文件格式错误"}`);
     }

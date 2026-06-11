@@ -151,6 +151,7 @@ export function CharactersModule() {
     const merged = { ...c };
     for (let i = 0; i <= Math.min(snapIdx, sorted.length - 1); i++) {
       const ch = sorted[i].changes;
+      if (ch.gender) merged.gender = ch.gender;
       if (ch.personality) merged.personality = ch.personality;
       if (ch.ability) merged.ability = ch.ability;
       if (ch.appearance) merged.appearance = ch.appearance;
@@ -169,36 +170,56 @@ export function CharactersModule() {
     return merged;
   }, []);
 
+  /** 性别英→中映射 */
+  const genderToLabel = (g?: string): string => {
+    if (!g) return "";
+    const lower = g.toLowerCase();
+    if (lower === "male") return "男";
+    if (lower === "female") return "女";
+    return g; // 已经是中文或自定义
+  };
+
+  /** 性别中→英映射（编辑时转换） */
+  const genderToKey = (g?: string): string => {
+    if (!g) return "";
+    const t = g.trim();
+    if (t === "男") return "male";
+    if (t === "女") return "female";
+    return g; // 保持原样
+  };
+
   // ===== 编辑字段辅助 =====
   const startEdit = useCallback((key: string, value: string) => {
     setEditingField(key);
     setEditDraft(value || "");
   }, []);
-  const commitField = useCallback((key: string) => {
+  const commitField = useCallback(async (key: string) => {
     if (!selectedChar || !currentProject) return;
+    // 性别中→英
+    const value = key === "gender" ? genderToKey(editDraft) : editDraft;
     // 如果在快照视图下编辑，写入快照的 changes 而不是基础角色
     if (snapshotIdx >= 0 && selectedChar.snapshots?.length && snapshotIdx < selectedChar.snapshots.length) {
+      // ★ 按年龄排序，找到当前快照在原始数组中的位置（snapshotIdx 是排序后的索引）
       const updatedSnaps = [...selectedChar.snapshots];
-      const snap = { ...updatedSnaps[snapshotIdx] };
-      snap.changes = { ...snap.changes, [key]: editDraft };
-      updatedSnaps[snapshotIdx] = snap;
+      const sorted = [...updatedSnaps].sort((a: any, b: any) => parseInt(a.age) - parseInt(b.age));
+      const targetAge = sorted[snapshotIdx]?.age;
+      const realIdx = updatedSnaps.findIndex((s: any) => s.age === targetAge);
+      if (realIdx < 0) return;
+      const snap = { ...updatedSnaps[realIdx] };
+      snap.changes = { ...snap.changes, [key]: value };
+      updatedSnaps[realIdx] = snap;
       const updated = { ...selectedChar, snapshots: updatedSnaps };
       setSelectedChar(updated);
       setEditingField(null);
-      api.saveCharacter(updated as Character);
-      const raw = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
-      const idx = raw.characters?.findIndex((c: any) => c.id === selectedChar.id);
-      if (idx >= 0) { raw.characters[idx] = updated; localStorage.setItem(STORAGE_KEY, JSON.stringify(raw)); }
+      // ★ 先 await 保存完成，再触发热重载
+      await api.saveCharacter(updated as Character);
       const store = useAppStore.getState(); store.bumpCharacters();
       return;
     }
-    const updated = { ...selectedChar, [key]: editDraft };
+    const updated = { ...selectedChar, [key]: value };
     setSelectedChar(updated);
     setEditingField(null);
-    api.saveCharacter(updated as Character);
-    const raw = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
-    const idx = raw.characters?.findIndex((c: any) => c.id === selectedChar.id);
-    if (idx >= 0) { raw.characters[idx] = updated; localStorage.setItem(STORAGE_KEY, JSON.stringify(raw)); }
+    await api.saveCharacter(updated as Character);
     const store = useAppStore.getState(); store.bumpCharacters();
   }, [selectedChar, currentProject, editDraft, snapshotIdx]);
 
@@ -346,6 +367,15 @@ export function CharactersModule() {
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => { if (characterBump > 0) load(); }, [characterBump]);
+
+  // ★ load() 后同步 selectedChar 到最新数据
+  useEffect(() => {
+    if (!selectedChar || chars.length === 0) return;
+    const fresh = chars.find(c => c.id === selectedChar.id);
+    if (fresh && JSON.stringify(fresh.snapshots) !== JSON.stringify(selectedChar.snapshots)) {
+      setSelectedChar(fresh);
+    }
+  }, [chars]);
 
   // ===== 选中 =====
   const onSel = useCallback(({ nodes: ns }: { nodes: Node[] }) => { setSelIds(ns.map(n => n.id)); }, []);
@@ -735,55 +765,51 @@ export function CharactersModule() {
             }}>
               {/* 标题行 */}
               <div style={{
-                textAlign: "center", padding: "10px 36px 8px",
+                textAlign: "center", padding: "10px 8px 8px",
                 background: "linear-gradient(90deg, #6366f1, #8b5cf6, #a78bfa)",
-                color: "#fff", position: "relative",
+                color: "#fff",
               }}>
-                {/* 左箭头 */}
-                <button
-                  onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); if (canLeft) setSnapshotIdx(snapshotIdx - 1); }}
-                  disabled={!canLeft}
-                  style={{
-                    position: "absolute", left: 6, top: "50%", transform: "translateY(-50%)",
-                    background: "rgba(255,255,255,0.2)", border: "none", borderRadius: "50%",
-                    width: 26, height: 26, cursor: canLeft ? "pointer" : "default",
-                    color: "#fff", fontSize: 15, opacity: canLeft ? 1 : 0.25,
-                    display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1,
-                  }}
-                >◀</button>
-                {/* 右箭头 */}
-                <button
-                  onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); if (canRight) setSnapshotIdx(snapshotIdx + 1); }}
-                  disabled={!canRight}
-                  style={{
-                    position: "absolute", right: 6, top: "50%", transform: "translateY(-50%)",
-                    background: "rgba(255,255,255,0.2)", border: "none", borderRadius: "50%",
-                    width: 26, height: 26, cursor: canRight ? "pointer" : "default",
-                    color: "#fff", fontSize: 15, opacity: canRight ? 1 : 0.25,
-                    display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1,
-                  }}
-                >▶</button>
                 <div style={{ fontSize: 15, fontWeight: 700, letterSpacing: "0.06em" }}>
                   ✦ {displayChar.name} ✦
                 </div>
-                <div style={{ fontSize: 11, fontWeight: 400, opacity: 0.8, marginTop: 2, display: "flex", alignItems: "center", justifyContent: "center", gap: 3 }}>
-                  {displayChar.age || ""}{displayChar.age ? " 岁" : ""}
-                  {snapshotIdx >= 0 && snaps && snapshotIdx < snaps.length && (
+                {/* 年龄快照滑动条：◀ 年龄 ✕ ▶ */}
+                {snaps && snaps.length > 0 ? (
+                  <div style={{ display: "flex", alignItems: "center", marginTop: 4 }}>
                     <span
-                      onMouseDown={(e) => {
-                        e.stopPropagation(); e.preventDefault();
-                        const updated = [...(selectedChar!.snapshots || [])];
-                        updated.splice(snapshotIdx, 1);
-                        api.saveCharacter({ ...selectedChar!, snapshots: updated });
-                        setSelectedChar({ ...selectedChar!, snapshots: updated } as Character);
-                        setSnapshotIdx(Math.min(snapshotIdx, updated.length - 1));
-                        const store = useAppStore.getState(); store.bumpCharacters();
-                      }}
-                      style={{ cursor: "pointer", opacity: 0.5, fontSize: 10 }}
-                      title="删除此快照"
-                    >✕</span>
-                  )}
-                </div>
+                      onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); if (canLeft) setSnapshotIdx(snapshotIdx - 1); }}
+                      style={{ fontSize: 14, opacity: canLeft ? 0.7 : 0.2, cursor: canLeft ? "pointer" : "default", userSelect: "none", flex: "0 0 auto" }}
+                    >◀</span>
+                    <span style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 4, fontSize: 12, fontWeight: 600 }}>
+                      <span>{displayChar.age || ""}</span>
+                      <span
+                        onMouseDown={(e) => {
+                          e.stopPropagation(); e.preventDefault();
+                          const updated = [...(selectedChar!.snapshots || [])];
+                          const sorted = [...updated].sort((a: any, b: any) => parseInt(a.age) - parseInt(b.age));
+                          const targetAge = sorted[snapshotIdx]?.age;
+                          const realIdx = updated.findIndex((x: any) => x.age === targetAge);
+                          if (realIdx >= 0) {
+                            updated.splice(realIdx, 1);
+                            api.saveCharacter({ ...selectedChar!, snapshots: updated });
+                            setSelectedChar({ ...selectedChar!, snapshots: updated } as Character);
+                            setSnapshotIdx(Math.min(snapshotIdx, updated.length - 1));
+                            const store = useAppStore.getState(); store.bumpCharacters();
+                          }
+                        }}
+                        style={{ fontSize: 10, opacity: 0.35, cursor: "pointer" }}
+                        title="删除此快照"
+                      >✕</span>
+                    </span>
+                    <span
+                      onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); if (canRight) setSnapshotIdx(snapshotIdx + 1); }}
+                      style={{ fontSize: 14, opacity: canRight ? 0.7 : 0.2, cursor: canRight ? "pointer" : "default", userSelect: "none", flex: "0 0 auto" }}
+                    >▶</span>
+                  </div>
+                ) : (
+                  <div style={{ fontSize: 11, fontWeight: 400, opacity: 0.7, marginTop: 2 }}>
+                    {displayChar.age || ""}
+                  </div>
+                )}
               </div>
 
               {/* 基本信息行：左列→姓名/性别/年龄/种族，右列→外在形象 */}
@@ -791,7 +817,7 @@ export function CharactersModule() {
                 <div style={{ flex: 1, fontSize: 12 }}>
                   {[
                     { label: "姓名", key: "name", value: displayChar.name },
-                    { label: "性别", key: "gender", value: displayChar.gender },
+                    { label: "性别", key: "gender", value: genderToLabel(displayChar.gender) },
                     { label: "年龄", key: "age", value: displayChar.age },
                     { label: "种族", key: "race", value: displayChar.race },
                   ].map(item => (

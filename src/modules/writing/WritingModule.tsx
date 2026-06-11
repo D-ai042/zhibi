@@ -497,16 +497,30 @@ export function WritingModule() {
     const [ctxSummaries, setCtxSummaries] = useState<ChapterSummary[]>([]);
     const [ctxBeatCards, setCtxBeatCards] = useState<BeatCard[]>([]);
     const [ctxCharacters, setCtxCharacters] = useState<{ name: string; status?: string }[]>([]);
+    const [ctxPrevContent, setCtxPrevContent] = useState<{ number: number; title: string; content: string } | null>(null);
+    const [ctxWorldRules, setCtxWorldRules] = useState<string[]>([]);       // P0 规则词条
+    const [ctxStyleRedlines, setCtxStyleRedlines] = useState("");           // P2 写作红线
+    const [ctxStyleNarrative, setCtxStyleNarrative] = useState("");         // P2 叙述风格
+    const [ctxStyleTone, setCtxStyleTone] = useState("");                   // P2 文笔基调
     const [ctxCollapsed, setCtxCollapsed] = useState(true);
 
     async function loadContextPanelData(projectId: string, chapterNumber: number, chapterId: string) {
         try {
-            const [summaries, beatCards] = await Promise.all([
+            const [summaries, beatCards, styleGuide] = await Promise.all([
                 api.getChapterSummaries(projectId).catch(() => [] as ChapterSummary[]),
                 api.listBeatCards(chapterId).catch(() => [] as BeatCard[]),
+                api.getStyleGuide(projectId).catch(() => null as import('@/types').StyleGuide | null),
             ]);
             setCtxSummaries(summaries.filter(s => s.chapter_number < chapterNumber && s.chapter_number >= chapterNumber - 5).sort((a, b) => a.chapter_number - b.chapter_number));
             setCtxBeatCards(beatCards);
+            // P2 风格指南
+            if (styleGuide) {
+                setCtxStyleRedlines(styleGuide.writing_rules || "");
+                setCtxStyleNarrative(styleGuide.narrative_style || "");
+                setCtxStyleTone(styleGuide.writing_tone || "");
+            } else {
+                setCtxStyleRedlines(""); setCtxStyleNarrative(""); setCtxStyleTone("");
+            }
             try {
                 const store = getJSONSync(`novel-workbench-log-${projectId}`, {} as any);
                 if (store) {
@@ -515,6 +529,28 @@ export function WritingModule() {
                     setCtxCharacters(active.map((s: any) => ({ name: s.character_name, status: s.current_status })));
                 }
             } catch { /* ignore */ }
+            // ★ P0: 规则词条
+            try {
+                const allTerms = await api.listWorldTerms(projectId);
+                const rules = allTerms.filter(t => t.term_type === "rule").map(t => `· ${t.title}：${t.one_liner || ""}`);
+                setCtxWorldRules(rules.slice(0, 8));
+            } catch { setCtxWorldRules([]); }
+            // ★ P4: 加载前一章正文
+            try {
+                const allChapters = getJSONSync(`plot-chapters-${projectId}`, [] as any[]);
+                const prev = allChapters.find((ch: any) => ch.number === chapterNumber - 1);
+                if (prev && prev.content) {
+                    const clean = prev.content.replace(/<[^>]+>/g, '').trim();
+                    if (clean) {
+                        // 只取后段 3000 字（最近的写作内容）
+                        setCtxPrevContent({ number: prev.number, title: prev.title || "", content: clean.slice(-3000) });
+                    } else {
+                        setCtxPrevContent(null);
+                    }
+                } else {
+                    setCtxPrevContent(null);
+                }
+            } catch { setCtxPrevContent(null); }
         } catch { /* ignore */ }
     }
 
@@ -668,7 +704,10 @@ export function WritingModule() {
 
     // ===== AI精修 =====
     const handlePolish = useCallback(async () => {
-        if (!pid || !selectedChapter || !editingContent.trim()) return;
+        if (!pid) { useAppStore.getState().setAutosaveStatus("⚠ 未选择项目"); return; }
+        if (!selectedChapter) { useAppStore.getState().setAutosaveStatus("⚠ 未选择章节"); return; }
+        if (!editingContent.trim()) { useAppStore.getState().setAutosaveStatus("⚠ 章节内容为空"); return; }
+        if (polishing) return; // 防止重复点击
         setPolishing(true);
         useAppStore.getState().setAutosaveStatus("正在精修...");
         try {
@@ -702,10 +741,13 @@ export function WritingModule() {
         } finally {
             setPolishing(false);
         }
-    }, [pid, selectedChapter, editingContent]);
+    }, [pid, selectedChapter, editingContent, polishing]);
 
     const handleHumanize = useCallback(async () => {
-        if (!pid || !selectedChapter || !editingContent.trim()) return;
+        if (!pid) { useAppStore.getState().setAutosaveStatus("⚠ 未选择项目"); return; }
+        if (!selectedChapter) { useAppStore.getState().setAutosaveStatus("⚠ 未选择章节"); return; }
+        if (!editingContent.trim()) { useAppStore.getState().setAutosaveStatus("⚠ 章节内容为空"); return; }
+        if (humanizing) return; // 防止重复点击
         setHumanizing(true);
         useAppStore.getState().setAutosaveStatus("正在去 AI 味...");
         try {
@@ -739,17 +781,33 @@ export function WritingModule() {
         } finally {
             setHumanizing(false);
         }
-    }, [pid, selectedChapter, editingContent]);
+    }, [pid, selectedChapter, editingContent, humanizing]);
 
     const handleAiWriteChapter = useCallback(async (wordCount: number, plotDirection: string, refIds?: string[]) => {
-        if (!pid || !selectedChapter) return;
+        if (!pid) { useAppStore.getState().setAutosaveStatus("⚠ 未选择项目"); return; }
+        if (!selectedChapter) { useAppStore.getState().setAutosaveStatus("⚠ 未选择章节"); return; }
         // 防止并发调用：如果上一次 AI 写作还在进行中则忽略
-        if (aiWritingRef.current) return;
+        if (aiWritingRef.current) {
+            console.warn("[handleAiWriteChapter] AI 写作进行中，忽略重复请求");
+            useAppStore.getState().setAutosaveStatus("⚠ AI 写作进行中，请等待完成");
+            return;
+        }
         aiWritingRef.current = true;
         setAiWriting(true);
         setAiError("");
         setWriteDlg(null);
         lastWriteParamsRef.current = { wordCount, plotDirection };
+
+        // 安全超时：5 分钟后强制重置，防止 ref 永久卡住
+        const safetyTimer = setTimeout(() => {
+            if (aiWritingRef.current) {
+                console.error("[handleAiWriteChapter] 安全超时：5 分钟未完成，强制重置");
+                aiWritingRef.current = false;
+                setAiWriting(false);
+                setAiError("AI 写作超时（5分钟），请重试");
+            }
+        }, 5 * 60 * 1000);
+        timeoutIdsRef.current.push(safetyTimer);
 
         try {
             const output = await buildProjectContext({
@@ -801,9 +859,17 @@ export function WritingModule() {
                 }
             }
 
-            // 组装带字数+剧情方向的 user_message
-            let userMsg = `请写第${selectedChapter.number}章「${selectedChapter.title}」。`;
-            userMsg += `\n\n字数要求：约 ${wordCount} 字。`;
+            // ★ 三明治布局组装
+            const maxChars = Math.round(wordCount * 1.1);
+            const minChars = Math.round(wordCount * 0.9);
+
+            // user_message（结尾注意力区）：结构参考 → 字数 → 方向 → 灵感 → 素材
+            let userMsg = "";
+            if (structureHint) {
+                userMsg += `\n\n${structureHint}`;
+            }
+            userMsg += `\n\n请写第${selectedChapter.number}章「${selectedChapter.title}」。`;
+            userMsg += `\n\n【字数要求】必须严格控制在 ${minChars}-${maxChars} 字之间（目标 ${wordCount} 字），不可超出此范围。`;
             if (plotDirection) {
                 userMsg += `\n\n剧情方向：\n${plotDirection}`;
             }
@@ -817,7 +883,8 @@ export function WritingModule() {
                 entity_type: "chapter",
                 entity_id: selectedChapter.id,
                 extra: {
-                    system_hint: output.systemHint + structureHint,
+                    // system_hint 已由 context-engine 按三明治输出（P4→P0→P3→P2→P1）
+                    system_hint: output.systemHint,
                     user_message: userMsg,
                     history: [],
                 },
@@ -841,12 +908,21 @@ export function WritingModule() {
                 // 定稿动作（摘要/快照/新角色识别/词条激活/角色预测）由用户手动点击「定稿」按钮触发
             }
         } catch (e) {
+            console.error("[handleAiWriteChapter] 异常:", e);
             setAiError(String(e));
         } finally {
+            // 清除安全超时
+            for (let i = timeoutIdsRef.current.length - 1; i >= 0; i--) {
+                if (timeoutIdsRef.current[i] === safetyTimer) {
+                    clearTimeout(timeoutIdsRef.current[i]);
+                    timeoutIdsRef.current.splice(i, 1);
+                    break;
+                }
+            }
             setAiWriting(false);
             aiWritingRef.current = false;
         }
-    }, [pid, selectedChapter]);
+    }, [pid, selectedChapter, editingContent]);
 
     // ===== 级联重跑记忆 =====
     const handleRebase = useCallback(async () => {
@@ -1075,7 +1151,7 @@ export function WritingModule() {
                     ) : (
                         <aside className="w-[280px] shrink-0 overflow-y-auto border-r bg-white p-3 text-xs">
                             <div className="mb-2 flex items-center justify-between">
-                                <h3 className="text-sm font-semibold text-slate-700">📋 本章上下文</h3>
+                                <h3 className="text-sm font-semibold text-slate-700">📋 上下文引擎</h3>
                                 <button
                                     onClick={() => setCtxCollapsed(true)}
                                     className="rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
@@ -1085,10 +1161,65 @@ export function WritingModule() {
                                 </button>
                             </div>
 
-                            {/* 节拍卡片 */}
+                            {/* ═══════ 开头（注意力峰值）═══════ */}
+                            {/* P4 · 前一章正文 */}
+                            {ctxPrevContent && (
+                                <div className="mb-3">
+                                    <p className="mb-1 text-[10px] font-bold uppercase tracking-wider text-emerald-600">P4 · 前一章正文</p>
+                                    <div className="rounded border border-emerald-200 bg-emerald-50/40 px-2 py-1.5 max-h-52 overflow-y-auto">
+                                        <p className="mb-1 text-[10px] font-semibold text-emerald-700">第{ctxPrevContent.number}章 {ctxPrevContent.title}</p>
+                                        <p className="text-[10px] leading-relaxed text-slate-600 whitespace-pre-wrap">{ctxPrevContent.content.slice(0, 2000)}</p>
+                                        {ctxPrevContent.content.length > 2000 && (
+                                            <p className="mt-1 text-[9px] text-slate-400 italic">...后段 {ctxPrevContent.content.length} 字，预览前 2000 字</p>
+                                        )}
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* ═══════ 中间（约束区）═══════ */}
+                            {/* P0 · 世界铁则 */}
+                            {ctxWorldRules.length > 0 && (
+                                <div className="mb-3">
+                                    <p className="mb-1 text-[10px] font-bold uppercase tracking-wider text-rose-600">P0 · 世界铁则</p>
+                                    <div className="rounded border border-rose-100 bg-rose-50/30 px-2 py-1.5">
+                                        {ctxWorldRules.map((r, i) => (
+                                            <p key={i} className="text-[10px] leading-relaxed text-rose-700">{r}</p>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* P3 · 角色池 */}
+                            {ctxCharacters.length > 0 && (
+                                <div className="mb-3">
+                                    <p className="mb-1 text-[10px] font-bold uppercase tracking-wider text-blue-600">P3 · 活跃角色</p>
+                                    <div className="flex flex-wrap gap-1">
+                                        {ctxCharacters.slice(0, 12).map(c => (
+                                            <span key={c.name} className="rounded-full bg-blue-50 px-2 py-0.5 text-[10px] text-blue-700">
+                                                {c.name}{c.status ? `·${c.status}` : ""}
+                                            </span>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* P2 · 风格指南（最软，可裁）*/}
+                            {(ctxStyleRedlines || ctxStyleNarrative || ctxStyleTone) && (
+                                <div className="mb-3">
+                                    <p className="mb-1 text-[10px] font-bold uppercase tracking-wider text-slate-500">P2 · 风格指南</p>
+                                    <div className="rounded border border-slate-100 bg-slate-50 px-2 py-1.5 space-y-1">
+                                        {ctxStyleRedlines && <p className="text-[10px] text-slate-600"><span className="font-semibold text-red-500">红线</span> {ctxStyleRedlines.slice(0, 80)}</p>}
+                                        {ctxStyleNarrative && <p className="text-[10px] text-slate-500"><span className="font-semibold">叙述</span> {ctxStyleNarrative.slice(0, 80)}</p>}
+                                        {ctxStyleTone && <p className="text-[10px] text-slate-400"><span className="font-semibold">基调</span> {ctxStyleTone.slice(0, 80)}</p>}
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* ═══════ 结尾（执行区）═══════ */}
+                            {/* P1 · 细纲节拍 */}
                             {ctxBeatCards.length > 0 && (
                                 <div className="mb-3">
-                                    <p className="mb-1 text-[10px] font-medium uppercase tracking-wider text-violet-600">节拍</p>
+                                    <p className="mb-1 text-[10px] font-bold uppercase tracking-wider text-violet-600">P1 · 细纲节拍</p>
                                     <div className="space-y-1">
                                         {ctxBeatCards.map(b => (
                                             <div key={b.id} className="rounded border border-violet-100 bg-violet-50/50 px-2 py-1 text-[10px] text-slate-600">
@@ -1098,15 +1229,14 @@ export function WritingModule() {
                                     </div>
                                 </div>
                             )}
-
-                            {/* 前情摘要 */}
+                            {/* P1 · 前情摘要 */}
                             {ctxSummaries.length > 0 && (
                                 <div className="mb-3">
-                                    <p className="mb-1 text-[10px] font-medium uppercase tracking-wider text-amber-600">前情摘要</p>
+                                    <p className="mb-1 text-[10px] font-bold uppercase tracking-wider text-amber-600">P1 · 前情摘要</p>
                                     <div className="space-y-1.5">
                                         {ctxSummaries.map(s => (
                                             <div key={s.chapter_number} className="rounded border border-amber-100 bg-amber-50/30 px-2 py-1.5">
-                                                <p className="mb-0.5 text-[10px] font-medium text-amber-800">第{s.chapter_number}章 {s.chapter_title}</p>
+                                                <p className="mb-0.5 text-[10px] font-semibold text-amber-800">第{s.chapter_number}章 {s.chapter_title}</p>
                                                 <p className="text-[10px] leading-relaxed text-slate-500">{s.summary?.slice(0, 80)}</p>
                                             </div>
                                         ))}
@@ -1114,21 +1244,8 @@ export function WritingModule() {
                                 </div>
                             )}
 
-                            {/* 出场角色 */}
-                            {ctxCharacters.length > 0 && (
-                                <div className="mb-3">
-                                    <p className="mb-1 text-[10px] font-medium uppercase tracking-wider text-blue-600">活跃角色</p>
-                                    <div className="flex flex-wrap gap-1">
-                                        {ctxCharacters.slice(0, 10).map(c => (
-                                            <span key={c.name} className="rounded-full bg-blue-50 px-2 py-0.5 text-[10px] text-blue-700">
-                                                {c.name}{c.status ? ` · ${c.status}` : ""}
-                                            </span>
-                                        ))}
-                                    </div>
-                                </div>
-                            )}
-
-                            {ctxBeatCards.length === 0 && ctxSummaries.length === 0 && ctxCharacters.length === 0 && (
+                            {/* 空状态 */}
+                            {ctxBeatCards.length === 0 && ctxSummaries.length === 0 && ctxCharacters.length === 0 && !ctxPrevContent && ctxWorldRules.length === 0 && (
                                 <p className="text-[10px] text-slate-400">暂无上下文数据，开始写作后自动生成</p>
                             )}
                         </aside>

@@ -526,8 +526,20 @@ export function AiChatPanel() {
       const raw = localStorage.getItem(`ai-pending-chars-${currentProject.id}`);
       if (!raw) return;
       const data = JSON.parse(raw);
-      if (data.chars?.length > 0) setPendingChars(prev => [...prev, ...data.chars]);
-      if (data.edges?.length > 0) setPendingCharEdges(prev => [...prev, ...data.edges]);
+      if (data.chars?.length > 0) {
+        setPendingChars(prev => {
+          const existingNames = new Set(prev.map(c => c.name));
+          const newChars = (data.chars as any[]).filter(c => !existingNames.has(c.name));
+          return [...prev, ...newChars];
+        });
+      }
+      if (data.edges?.length > 0) {
+        setPendingCharEdges(prev => {
+          const existingKeys = new Set(prev.map(e => `${e.sourceName}::${e.targetName}`));
+          const newEdges = (data.edges as any[]).filter(e => !existingKeys.has(`${e.sourceName}::${e.targetName}`));
+          return [...prev, ...newEdges];
+        });
+      }
       loadedRef.current = true;
     } catch { /* ignore */ }
   }, [currentProject?.id]);
@@ -724,7 +736,17 @@ export function AiChatPanel() {
       return nextPos.value;
     };
 
+    // ★ 去重：已在画布中的角色绝不重复创建
+    const pendingDeduped: typeof pendingChars = [];
+    const seenNames = new Set<string>(existingChars.map(c => c.name));
     for (const ch of pendingChars) {
+      if (!seenNames.has(ch.name)) {
+        seenNames.add(ch.name);
+        pendingDeduped.push(ch);
+      }
+    }
+
+    for (const ch of pendingDeduped) {
       const id = uuid();
       nameMap.set(ch.name, id);
       const { x, y } = findNextPos();
@@ -1444,7 +1466,11 @@ export function AiChatPanel() {
 
       const aiContent = res.error ?? res.content;
 
-      // 只保留当前模块的块模板（物理过滤）
+      // 从 RAW 内容解析所有块模板（不受模块限制），仅显示时过滤
+      // 这样即使不在对应模块，AI 输出的角色/词条/剧情也不会丢失
+      const rawAiContent = aiContent;
+
+      // 只保留当前模块的块模板（物理过滤，仅用于显示和模块专属解析）
       const filteredAiContent = stripOtherModuleBlocks(aiContent, activeModule, outlineSection);
 
       // 检查是否包含世界观词条创建指令（仅世界观模块）
@@ -1628,12 +1654,20 @@ export function AiChatPanel() {
         }
       }
 
-      // ====== 人物角色：解析 ---CHARACTERS--- 块 ======
-      if (activeModule === "outline" && outlineSection === "characters") {
-        const charBatch = parseCharacterBatch(filteredAiContent);
+      // ====== 人物角色：从 RAW 内容解析 ---CHARACTERS--- 块（不受模块限制，写作台也会触发） ======
+      if (currentProject) {
+        const charBatch = parseCharacterBatch(rawAiContent);
         if (charBatch.chars.length > 0 || charBatch.edges.length > 0 || charBatch.removeEdges.length > 0 || charBatch.snapshots.length > 0) {
-          setPendingChars(prev => [...prev, ...charBatch.chars]);
-          setPendingCharEdges(prev => [...prev, ...charBatch.edges]);
+          setPendingChars(prev => {
+            const existingNames = new Set(prev.map(c => c.name));
+            const newChars = charBatch.chars.filter(c => !existingNames.has(c.name));
+            return [...prev, ...newChars];
+          });
+          setPendingCharEdges(prev => {
+            const existingKeys = new Set(prev.map(e => `${e.sourceName}::${e.targetName}`));
+            const newEdges = charBatch.edges.filter(e => !existingKeys.has(`${e.sourceName}::${e.targetName}`));
+            return [...prev, ...newEdges];
+          });
           setPendingRemoveEdges(prev => [...prev, ...charBatch.removeEdges]);
           setPendingSnapshots(prev => [...prev, ...charBatch.snapshots]);
           displayContent = displayContent
@@ -1649,8 +1683,8 @@ export function AiChatPanel() {
           }
         }
 
-        // ====== 角色卡更新：解析 ---CHARACTER_UPDATE--- 块 ======
-        const charUpdates = parseCharacterUpdate(filteredAiContent);
+        // ====== 角色卡更新：从 RAW 内容解析 ---CHARACTER_UPDATE--- 块 ======
+        const charUpdates = parseCharacterUpdate(rawAiContent);
         if (charUpdates.length > 0 && currentProject) {
           const allChars = await api.listCharacters(currentProject.id);
           const fields = ["gender", "age", "race", "appearance", "personality", "background", "ability", "style", "interests", "faction", "desire", "fear", "flaw", "arc"];

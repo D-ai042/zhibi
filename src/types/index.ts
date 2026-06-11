@@ -372,6 +372,7 @@ export interface ContextEngineOutput {
     p1: string;
     p2: string;
     p3: string;
+    p4: string;
   };
   totalTokens: number;
   omitted: string[];

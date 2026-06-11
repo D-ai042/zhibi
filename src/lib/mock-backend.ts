@@ -202,6 +202,11 @@ function progressFor(projectId: string, s: MockStore): FrameworkProgress {
   };
 }
 
+/** 暴露缓存清除，供数据导入后刷新用（浏览器模式） */
+export function clearMockStoreCache() {
+  _mockStoreCache = null;
+}
+
 /** 百度 STT：获取 access_token */
 let baiduTokenCache: { token: string; expiresAt: number } | null = null;
 
@@ -474,18 +479,6 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
         updated_at: now,
       };
       s.projects.push(project);
-      const vol: Volume = { id: uid(), project_id: id, title: "第一卷", sort_order: 0 };
-      s.volumes.push(vol);
-      for (let i = 1; i <= 3; i++) {
-        s.chapters.push({
-          id: uid(),
-          volume_id: vol.id,
-          number: i,
-          title: `第${i}章`,
-          status: "beat_ready",
-          word_count: 0,
-        });
-      }
       save(s);
       return project as T;
     }

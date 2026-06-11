@@ -371,7 +371,10 @@ export async function buildProjectContext(input: ContextEngineInput): Promise<Co
     // P3: 角色池（三层调度：活跃完整卡 + 关系 + 全量名册）
     const p3 = assembleP3(allCharacters, currentChapter?.number || 1, allEdges, logStore);
 
-    const layers: Record<string, string> = { p0, p1, p2, p3 };
+    // P4: 前一章正文（后段优先，token 预算弹性分配）
+    const p4 = assembleP4(projectId, currentChapter?.number || 1);
+
+    const layers: Record<string, string> = { p0, p1, p2, p3, p4 };
     const { text: clippedText, omitted } = enforceTokenBudget({ ...layers }, EFFECTIVE_MAX_TOKENS);
 
     // 提取关键词用于过滤
@@ -380,7 +383,7 @@ export async function buildProjectContext(input: ContextEngineInput): Promise<Co
 
     return {
         systemHint: clippedText,
-        layers: { p0, p1, p2, p3 },
+        layers: { p0, p1, p2, p3, p4 },
         totalTokens: estimateTokens(clippedText),
         omitted,
         characters: allCharacters.map((c) => c.name),
@@ -687,14 +690,15 @@ function assembleP1(projectId: string, recentSummaries: ChapterSummary[], curren
 
 // ===== P2：风格指南 =====
 
-function assembleP2(styleGuide: StyleGuide | null, projectId: string): string {
+function assembleP2(styleGuide: StyleGuide | null, _projectId: string): string {
     const parts: string[] = ["━━━━ P2 · 风格指南（写作腔调） ━━━━"];
     if (styleGuide) {
+        // 段落顺序决定裁剪优先级：先写的后裁
+        // 写作红线(最硬) → 叙述风格 → 文笔基调(最软，最先裁)
+        if (styleGuide.writing_rules) parts.push(`写作红线：${styleGuide.writing_rules}`);
         if (styleGuide.narrative_style) parts.push(`叙述风格：${styleGuide.narrative_style}`);
         if (styleGuide.writing_tone) parts.push(`文笔基调：${styleGuide.writing_tone}`);
-        if (styleGuide.writing_rules) parts.push(`写作红线：${styleGuide.writing_rules}`);
     }
-    // voice_style 随 P3 角色池完整卡按需发送，此处不再全量加载
     if (parts.length === 1) parts.push("（风格指南未填写，请到故事圣经模块设定）");
     parts.push("");
     return parts.join("\n");
@@ -860,22 +864,48 @@ function assembleP3(allCharacters: Character[], currentChapterNumber: number, al
     return parts.join("\n");
 }
 
-// ===== token 裁剪（v2.0 按层级优先级） =====
+// ===== P4：前一章正文（后段优先） =====
+
+function assembleP4(projectId: string, currentChapterNumber: number): string {
+    if (currentChapterNumber <= 1) return ""; // 第一章没有前一章
+
+    try {
+        const plotChapters = getJSONSync(`plot-chapters-${projectId}`, [] as any[]);
+        const prevChapter = plotChapters.find((ch: any) => ch.number === currentChapterNumber - 1);
+        if (!prevChapter || !prevChapter.content) return "";
+
+        const body = prevChapter.content.replace(/<[^>]+>/g, '').trim();
+        if (!body) return "";
+
+        const parts: string[] = ["━━━━ P4 · 前一章正文（第" + (currentChapterNumber - 1) + "章「" + (prevChapter.title || "") + "」）━━━━"];
+
+        // 全文直接放入，token 预算层会按需从头部裁切（保留后段）
+        parts.push(body);
+
+        return parts.join("\n");
+    } catch {
+        return "";
+    }
+}
+
+// ===== token 裁剪（v3.0 三明治布局） =====
 
 /** 各层 Token 预算 */
 const LAYER_BUDGET: Record<string, { max: number; fixed: boolean }> = {
-    p0: { max: 2_000, fixed: true },   // 铁则，不可裁
-    p1: { max: 15_000, fixed: false },  // 剧情走向
-    p2: { max: 1_000, fixed: false },   // 风格，可压缩
-    p3: { max: 8_000, fixed: false },   // 角色池
+    p0: { max: 1_000, fixed: false },   // 世界铁则，仅规则
+    p1: { max: 12_000, fixed: false },   // 剧情走向
+    p2: { max: 1_000, fixed: false },    // 风格指南，最先裁
+    p3: { max: 8_000, fixed: false },    // 角色池
+    p4: { max: 10_000, fixed: false },   // 前一章正文，最后裁
 };
 
-/** 裁剪顺序（优先级从低到高，先裁后面的） */
-const LAYER_CULL_ORDER = ["p3", "p2", "p1"];
+/** 裁剪顺序：P2(风格) → P3(角色) → P0(铁则) → P1(剧情)，P4 最后裁 */
+const LAYER_CULL_ORDER = ["p2", "p3", "p0", "p1"];
 
 /**
- * 按层级优先级裁剪，确保 P0/P1/P3 不被裁剪。
- * P6 → P5 → P4 → P2 依次压缩，P0/P1/P3 固定保留。
+ * 三明治布局 + 按层裁剪。
+ * 输出顺序：P4(开头) → P0 → P3 → P2 → P1(结尾)
+ * 裁剪顺序：P2 → P3 → P0 → P1（P4 最后裁，从头部切保留后段）
  */
 function enforceTokenBudget(layers: Record<string, string>, _maxTokens: number): { text: string; omitted: string[] } {
     const omitted: string[] = [];
@@ -888,7 +918,7 @@ function enforceTokenBudget(layers: Record<string, string>, _maxTokens: number):
 
     const totalTokens = Object.values(tokenMap).reduce((a, b) => a + b, 0);
     if (totalTokens <= _maxTokens) {
-        return { text: Object.values(layers).join("\n\n"), omitted };
+        return { text: sandwichJoin(layers), omitted };
     }
 
     // 从最低优先级层开始裁
@@ -896,9 +926,21 @@ function enforceTokenBudget(layers: Record<string, string>, _maxTokens: number):
         if (!layers[key]) continue;
         const budget = LAYER_BUDGET[key];
         const currentTokens = tokenMap[key];
-        if (currentTokens <= budget.max) continue; // 预算内不裁
+        if (currentTokens <= budget.max) continue;
 
-        // 超出预算：按段落从后往前砍到 budget.max
+        // P4 特殊处理：从头部裁掉（保留后段 = 最近的写作内容）
+        if (key === "p4") {
+            const body = layers[key];
+            const budgetRatio = budget.max / currentTokens;
+            const keepChars = Math.floor(body.length * budgetRatio);
+            const trimmed = body.slice(-keepChars);
+            omitted.push(`[p4] 前一章正文从头部裁切 ${body.length - keepChars} 字`);
+            layers[key] = trimmed;
+            tokenMap[key] = estimateTokens(trimmed);
+            continue;
+        }
+
+        // 其他层：从尾部砍到 budget.max
         const paragraphs = layers[key].split("\n\n");
         const kept: string[] = [];
         let keptTokens = 0;
@@ -928,7 +970,13 @@ function enforceTokenBudget(layers: Record<string, string>, _maxTokens: number):
     }
 
     return {
-        text: Object.values(layers).filter(Boolean).join("\n\n"),
+        text: sandwichJoin(layers),
         omitted,
     };
+}
+
+/** 三明治输出：P4(开头) → P0 → P3 → P2 → P1(结尾) */
+function sandwichJoin(layers: Record<string, string>): string {
+    const order = ["p4", "p0", "p3", "p2", "p1"];
+    return order.map(k => layers[k]).filter(Boolean).join("\n\n");
 }

@@ -5,7 +5,7 @@ import { fileURLToPath, URL } from "node:url";
 export default defineConfig({
   plugins: [react()],
   define: {
-    __APP_VERSION__: JSON.stringify(process.env.npm_package_version || "0.2.4"),
+    __APP_VERSION__: JSON.stringify(process.env.npm_package_version || "0.3.2"),
   },
   resolve: {
     alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) },
