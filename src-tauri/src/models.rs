@@ -50,17 +50,24 @@ pub struct ApiConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct SttConfig {
-    #[serde(default)]
-    pub provider: String,
-    #[serde(default)]
+pub struct ProviderSttConfig {
+    #[serde(default, alias = "apiKey")]
     pub api_key: String,
-    #[serde(default)]
+    #[serde(default, alias = "secretKey")]
     pub secret_key: String,
-    #[serde(default)]
+    #[serde(default, alias = "baseUrl")]
     pub base_url: String,
     #[serde(default)]
     pub model: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SttConfig {
+    #[serde(default)]
+    pub active_provider: String,
+    #[serde(default)]
+    pub providers: std::collections::HashMap<String, ProviderSttConfig>,
     #[serde(default)]
     pub enabled: bool,
 }

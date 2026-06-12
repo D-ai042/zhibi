@@ -1,5 +1,5 @@
 use crate::db::{open_project_db, with_conn, DbState};
-use crate::models::{ApiConfig, FrameworkProgress, Project, SttConfig};
+use crate::models::{ApiConfig, FrameworkProgress, Project, ProviderSttConfig, SttConfig};
 use chrono::Utc;
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
@@ -21,12 +21,58 @@ fn config_path() -> PathBuf {
     crate::db::data_dir().join("config.json")
 }
 
-fn load_config() -> ApiConfig {
+/// 从 JSON value 解析 STT 配置：优先新多 provider 格式，失败则迁移旧扁平格式
+fn parse_stt_config(v: &serde_json::Value) -> SttConfig {
+    // 尝试新多 provider 格式
+    if let Ok(cfg) = serde_json::from_value::<SttConfig>(v.clone()) {
+        if !cfg.providers.is_empty() || !cfg.active_provider.is_empty() {
+            return cfg;
+        }
+    }
+    // 迁移旧扁平格式
+    migrate_old_stt(v)
+}
+
+/// 将旧扁平 STT 格式迁移为新多 provider 格式
+fn migrate_old_stt(v: &serde_json::Value) -> SttConfig {
+    let provider = v["provider"].as_str()
+        .or(v["activeProvider"].as_str())
+        .unwrap_or("openai");
+    let api_key = v["api_key"].as_str().or(v["apiKey"].as_str()).unwrap_or("");
+    let secret_key = v["secret_key"].as_str().or(v["secretKey"].as_str()).unwrap_or("");
+    let base_url = v["base_url"].as_str().or(v["baseUrl"].as_str()).unwrap_or("");
+    let model = v["model"].as_str().unwrap_or("");
+    let enabled = v["enabled"].as_bool().unwrap_or(false);
+
+    let mut providers = HashMap::new();
+    providers.insert(provider.to_string(), ProviderSttConfig {
+        api_key: api_key.to_string(),
+        secret_key: secret_key.to_string(),
+        base_url: base_url.to_string(),
+        model: model.to_string(),
+    });
+
+    SttConfig {
+        active_provider: provider.to_string(),
+        providers,
+        enabled,
+    }
+}
+
+pub(crate) fn load_config() -> ApiConfig {
     let path = config_path();
     if path.exists() {
         if let Ok(raw) = std::fs::read_to_string(&path) {
             // Try snake_case first, then camelCase for backward compat
-            if let Ok(cfg) = serde_json::from_str::<ApiConfig>(&raw) {
+            if let Ok(mut cfg) = serde_json::from_str::<ApiConfig>(&raw) {
+                // STT migration: if providers is empty, try to parse old flat format
+                if cfg.stt.providers.is_empty() {
+                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&raw) {
+                        if let Some(stt_val) = val.get("stt") {
+                            cfg.stt = parse_stt_config(stt_val);
+                        }
+                    }
+                }
                 return cfg;
             }
             // Try camelCase format
@@ -45,19 +91,7 @@ fn load_config() -> ApiConfig {
                         .and_then(|v| serde_json::from_value(v.clone()).ok())
                         .unwrap_or_default(),
                     stt: val.get("stt")
-                        .and_then(|v| {
-                            // Accept both camelCase and snake_case
-                            serde_json::from_value(v.clone()).ok().or_else(|| {
-                                Some(SttConfig {
-                                    provider: v["provider"].as_str().or(v["apiKey"].as_str().map(|_| "openai")).unwrap_or("openai").to_string(),
-                                    api_key: v["api_key"].as_str().or(v["apiKey"].as_str()).unwrap_or("").to_string(),
-                                    secret_key: v["secret_key"].as_str().or(v["secretKey"].as_str()).unwrap_or("").to_string(),
-                                    base_url: v["base_url"].as_str().or(v["baseUrl"].as_str()).unwrap_or("").to_string(),
-                                    model: v["model"].as_str().unwrap_or("").to_string(),
-                                    enabled: v["enabled"].as_bool().unwrap_or(false),
-                                })
-                            })
-                        })
+                        .map(|v| parse_stt_config(v))
                         .unwrap_or_default(),
                 };
             }

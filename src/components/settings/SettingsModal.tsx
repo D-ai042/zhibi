@@ -115,7 +115,6 @@ export function SettingsModal() {
         }
         setSttProviders(loaded);
         // 提取自定义 STT 厂商
-        const allSttNames = new Set([...STT_PRESET_NAMES, ...Object.keys(loaded)]);
         const custom: { name: string }[] = [];
         for (const name of Object.keys(loaded)) {
           if (!STT_PRESET_NAMES.includes(name)) custom.push({ name });
@@ -132,16 +131,14 @@ export function SettingsModal() {
     setSaveMsg("");
     try {
       for (const p of PROVIDERS) {
-        const k = keys[p.name];
+        const k = keys[p.name] || "";
         const url = baseUrls[p.name] || p.base;
-        if (k?.trim()) {
-          await api.setApiConfig(url, apiConfig?.api_model || "deepseek-chat", k, p.name);
-        }
+        await api.setApiConfig(url, apiConfig?.api_model || "deepseek-chat", k, p.name);
       }
       // 保存自定义厂商
       for (const cp of customProviders) {
-        if (cp.name.trim() && cp.key.trim()) {
-          await api.setApiConfig(cp.baseUrl || "https://api.openai.com/v1", apiConfig?.api_model || "deepseek-chat", cp.key, cp.name.trim());
+        if (cp.name.trim()) {
+          await api.setApiConfig(cp.baseUrl || "https://api.openai.com/v1", apiConfig?.api_model || "deepseek-chat", cp.key || "", cp.name.trim());
         }
         // 保存该厂商的模型列表
         if (cp.name.trim() && cp.models.length > 0) {
@@ -149,11 +146,10 @@ export function SettingsModal() {
         }
       }
       // 保存 STT 配置（多 provider）
-      const hasAnyKey = Object.values(sttProviders).some(p => p.api_key.trim() || p.secret_key.trim());
       const sttConfig: SttConfig = {
         activeProvider: sttActiveProvider,
         providers: sttProviders,
-        enabled: hasAnyKey || sttEnabled,
+        enabled: sttEnabled,
       };
       await api.setSttConfig(sttConfig);
       const c = await api.getApiConfig();

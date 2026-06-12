@@ -554,9 +554,9 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
       // 全局设置
       s.apiConfig.api_base_url = (args?.baseUrl as string) || s.apiConfig.api_base_url;
       s.apiConfig.api_model = (args?.model as string) || s.apiConfig.api_model;
-      if (args?.apiKey) s.apiConfig.api_key = args.apiKey as string;
-      if (args?.providerName && args?.apiKey) {
-        s.apiConfig.provider_keys[args.providerName as string] = args.apiKey as string;
+      if (args?.apiKey !== undefined) s.apiConfig.api_key = args.apiKey as string;
+      if (args?.providerName) {
+        s.apiConfig.provider_keys[args.providerName as string] = (args?.apiKey ?? "") as string;
       }
       if (args?.providerName && args?.baseUrl) {
         s.apiConfig.provider_base_urls[args.providerName as string] = args.baseUrl as string;

@@ -1,38 +1,43 @@
-use crate::models::{AiRequest, AiResponse};
+use crate::commands::load_config;
+use crate::models::{AiRequest, AiResponse, ApiConfig};
 use serde_json::json;
-use std::path::PathBuf;
 
-fn config_path() -> PathBuf {
-    crate::db::data_dir().join("config.json")
-}
-
-fn load_ai_config() -> (String, String, String) {
-    // Returns (base_url, model, api_key)
-    let path = config_path();
-    if path.exists() {
-        if let Ok(raw) = std::fs::read_to_string(&path) {
-            if let Ok(cfg) = serde_json::from_str::<serde_json::Value>(&raw) {
-                let base = cfg["api_base_url"].as_str().unwrap_or("https://api.deepseek.com").to_string();
-                let model = cfg["api_model"].as_str().unwrap_or("deepseek-chat").to_string();
-                let mut key = String::new();
-                // Try snake_case first
-                if let Some(pks) = cfg["provider_keys"].as_object() {
-                    for (_provider, v) in pks {
-                        if let Some(k) = v.as_str() {
-                            if !k.is_empty() { key = k.to_string(); break; }
-                        }
-                    }
-                }
-                return (base, model, key);
-            }
+/// 根据模型名匹配到厂商，优先用该厂商的专属 base_url 和 key
+fn find_provider_for_model(model: &str, cfg: &ApiConfig) -> Option<String> {
+    // 1. 优先从 provider_models 匹配（自定义厂商的模型列表）
+    for (provider, models) in &cfg.provider_models {
+        if models.contains(&model.to_string()) {
+            return Some(provider.clone());
         }
     }
-    ("https://api.deepseek.com".into(), "deepseek-chat".into(), String::new())
+    // 2. 模型名匹配厂商名（如 deepseek-v4-flash → DeepSeek）
+    let model_lower = model.to_lowercase();
+    for provider in cfg.provider_keys.keys() {
+        if model_lower.starts_with(&provider.to_lowercase()) {
+            return Some(provider.clone());
+        }
+    }
+    // 3. 只有一个厂商时直接用
+    if cfg.provider_keys.len() == 1 {
+        return cfg.provider_keys.keys().next().cloned();
+    }
+    None
 }
 
 #[tauri::command]
 pub async fn ai_complete(request: AiRequest) -> Result<AiResponse, String> {
-    let (base, model, key) = load_ai_config();
+    let cfg = load_config();
+    let model = cfg.api_model.clone();
+
+    // 匹配厂商，优先使用厂商专属配置
+    let (base, key) = if let Some(ref provider) = find_provider_for_model(&model, &cfg) {
+        let key = cfg.provider_keys.get(provider).cloned().unwrap_or_default();
+        let base = cfg.provider_base_urls.get(provider).cloned().unwrap_or(cfg.api_base_url.clone());
+        (base, key)
+    } else {
+        let key = cfg.provider_keys.values().find(|k| !k.is_empty()).cloned().unwrap_or_default();
+        (cfg.api_base_url.clone(), key)
+    };
     if key.is_empty() {
         return Ok(AiResponse {
             content: String::new(),
@@ -134,17 +139,8 @@ pub async fn stt_transcribe(audio_base64: String) -> Result<serde_json::Value, S
         return Ok(json!({"text": ""}));
     }
 
-    let (_, _, _) = load_ai_config();
-    let path = config_path();
-    let stt_cfg = if path.exists() {
-        std::fs::read_to_string(&path).ok()
-            .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
-            .and_then(|cfg| cfg.get("stt").cloned())
-    } else {
-        None
-    };
-
-    let stt = stt_cfg.unwrap_or(json!({}));
+    let cfg = load_config();
+    let stt = serde_json::to_value(cfg.stt).unwrap_or(json!({}));
     let enabled = stt["enabled"].as_bool().unwrap_or(false);
     let active_provider = stt["activeProvider"].as_str().or_else(|| stt["provider"].as_str()).unwrap_or("openai");
     let providers = stt["providers"].as_object().cloned().unwrap_or_default();
