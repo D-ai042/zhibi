@@ -3,11 +3,7 @@ use serde_json::json;
 use std::path::PathBuf;
 
 fn config_path() -> PathBuf {
-    let exe_dir = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-        .unwrap_or_else(|| PathBuf::from("."));
-    exe_dir.join("data").join("config.json")
+    crate::db::data_dir().join("config.json")
 }
 
 fn load_ai_config() -> (String, String, String) {

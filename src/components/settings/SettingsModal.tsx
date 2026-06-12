@@ -717,7 +717,9 @@ function SnapshotManager() {
 function DataMigration() {
   const [msg, setMsg] = useState("");
   const [importing, setImporting] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const currentProject = useAppStore(s => s.currentProject);
 
   /** 判断 key 是否属于应用数据前缀 */
   const isAppKey = (key: string): boolean => {
@@ -736,15 +738,21 @@ function DataMigration() {
     );
   };
 
-  /** 收集所有应用相关 key（localStorage + EXE 模式额外从 SQLite 收集） */
-  const collectKeys = useCallback(async (): Promise<{ key: string; value: string }[]> => {
+  /** 判断 key 是否属于指定项目（pid 为 null/undef 时不过滤） */
+  const keyBelongsToProject = (key: string, pid: string): boolean => {
+    if (key === "novel-workbench-mock") return true;
+    return key.endsWith(`-${pid}`);
+  };
+
+  /** 收集应用相关 key，可选按 projectId 过滤 */
+  const collectKeys = useCallback(async (pid?: string | null): Promise<{ key: string; value: string }[]> => {
     const seen = new Set<string>();
     const keys: { key: string; value: string }[] = [];
 
-    // 1. 从 localStorage 收集
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
       if (!key || !isAppKey(key)) continue;
+      if (pid && !keyBelongsToProject(key, pid)) continue;
       const value = localStorage.getItem(key);
       if (value) {
         seen.add(key);
@@ -752,14 +760,13 @@ function DataMigration() {
       }
     }
 
-    // 2. EXE 模式：额外从 SQLite app_settings 收集 localStorage 没有的 key
     if (isTauri()) {
       try {
         const sqliteKeys = await api.listAppSettings();
         for (const { key, value } of sqliteKeys) {
-          if (isAppKey(key) && !seen.has(key)) {
-            keys.push({ key, value });
-          }
+          if (!isAppKey(key) || seen.has(key)) continue;
+          if (pid && !keyBelongsToProject(key, pid)) continue;
+          keys.push({ key, value });
         }
       } catch (e) {
         console.warn("[DataMigration] 读取 SQLite 设置失败:", e);
@@ -769,71 +776,83 @@ function DataMigration() {
     return keys;
   }, []);
 
-  /** 导出全部数据为 JSON 文件 */
-  const handleExport = useCallback(async () => {
-    const collected = await collectKeys();
-    const data: Record<string, unknown> = {
-      version: "2.0",
-      exportedAt: new Date().toISOString(),
-      keys: collected,
-    };
+  /** 通用导出（allBooks：true=全部，false=仅当前作品） */
+  const doExport = useCallback(async (allBooks: boolean) => {
+    setExporting(true);
+    setMsg("");
+    try {
+      const pid = allBooks ? null : currentProject?.id;
+      if (!allBooks && !pid) {
+        setMsg("❌ 请先打开一个作品才能导出当前作品");
+        setExporting(false);
+        return;
+      }
 
-    // EXE 模式：额外导出项目核心数据（SQLite 项目表）
-    if (isTauri()) {
+      const collected = await collectKeys(pid);
+      const data: Record<string, unknown> = {
+        version: "2.0",
+        exportedAt: new Date().toISOString(),
+        exportMode: allBooks ? "all" : "current",
+        keys: collected,
+      };
+
       try {
-        const projects = await api.getProjects();
+        const projects = allBooks ? await api.getProjects() : (currentProject ? [currentProject] : []);
         const projectsData: Record<string, unknown>[] = [];
         for (const p of projects) {
-          const projectData = await api.exportProject(p.id);
-          projectsData.push(projectData);
+          try {
+            const projectData = await api.exportProject(p.id);
+            projectsData.push(projectData);
+          } catch (e) {
+            console.warn(`[DataMigration] 导出项目 ${p.name} 失败:`, e);
+          }
         }
         data.projectsData = projectsData;
       } catch (e) {
         console.warn("[DataMigration] 读取项目数据失败:", e);
       }
+
+      const jsonStr = JSON.stringify(data, null, 2);
+      const label = allBooks ? "全部" : (currentProject?.name || "当前作品");
+      const defaultFilename = `执笔数据备份_${label}_${new Date().toLocaleDateString("zh-CN").replace(/\//g, "-")}.json`;
+
+      try {
+        const { save } = await import("@tauri-apps/plugin-dialog");
+        const { invoke } = await import("@tauri-apps/api/core");
+        const filePath = await save({
+          defaultPath: defaultFilename,
+          filters: [{ name: "JSON 文件", extensions: ["json"] }],
+        });
+        if (!filePath) { setExporting(false); return; }
+        const base64 = btoa(unescape(encodeURIComponent(jsonStr)));
+        await invoke("save_export_file", {
+          projectId: pid || "",
+          filename: defaultFilename,
+          dataBase64: base64,
+          filePath,
+        });
+        setMsg(`✅ 数据已导出：${filePath}`);
+        setTimeout(() => setMsg(""), 3000);
+        setExporting(false);
+        return;
+      } catch {
+        // Tauri 不可用，降级到浏览器下载
+      }
+
+      const blob = new Blob([jsonStr], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = defaultFilename;
+      a.click();
+      URL.revokeObjectURL(url);
+      setMsg("✅ 数据已导出");
+      setTimeout(() => setMsg(""), 2000);
+    } catch (e) {
+      setMsg(`❌ 导出失败：${e instanceof Error ? e.message : "未知错误"}`);
     }
-
-    const jsonStr = JSON.stringify(data, null, 2);
-    const defaultFilename = `执笔数据备份_${new Date().toLocaleDateString("zh-CN").replace(/\//g, "-")}.json`;
-
-    // 优先尝试 Tauri 原生保存对话框
-    try {
-      const { save } = await import("@tauri-apps/plugin-dialog");
-      const { invoke } = await import("@tauri-apps/api/core");
-
-      const filePath = await save({
-        defaultPath: defaultFilename,
-        filters: [{ name: "JSON 文件", extensions: ["json"] }],
-      });
-      if (!filePath) return; // 用户取消
-
-      // JSON 字符串 → base64
-      const base64 = btoa(unescape(encodeURIComponent(jsonStr)));
-
-      await invoke("save_export_file", {
-        projectId: "",
-        filename: defaultFilename,
-        dataBase64: base64,
-        filePath,
-      });
-      setMsg(`✅ 数据已导出：${filePath}`);
-      setTimeout(() => setMsg(""), 3000);
-      return;
-    } catch {
-      // Tauri 不可用，降级到浏览器下载
-    }
-
-    // 浏览器降级
-    const blob = new Blob([jsonStr], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = defaultFilename;
-    a.click();
-    URL.revokeObjectURL(url);
-    setMsg("✅ 数据已导出");
-    setTimeout(() => setMsg(""), 2000);
-  }, [collectKeys]);
+    setExporting(false);
+  }, [collectKeys, currentProject]);
 
   /** 写入一条 key-value 到所有存储层（localStorage + EXE 模式额外写入 SQLite） */
   const writeKey = useCallback(async (key: string, value: string) => {
@@ -864,15 +883,79 @@ function DataMigration() {
         return;
       }
 
-      // ★ 先恢复项目核心数据（必要时会写 mock store）
+      // ★ 始终恢复项目核心数据（浏览器 localStorage + EXE SQLite）
       let projectCount = 0;
-      if (data.projectsData && Array.isArray(data.projectsData) && isTauri()) {
-        for (const projectData of data.projectsData) {
+      const importErrors: string[] = [];
+
+      // 解析要恢复的项目数据列表
+      let projectsToImport: Record<string, unknown>[] = [];
+      if (data.projectsData && Array.isArray(data.projectsData) && data.projectsData.length > 0) {
+        projectsToImport = data.projectsData;
+      } else {
+        // ★ 回退：旧版导出没有 projectsData，尝试从 novel-workbench-mock 键提取
+        const mockKey = data.keys?.find((k: { key: string }) => k.key === "novel-workbench-mock");
+        if (mockKey) {
+          try {
+            const mockStore = JSON.parse(mockKey.value);
+            if (mockStore.projects && Array.isArray(mockStore.projects) && mockStore.projects.length > 0) {
+              setMsg("⚠️ 旧版备份格式，正在重建项目数据...");
+              // 为每个项目重建 export_project 格式的数据
+              for (const proj of mockStore.projects) {
+                const pid = proj.id;
+                const projData: Record<string, unknown> = {
+                  project: proj,
+                  worldTerms: [],
+                  characters: [],
+                  relationships: [],
+                  plotEvents: [],
+                  timelineNodes: [],
+                  volumes: [],
+                  chapters: [],
+                  beatCards: [],
+                  chapterContents: [],
+                };
+                // 从 mockStore 中提取属于该项目的所有数据
+                // ★ mockStore 内部键名映射（前端用不同名称）
+                const mockKeyMap: Record<string, string> = {
+                  worldTerms: "worldTerms",
+                  characters: "characters",
+                  relationships: "edges",   // mock 内部叫 edges
+                  plotEvents: "plotEvents",
+                  timelineNodes: "timelineNodes",
+                  volumes: "volumes",
+                };
+                for (const key of Object.keys(mockKeyMap)) {
+                  const stateKey = mockKeyMap[key];
+                  const arr = mockStore[stateKey] || [];
+                  projData[key] = arr.filter((item: any) => item.project_id === pid);
+                }
+                // 处理 chapters, beatCards, chapterContents
+                const vols = (mockStore.volumes || []).filter((v: any) => v.project_id === pid);
+                const volIds = new Set(vols.map((v: any) => v.id));
+                projData.volumes = vols;
+                const chs = (mockStore.chapters || []).filter((c: any) => volIds.has(c.volume_id));
+                projData.chapters = chs;
+                const chIds = new Set(chs.map((c: any) => c.id));
+                projData.beatCards = (mockStore.beatCards || []).filter((b: any) => chIds.has(b.chapter_id));
+                projData.chapterContents = (mockStore.chapterContents || []).filter((cc: any) => chIds.has(cc.chapter_id));
+                projectsToImport.push(projData);
+              }
+            }
+          } catch (e) {
+            console.warn("[DataMigration] 解析旧版 mock 数据失败:", e);
+          }
+        }
+      }
+
+      if (projectsToImport.length > 0) {
+        for (const projectData of projectsToImport) {
           if (projectData && typeof projectData === 'object' && (projectData as Record<string, unknown>).project) {
             try {
               await api.importProject(projectData as Record<string, unknown>);
               projectCount++;
             } catch (e) {
+              const errMsg = e instanceof Error ? e.message : String(e);
+              importErrors.push(errMsg);
               console.warn("[DataMigration] 恢复项目失败:", e);
             }
           }
@@ -889,7 +972,7 @@ function DataMigration() {
       }
 
       // 导入后刷新项目列表（自动同步到前端）
-      if (projectCount > 0) {
+      if (projectCount > 0 || projectsToImport.length > 0) {
         try {
           const projects = await api.getProjects();
           useAppStore.getState().setProjects(projects);
@@ -911,7 +994,8 @@ function DataMigration() {
         }
       }
 
-      setMsg(`✅ 成功导入 ${written} 项配置，恢复 ${projectCount} 个项目。欢迎页列表已刷新。`);
+      const errDetail = importErrors.length > 0 ? `\n⚠️ ${importErrors.length} 个项目恢复失败：${importErrors.join("; ")}` : "";
+      setMsg(`✅ 成功导入 ${written} 项配置，恢复 ${projectCount} 个项目。欢迎页列表已刷新。${errDetail}`);
     } catch (e) {
       setMsg(`❌ 导入失败：${e instanceof Error ? e.message : "文件格式错误"}`);
     }
@@ -925,14 +1009,25 @@ function DataMigration() {
       <div className="rounded-lg border border-slate-200 bg-white p-4">
         <h3 className="text-sm font-semibold text-slate-700 mb-1">导出数据</h3>
         <p className="text-xs text-slate-500 mb-3">
-          将所有作品数据（项目、大纲、角色、正文、素材、灵感等）导出为 JSON 文件，
-          换电脑后可通过「导入」恢复。
+          导出作品数据（项目、大纲、角色、正文、素材、灵感等）为 JSON 文件，换电脑后可通过「导入」恢复。
         </p>
-        <button type="button" onClick={handleExport}
-          className="flex items-center gap-1.5 rounded-lg bg-amber-500 px-4 py-2 text-sm text-white hover:bg-amber-600">
-          <Download size={15} />
-          导出全部数据
-        </button>
+        <div className="flex items-center gap-2">
+          <button type="button"
+            disabled={exporting}
+            onClick={() => doExport(true)}
+            className="flex items-center gap-1.5 rounded-lg bg-amber-500 px-3 py-2 text-sm text-white hover:bg-amber-600 disabled:opacity-50">
+            <Download size={15} />
+            迁移全部书本
+          </button>
+          <button type="button"
+            disabled={exporting || !currentProject}
+            onClick={() => doExport(false)}
+            className="flex items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-700 hover:bg-amber-100 disabled:opacity-40"
+            title={!currentProject ? "请先打开一个作品" : `导出「${currentProject.name}」的数据`}>
+            <Download size={15} />
+            迁移当前作品
+          </button>
+        </div>
       </div>
 
       <div className="rounded-lg border border-slate-200 bg-white p-4">

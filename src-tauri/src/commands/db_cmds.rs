@@ -273,7 +273,11 @@ pub fn get_framework_progress(project_id: String, state: State<'_, DbState>) -> 
         let events: i64 = conn.query_row("SELECT COUNT(*) FROM plot_events WHERE project_id=?1", params![pid], |r| r.get(0))?;
         let chars: i64 = conn.query_row("SELECT COUNT(*) FROM characters WHERE project_id=?1", params![pid], |r| r.get(0))?;
         let terms: i64 = conn.query_row("SELECT COUNT(*) FROM world_terms WHERE project_id=?1", params![pid], |r| r.get(0))?;
-        let beats: i64 = conn.query_row("SELECT COUNT(*) FROM beat_cards", [], |r| r.get(0))?;
+        let beats: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM beat_cards bc JOIN chapters c ON bc.chapter_id = c.id JOIN volumes v ON c.volume_id = v.id WHERE v.project_id=?1",
+            params![pid],
+            |r| r.get(0),
+        )?;
         let chaps: i64 = conn.query_row(
             "SELECT COUNT(*) FROM chapters c JOIN volumes v ON c.volume_id = v.id WHERE v.project_id=?1",
             params![pid],
@@ -302,7 +306,7 @@ pub fn lock_framework(project_id: String, state: State<'_, DbState>) -> Result<(
             "UPDATE projects SET stage='framework_locked', framework_locked_at=?1, updated_at=?1 WHERE id=?2",
             params![t, project_id],
         )?;
-        conn.execute("UPDATE timeline_nodes SET is_locked=1", [])?;
+        conn.execute("UPDATE timeline_nodes SET is_locked=1 WHERE project_id=?1", params![project_id])?;
         Ok(())
     })
     .map_err(|e| e.to_string())
@@ -544,6 +548,8 @@ pub struct CharacterIn {
     pub layout_x: f64,
     pub layout_y: f64,
     pub is_locked: bool,
+    #[serde(default)]
+    pub snapshots_json: String,
 }
 
 #[tauri::command]
@@ -551,11 +557,16 @@ pub fn list_characters(project_id: String, state: State<'_, DbState>) -> Result<
     with_conn(&state, |conn| {
         let mut stmt = conn.prepare(
             "SELECT id, project_id, name, faction, weight, desire, fear, flaw, arc, voice_style, \
-                    ending_node_id, avatar_path, layout_x, layout_y, is_locked, \
+                    ending_node_id, avatar_path, layout_x, layout_y, is_locked, snapshots_json, \
                     gender, age, race, appearance, personality, background, ability, style, interests \
              FROM characters WHERE project_id=?1"
         )?;
         let rows = stmt.query_map(params![project_id], |row| {
+            let snap_raw: Option<String> = row.get(15)?;
+            let snapshots_val = match snap_raw {
+                Some(s) if !s.is_empty() => serde_json::from_str(&s).unwrap_or(Value::Array(vec![])),
+                _ => Value::Array(vec![]),
+            };
             Ok(serde_json::json!({
                 "id": row.get::<_, String>(0)?,
                 "project_id": row.get::<_, String>(1)?,
@@ -572,15 +583,16 @@ pub fn list_characters(project_id: String, state: State<'_, DbState>) -> Result<
                 "layout_x": row.get::<_, f64>(12)?,
                 "layout_y": row.get::<_, f64>(13)?,
                 "is_locked": row.get::<_, i32>(14)? != 0,
-                "gender": row.get::<_, String>(15)?,
-                "age": row.get::<_, String>(16)?,
-                "race": row.get::<_, String>(17)?,
-                "appearance": row.get::<_, String>(18)?,
-                "personality": row.get::<_, String>(19)?,
-                "background": row.get::<_, String>(20)?,
-                "ability": row.get::<_, String>(21)?,
-                "style": row.get::<_, String>(22)?,
-                "interests": row.get::<_, String>(23)?,
+                "snapshots": snapshots_val,
+                "gender": row.get::<_, String>(16)?,
+                "age": row.get::<_, String>(17)?,
+                "race": row.get::<_, String>(18)?,
+                "appearance": row.get::<_, String>(19)?,
+                "personality": row.get::<_, String>(20)?,
+                "background": row.get::<_, String>(21)?,
+                "ability": row.get::<_, String>(22)?,
+                "style": row.get::<_, String>(23)?,
+                "interests": row.get::<_, String>(24)?,
             }))
         })?;
         Ok(Value::Array(rows.filter_map(|r| r.ok()).collect()))
@@ -594,9 +606,9 @@ pub fn save_character(character: CharacterIn, state: State<'_, DbState>) -> Resu
         conn.execute(
             "INSERT OR REPLACE INTO characters \
              (id, project_id, name, faction, weight, desire, fear, flaw, arc, voice_style, \
-              ending_node_id, avatar_path, layout_x, layout_y, is_locked, \
+              ending_node_id, avatar_path, layout_x, layout_y, is_locked, snapshots_json, \
               gender, age, race, appearance, personality, background, ability, style, interests) \
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24)",
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25)",
             params![
                 character.id,
                 character.project_id,
@@ -613,6 +625,7 @@ pub fn save_character(character: CharacterIn, state: State<'_, DbState>) -> Resu
                 character.layout_x,
                 character.layout_y,
                 character.is_locked as i32,
+                character.snapshots_json,
                 character.gender,
                 character.age,
                 character.race,
@@ -1031,13 +1044,19 @@ pub fn import_project(project_data: serde_json::Value, state: State<'_, DbState>
         // locked_fields 没有 project_id 关联，暂不清理
 
         // 插入或替换 project
+        let locked_at_val: Option<String> = project.get("framework_locked_at").and_then(|v| match v {
+            serde_json::Value::Null => None,
+            serde_json::Value::String(s) if s.is_empty() => None,
+            serde_json::Value::String(s) => Some(s.clone()),
+            other => other.as_str().map(String::from),
+        });
         conn.execute(
             "INSERT OR REPLACE INTO projects (id, name, stage, framework_locked_at, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![
                 project_id,
                 project_name,
                 project.get("stage").and_then(|v| v.as_str()).unwrap_or("ideation"),
-                project.get("framework_locked_at").and_then(|v| v.as_str()).unwrap_or(""),
+                locked_at_val,
                 project.get("created_at").and_then(|v| v.as_str()).unwrap_or(""),
                 project.get("updated_at").and_then(|v| v.as_str()).unwrap_or(""),
             ],
@@ -1056,7 +1075,33 @@ pub fn import_project(project_data: serde_json::Value, state: State<'_, DbState>
 
         /// 从 serde_json::Value 中提取 i64 值
         fn json_i64(val: &serde_json::Value, field: &str) -> i64 {
-            val.get(field).and_then(|v| v.as_i64()).unwrap_or(0)
+            val.get(field).and_then(|v| match v {
+                serde_json::Value::Bool(b) => Some(*b as i64),
+                serde_json::Value::String(s) => s.parse().ok(),
+                _ => v.as_i64(),
+            }).unwrap_or(0)
+        }
+
+        /// 从 serde_json::Value 提取 JSON 字符串字段，兼容 _json 后缀（"forbidden_json":"[...]"）
+        /// 和纯数组字段（"forbidden":[...]），以便导入浏览器导出的数据
+        fn json_str_or_arr(val: &serde_json::Value, json_field: &str) -> String {
+            if let Some(v) = val.get(json_field) {
+                match v {
+                    serde_json::Value::String(s) => return s.clone(),
+                    _ => return v.to_string(),
+                }
+            }
+            let arr_field = json_field.strip_suffix("_json").unwrap_or(json_field);
+            if let Some(v) = val.get(arr_field) {
+                if v.is_array() {
+                    return v.to_string();
+                }
+                if let Some(s) = v.as_str() {
+                    return s.to_string();
+                }
+                return v.to_string();
+            }
+            String::new()
         }
 
         // 批量插入各表（列名需与 schema.sql 一致）
@@ -1067,7 +1112,7 @@ pub fn import_project(project_data: serde_json::Value, state: State<'_, DbState>
                     params![
                         json_str(item, "id"), json_str(item, "project_id"), json_str(item, "term_type"),
                         json_str(item, "title"), json_str(item, "one_liner"), json_str(item, "detail"),
-                        json_i64(item, "ring_level"), json_str(item, "forbidden_json"),
+                        json_i64(item, "ring_level"), json_str_or_arr(item, "forbidden_json"),
                         json_i64(item, "is_locked"), json_str(item, "layout_x"), json_str(item, "layout_y"),
                     ],
                 ).ok();
@@ -1078,7 +1123,7 @@ pub fn import_project(project_data: serde_json::Value, state: State<'_, DbState>
         if let Some(items) = project_data.get("characters").and_then(|v| v.as_array()) {
             for item in items {
                 conn.execute(
-                    "INSERT OR REPLACE INTO characters (id, project_id, name, gender, age, race, appearance, personality, background, ability, style, interests, faction, weight, desire, fear, flaw, arc, voice_style, ending_node_id, avatar_path, layout_x, layout_y, is_locked) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24)",
+                    "INSERT OR REPLACE INTO characters (id, project_id, name, gender, age, race, appearance, personality, background, ability, style, interests, faction, weight, desire, fear, flaw, arc, voice_style, ending_node_id, avatar_path, layout_x, layout_y, is_locked, snapshots_json) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25)",
                     params![
                         json_str(item, "id"), json_str(item, "project_id"), json_str(item, "name"),
                         json_str(item, "gender"), json_str(item, "age"), json_str(item, "race"),
@@ -1088,7 +1133,7 @@ pub fn import_project(project_data: serde_json::Value, state: State<'_, DbState>
                         json_str(item, "desire"), json_str(item, "fear"), json_str(item, "flaw"),
                         json_str(item, "arc"), json_str(item, "voice_style"), json_str(item, "ending_node_id"),
                         json_str(item, "avatar_path"), json_str(item, "layout_x"), json_str(item, "layout_y"),
-                        json_i64(item, "is_locked"),
+                        json_i64(item, "is_locked"), json_str_or_arr(item, "snapshots_json"),
                     ],
                 ).ok();
             }
@@ -1119,7 +1164,7 @@ pub fn import_project(project_data: serde_json::Value, state: State<'_, DbState>
                         json_str(item, "title"), json_i64(item, "chapter_start"), json_i64(item, "chapter_end"),
                         json_str(item, "reader_knowledge"), json_str(item, "truth_content"),
                         json_str(item, "plant_method"), json_i64(item, "convergence_chapter"),
-                        json_i64(item, "is_locked"), json_str(item, "character_ids_json"),
+                        json_i64(item, "is_locked"), json_str_or_arr(item, "character_ids_json"),
                     ],
                 ).ok();
             }
@@ -1134,7 +1179,7 @@ pub fn import_project(project_data: serde_json::Value, state: State<'_, DbState>
                         json_str(item, "id"), json_str(item, "project_id"), json_str(item, "type"),
                         json_str(item, "title"), json_str(item, "summary"), json_str(item, "volume_id"),
                         json_i64(item, "sort_order"), json_i64(item, "is_locked"), json_str(item, "layout_y"),
-                        json_str(item, "must_achieve_json"), json_str(item, "character_ids_json"),
+                        json_str_or_arr(item, "must_achieve_json"), json_str_or_arr(item, "character_ids_json"),
                         json_str(item, "linked_chapter_id"),
                     ],
                 ).ok();
@@ -1217,9 +1262,21 @@ fn open_or_create_settings_db() -> rusqlite::Connection {
 
 // ===== v2.0: 风格指南/故事铁则/章节摘要 =====
 
+fn get_setting_json(key: String, state: State<'_, DbState>) -> Result<Option<serde_json::Value>, String> {
+    let raw = get_setting(key, state)?;
+    match raw {
+        Some(s) if !s.is_empty() => {
+            serde_json::from_str(&s)
+                .map(Some)
+                .map_err(|e| format!("解析 JSON 失败: {}", e))
+        }
+        _ => Ok(None),
+    }
+}
+
 #[tauri::command]
-pub fn get_style_guide(project_id: String, state: State<'_, DbState>) -> Result<Option<String>, String> {
-    get_setting(format!("novel-workbench-style-{}", project_id), state)
+pub fn get_style_guide(project_id: String, state: State<'_, DbState>) -> Result<Option<serde_json::Value>, String> {
+    get_setting_json(format!("novel-workbench-style-{}", project_id), state)
 }
 
 #[tauri::command]
@@ -1229,8 +1286,8 @@ pub fn save_style_guide(guide: serde_json::Value, state: State<'_, DbState>) -> 
 }
 
 #[tauri::command]
-pub fn get_story_bible(project_id: String, state: State<'_, DbState>) -> Result<Option<String>, String> {
-    get_setting(format!("novel-workbench-bible-{}", project_id), state)
+pub fn get_story_bible(project_id: String, state: State<'_, DbState>) -> Result<Option<serde_json::Value>, String> {
+    get_setting_json(format!("novel-workbench-bible-{}", project_id), state)
 }
 
 #[tauri::command]
@@ -1240,10 +1297,15 @@ pub fn save_story_bible(bible: serde_json::Value, state: State<'_, DbState>) -> 
 }
 
 #[tauri::command]
-pub fn get_chapter_summaries(project_id: String, state: State<'_, DbState>) -> Result<Option<String>, String> {
+pub fn get_chapter_summaries(project_id: String, state: State<'_, DbState>) -> Result<serde_json::Value, String> {
     let log_key = format!("novel-workbench-log-{}", project_id);
     let raw = get_setting(log_key, state)?;
-    Ok(raw)
+    match raw {
+        Some(s) if !s.is_empty() => {
+            serde_json::from_str(&s).map_err(|e| format!("解析 JSON 失败: {}", e))
+        }
+        _ => Ok(serde_json::Value::Array(vec![])),
+    }
 }
 
 fn read_table(conn: &rusqlite::Connection, sql: &str, params: impl rusqlite::Params) -> Result<Vec<Value>, rusqlite::Error> {

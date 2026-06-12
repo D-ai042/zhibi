@@ -909,17 +909,46 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
       const chapters = (s.chapters || []).filter(c => volIds.has(c.volume_id));
       const chapterIds = new Set(chapters.map(c => c.id));
 
+      /** 将 mock JS 对象转换为 Rust import_project 可接受的 JSON 格式 */
+      const normalizeItem = (item: Record<string, unknown>, type: string): Record<string, unknown> => {
+        const out = { ...item };
+        // boolean → int
+        if ("is_locked" in out) out.is_locked = out.is_locked ? 1 : 0;
+        if ("is_secret" in out) out.is_secret = out.is_secret ? 1 : 0;
+        // snapshots array → snapshots_json string
+        if ("snapshots" in out && Array.isArray(out.snapshots)) {
+          out.snapshots_json = JSON.stringify(out.snapshots);
+          delete out.snapshots;
+        }
+        // forbidden array → forbidden_json string (world_terms)
+        if ("forbidden" in out && Array.isArray(out.forbidden)) {
+          out.forbidden_json = JSON.stringify(out.forbidden);
+          delete out.forbidden;
+        }
+        // must_achieve array → must_achieve_json string (timeline_nodes)
+        if ("must_achieve" in out && Array.isArray(out.must_achieve)) {
+          out.must_achieve_json = JSON.stringify(out.must_achieve);
+          delete out.must_achieve;
+        }
+        // character_ids array → character_ids_json string (timeline_nodes, plot_events)
+        if ("character_ids" in out && Array.isArray(out.character_ids)) {
+          out.character_ids_json = JSON.stringify(out.character_ids);
+          delete out.character_ids;
+        }
+        return out;
+      };
+
       return {
         project: proj as Record<string, unknown>,
-        worldTerms: (s.worldTerms || []).filter(t => t.project_id === pid) as Record<string, unknown>[],
-        characters: (s.characters || []).filter(c => c.project_id === pid) as Record<string, unknown>[],
-        relationships: (s.edges || []).filter(e => e.project_id === pid) as Record<string, unknown>[],
-        plotEvents: (s.plotEvents || []).filter(e => e.project_id === pid) as Record<string, unknown>[],
-        timelineNodes: (s.timelineNodes || []).filter(n => n.project_id === pid) as Record<string, unknown>[],
-        volumes: (s.volumes || []).filter(v => v.project_id === pid) as Record<string, unknown>[],
-        chapters: chapters as Record<string, unknown>[],
-        beatCards: (s.beatCards || []).filter(b => chapterIds.has(b.chapter_id)) as Record<string, unknown>[],
-        chapterContents: (s.chapterContents || []).filter(cc => chapterIds.has(cc.chapter_id)) as Record<string, unknown>[],
+        worldTerms: (s.worldTerms || []).filter(t => t.project_id === pid).map(t => normalizeItem(t as Record<string, unknown>, "world_term")) as Record<string, unknown>[],
+        characters: (s.characters || []).filter(c => c.project_id === pid).map(c => normalizeItem(c as Record<string, unknown>, "character")) as Record<string, unknown>[],
+        relationships: (s.edges || []).filter(e => e.project_id === pid).map(e => normalizeItem(e as Record<string, unknown>, "edge")) as Record<string, unknown>[],
+        plotEvents: (s.plotEvents || []).filter(e => e.project_id === pid).map(e => normalizeItem(e as Record<string, unknown>, "plot_event")) as Record<string, unknown>[],
+        timelineNodes: (s.timelineNodes || []).filter(n => n.project_id === pid).map(n => normalizeItem(n as Record<string, unknown>, "timeline_node")) as Record<string, unknown>[],
+        volumes: (s.volumes || []).filter(v => v.project_id === pid).map(v => normalizeItem(v as Record<string, unknown>, "volume")) as Record<string, unknown>[],
+        chapters: chapters.map(c => normalizeItem(c as Record<string, unknown>, "chapter")) as Record<string, unknown>[],
+        beatCards: (s.beatCards || []).filter(b => chapterIds.has(b.chapter_id)).map(b => normalizeItem(b as Record<string, unknown>, "beat_card")) as Record<string, unknown>[],
+        chapterContents: (s.chapterContents || []).filter(cc => chapterIds.has(cc.chapter_id)).map(cc => normalizeItem(cc as Record<string, unknown>, "chapter_content")) as Record<string, unknown>[],
       } as T;
     }
 

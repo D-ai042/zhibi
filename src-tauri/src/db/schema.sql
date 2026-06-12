@@ -71,6 +71,7 @@ CREATE TABLE IF NOT EXISTS characters (
   layout_x REAL NOT NULL DEFAULT 0,
   layout_y REAL NOT NULL DEFAULT 0,
   is_locked INTEGER NOT NULL DEFAULT 0,
+  snapshots_json TEXT DEFAULT '[]',
   gender TEXT DEFAULT '',
   age TEXT DEFAULT '',
   race TEXT DEFAULT '',

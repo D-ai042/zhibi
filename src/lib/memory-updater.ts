@@ -15,6 +15,7 @@
 import { uuid } from "@/lib/uuid";
 import { api } from "./api";
 import { getJSONSync, setJSONSync, setJSON } from "./storage";
+import { useAppStore } from "@/stores/app-store";
 import type {
     ChapterSummary, ChapterSnapshot,
     CharacterState, ForeshadowEntry, StorylineProgress,
@@ -123,7 +124,18 @@ ${chapterContent.slice(0, 6000)}
     {"name": "故事线名", "delta": "本章推进了什么", "progress_percent": 0}
   ],
   "character_snapshots": [
-    {"name": "角色名", "age": "推测年龄", "personality": "新性格（变化才填）", "ability": "新能力（变化才填）", "appearance": "新外貌（变化才填）"}
+    重要说明：仅在角色发生不可逆的重大变化时才创建快照。以下情况必须跳过：
+    - 角色只是出场但没有任何发展变化
+    - 角色只是说了几句话或参与了战斗，但性格/能力/外貌等没有改变
+    - 情绪波动（开心/生气）不算性格变化
+    以下情况才需要快照（同一角色最多1条，只填实际变化的字段，无变化的字段不要写）：
+    - 角色经历了人生观、价值观的根本转变
+    - 角色获得了新的能力/技能/知识（如觉醒、修炼突破、学会新技艺）
+    - 角色外貌发生了永久改变（如毁容、变身、留疤）
+    - 角色身份/地位发生了根本变化（如登基、被废、入魔）
+    - 角色经历了重大创伤导致行为模式改变
+    格式（只填变化的字段，无变化的不填）：
+    {"name": "角色名", "age": "当前年龄数字字符串", "personality": "新性格描述（变化才填）"}
   ]
 }
 ---END_CHAPTER_ANALYSIS---`;
@@ -266,23 +278,46 @@ export async function updateMemory(
             for (const snap of analysis.character_snapshots) {
                 const targetChar = allChars.find(c => c.name === snap.name);
                 if (!targetChar || !snap.age) continue;
-                const existingSnaps = targetChar.snapshots || [];
+
+                // ★ 收集 AI 报告的变化字段
+                const changes: Record<string, string> = {};
+                const snapKeys = ["personality", "ability", "appearance", "background", "style", "interests", "desire", "fear", "flaw", "arc", "voice_style", "faction", "race", "gender"] as const;
+                for (const key of snapKeys) {
+                    const val = (snap as any)[key];
+                    if (val && typeof val === "string" && val.trim().length > 3) {
+                        changes[key] = val.trim();
+                    }
+                }
+
+                // ★ 校验：至少要有实际变化才建快照
+                if (Object.keys(changes).length === 0) continue;
+
+                // ★ 校验：与角色当前值对比，完全相同则跳过（AI 可能照抄原文）
+                let hasActualDiff = false;
+                for (const key of Object.keys(changes)) {
+                    const currentVal = ((targetChar as any)[key] || "").trim();
+                    if (currentVal !== changes[key]) { hasActualDiff = true; break; }
+                }
+                if (!hasActualDiff) continue;
+
+                const existingSnaps = (targetChar.snapshots || []) as { age: string; changes: Record<string, string> }[];
                 const snapAge = parseInt(snap.age);
                 const idx = existingSnaps.findIndex(s => parseInt(s.age) === snapAge);
-                const changes: Record<string, string> = {};
-                for (const key of ["personality", "ability", "appearance", "background", "style", "interests", "desire", "fear", "flaw", "arc", "voice_style", "faction", "race", "gender"] as const) {
-                    const val = (snap as any)[key];
-                    if (val && val.length > 3) changes[key] = val;
-                }
-                if (Object.keys(changes).length === 0) continue;
+
                 if (idx >= 0) {
-                    existingSnaps[idx] = { age: snap.age, changes };
+                    // 合并而非覆盖：保留已有变化，新增/更新 AI 报告的变化
+                    existingSnaps[idx] = { age: snap.age, changes: { ...existingSnaps[idx].changes, ...changes } };
                 } else {
                     existingSnaps.push({ age: snap.age, changes });
                 }
                 existingSnaps.sort((a, b) => parseInt(a.age) - parseInt(b.age));
-                await api.saveCharacter({ ...targetChar, snapshots: existingSnaps } as any);
+
+                // ★ 通过 api.saveCharacter 保存，确保走完整的序列化路径
+                const updatedChar = { ...targetChar, snapshots: existingSnaps };
+                await api.saveCharacter(updatedChar as any);
             }
+            // 通知 UI 刷新角色列表
+            useAppStore.getState().bumpCharacters();
         } catch { /* 快照保存失败不阻塞定稿 */ }
     }
 

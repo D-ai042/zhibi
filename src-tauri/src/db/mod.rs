@@ -33,6 +33,7 @@ pub fn init_app_db(app: &AppHandle) -> std::io::Result<()> {
 fn run_migrations(conn: &Connection) -> rusqlite::Result<()> {
     // 角色卡扩展字段（v0.2）：逐列添加，忽略已存在错误
     let migration_cols = [
+        "ALTER TABLE characters ADD COLUMN snapshots_json TEXT DEFAULT '[]'",
         "ALTER TABLE characters ADD COLUMN gender TEXT DEFAULT ''",
         "ALTER TABLE characters ADD COLUMN age TEXT DEFAULT ''",
         "ALTER TABLE characters ADD COLUMN race TEXT DEFAULT ''",

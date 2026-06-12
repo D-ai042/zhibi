@@ -73,7 +73,14 @@ export const api = {
   deletePlotEvent: (id: string) => call<void>("delete_plot_event", { id }),
 
   listCharacters: (projectId: string) => call<Character[]>("list_characters", { projectId }),
-  saveCharacter: (c: Character) => call<Character>("save_character", { character: c }),
+  saveCharacter: (c: Character) => {
+    const character: any = { ...c };
+    // Rust 后端 expect snapshots_json 字符串，前端保持 snapshots 数组也兼容浏览器 mock
+    if (character.snapshots && Array.isArray(character.snapshots)) {
+      character.snapshots_json = JSON.stringify(character.snapshots);
+    }
+    return call<Character>("save_character", { character });
+  },
   deleteCharacter: (id: string) => call<void>("delete_character", { id }),
 
   listRelationshipEdges: (projectId: string) =>
