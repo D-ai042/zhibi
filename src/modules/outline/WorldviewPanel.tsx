@@ -400,6 +400,10 @@ export function WorldviewPanel() {
     const gNodes: Node[] = [];
     const childIds = new Set<string>();
     for (const g of saved) {
+      // ★ 防御：补全可能缺失的字段（旧数据/手动修改 JSON 可能导致 undefined → NaN）
+      g.x = g.x ?? 0; g.y = g.y ?? 0;
+      g.w = g.w ?? 400; g.h = g.h ?? 300;
+      g.bg = g.bg ?? "#f3f4f6"; g.border = g.border ?? "#9ca3af";
       for (const cn of termNodes) {
         if (g.childIds.includes(cn.id)) {
           cn.position = { x: cn.position.x - g.x, y: cn.position.y - g.y };
@@ -417,11 +421,14 @@ export function WorldviewPanel() {
     }
     setNodes([...gNodes, ...termNodes]);
 
-    // 为缺少 handle 的连线自动推算最佳方向
+    // 为缺少 handle 的连线自动推算最佳方向，同时过滤孤立边
     const rawEdges = loadEdges(currentProject.id);
+    const termIds = new Set(termNodes.map(n => n.id));
+    const validEdges = rawEdges.filter(e => termIds.has(e.source) && termIds.has(e.target));
+    const orphanedCount = rawEdges.length - validEdges.length;
     const posMap = new Map(termNodes.map(n => [n.id, n.position]));
-    let dirty = false;
-    for (const e of rawEdges) {
+    let dirty = orphanedCount > 0;
+    for (const e of validEdges) {
       if (e.type !== "step-merge") { e.type = "step-merge"; e.style = { stroke: "#94a3b8", strokeWidth: 2 }; dirty = true; }
       if (e.sourceHandle && e.targetHandle) continue;
       const sp = posMap.get(e.source) ?? { x: 0, y: 0 };
@@ -435,8 +442,8 @@ export function WorldviewPanel() {
       }
       dirty = true;
     }
-    if (dirty) saveEdges(currentProject.id, rawEdges);
-    setEdges(rawEdges);
+    if (dirty) saveEdges(currentProject.id, validEdges);
+    setEdges(validEdges);
     setWorldviewGroups(saved.map(g => ({ id: g.id, name: g.name, x: g.x, y: g.y, locked: g.locked })));
   }, [currentProject, handleUpdate, handleSelect, setNodes, setEdges, setWorldviewGroups]);
   loadRef.current = load;

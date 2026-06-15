@@ -953,20 +953,28 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
     }
 
     case "import_project": {
-      const { projectData } = args as { projectData: Record<string, unknown> };
+      const { projectData, mode } = args as { projectData: Record<string, unknown>; mode?: string };
       const proj = projectData.project as Record<string, unknown> | undefined;
       if (!proj || !proj.id) throw new Error("无效的项目数据");
 
-      const pid = proj.id as string;
+      const importMode = mode || "overwrite";
+      let pid = proj.id as string;
 
-      // 清理旧 mock 数据
-      for (const key of Object.keys(s)) {
-        if (Array.isArray((s as any)[key])) {
-          (s as any)[key] = (s as any)[key].filter((item: any) => item.project_id !== pid && item.projectId !== pid);
-        }
+      // "new" 模式：生成新 ID
+      if (importMode === "new") {
+        pid = crypto.randomUUID();
+        proj.id = pid;
       }
-      // 移除旧 project
-      s.projects = s.projects.filter((p: any) => p.id !== pid);
+
+      // "overwrite" 模式：清理旧数据；"merge"/"new" 模式不清理
+      if (importMode === "overwrite") {
+        for (const key of Object.keys(s)) {
+          if (Array.isArray((s as any)[key])) {
+            (s as any)[key] = (s as any)[key].filter((item: any) => item.project_id !== pid && item.projectId !== pid);
+          }
+        }
+        s.projects = s.projects.filter((p: any) => p.id !== pid);
+      }
 
       // 添加 project
       s.projects.push(proj as any);

@@ -714,6 +714,7 @@ function DataMigration() {
   const [msg, setMsg] = useState("");
   const [importing, setImporting] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [importModeDialog, setImportModeDialog] = useState<{ data: Record<string, unknown>; projectsToImport: Record<string, unknown>[] } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const currentProject = useAppStore(s => s.currentProject);
 
@@ -944,18 +945,10 @@ function DataMigration() {
       }
 
       if (projectsToImport.length > 0) {
-        for (const projectData of projectsToImport) {
-          if (projectData && typeof projectData === 'object' && (projectData as Record<string, unknown>).project) {
-            try {
-              await api.importProject(projectData as Record<string, unknown>);
-              projectCount++;
-            } catch (e) {
-              const errMsg = e instanceof Error ? e.message : String(e);
-              importErrors.push(errMsg);
-              console.warn("[DataMigration] 恢复项目失败:", e);
-            }
-          }
-        }
+        // ★ 弹窗让用户选择导入模式，而不是直接覆盖
+        setImportModeDialog({ data, projectsToImport });
+        setImporting(false);
+        return;
       }
 
       // ★ 再写入 localStorage keys（会覆盖 importProject 产生的中间写入，确保数据完整）
@@ -1000,6 +993,70 @@ function DataMigration() {
     if (fileInputRef.current) fileInputRef.current.value = "";
   }, [writeKey]);
 
+  /** 用户选择导入模式后执行实际导入 */
+  const doImportWithMode = useCallback(async (mode: string) => {
+    if (!importModeDialog) return;
+    const { data, projectsToImport } = importModeDialog;
+    setImportModeDialog(null);
+    setImporting(true);
+    setMsg("");
+    let projectCount = 0;
+    const importErrors: string[] = [];
+
+    try {
+      for (const projectData of projectsToImport) {
+        if (projectData && typeof projectData === 'object' && (projectData as Record<string, unknown>).project) {
+          try {
+            await api.importProject(projectData as Record<string, unknown>, mode);
+            projectCount++;
+          } catch (e) {
+            const errMsg = e instanceof Error ? e.message : String(e);
+            importErrors.push(errMsg);
+            console.warn("[DataMigration] 恢复项目失败:", e);
+          }
+        }
+      }
+
+      // 写入 localStorage keys（跳过 novel-workbench-mock，因为项目数据已通过 importProject 导入）
+      let written = 0;
+      for (const { key, value } of (data as any).keys || []) {
+        if (key && value && key !== "novel-workbench-mock") {
+          await writeKey(key, value);
+          written++;
+        }
+      }
+
+      // 刷新项目列表
+      if (projectCount > 0) {
+        try {
+          const projects = await api.getProjects();
+          useAppStore.getState().setProjects(projects);
+        } catch (e) {
+          console.warn("[DataMigration] 刷新项目列表失败:", e);
+        }
+      }
+
+      if (!isTauri()) {
+        try {
+          const { clearMockStoreCache } = await import("@/lib/mock-backend");
+          clearMockStoreCache();
+          const projects = await api.getProjects();
+          useAppStore.getState().setProjects(projects);
+        } catch (e) {
+          console.warn("[DataMigration] 刷新 mock 缓存失败:", e);
+        }
+      }
+
+      const modeLabel = mode === "new" ? "（新建项目）" : mode === "merge" ? "（合并数据）" : "（已自动备份）";
+      const errDetail = importErrors.length > 0 ? `\n⚠️ ${importErrors.length} 个项目恢复失败：${importErrors.join("; ")}` : "";
+      setMsg(`✅ 成功导入 ${written} 项配置，恢复 ${projectCount} 个项目${modeLabel}。${errDetail}`);
+    } catch (e) {
+      setMsg(`❌ 导入失败：${e instanceof Error ? e.message : "文件格式错误"}`);
+    }
+    setImporting(false);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }, [importModeDialog, writeKey]);
+
   return (
     <div className="space-y-4">
       <div className="rounded-lg border border-slate-200 bg-white p-4">
@@ -1029,12 +1086,52 @@ function DataMigration() {
       <div className="rounded-lg border border-slate-200 bg-white p-4">
         <h3 className="text-sm font-semibold text-slate-700 mb-1">导入数据</h3>
         <p className="text-xs text-slate-500 mb-3">
-          选择之前导出的备份 JSON 文件，恢复全部数据。
-          <span className="text-amber-600 font-medium"> 注意：会覆盖当前所有数据，建议先导出备份。</span>
+          选择之前导出的备份 JSON 文件，恢复数据。导入前可选择覆盖、新建或合并。
         </p>
         <input ref={fileInputRef} type="file" accept=".json" onChange={handleImport}
           className="block w-full text-sm text-slate-500 file:mr-3 file:rounded-lg file:border-0 file:bg-amber-50 file:px-4 file:py-2 file:text-sm file:text-amber-700 hover:file:bg-amber-100" />
       </div>
+
+      {/* 导入模式选择弹窗 */}
+      {importModeDialog && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 space-y-3">
+          <h3 className="text-sm font-semibold text-slate-700">
+            检测到 {importModeDialog.projectsToImport.length} 个项目，请选择导入方式：
+          </h3>
+          <div className="space-y-2">
+            <button
+              onClick={() => doImportWithMode("overwrite")}
+              disabled={importing}
+              className="w-full text-left rounded-lg border border-amber-300 bg-white p-3 hover:bg-amber-100 transition-colors disabled:opacity-50"
+            >
+              <div className="text-sm font-medium text-slate-800">📦 覆盖当前项目</div>
+              <div className="text-xs text-slate-500 mt-0.5">替换同名项目数据（自动备份原数据，可在 %APPDATA% 找回）</div>
+            </button>
+            <button
+              onClick={() => doImportWithMode("new")}
+              disabled={importing}
+              className="w-full text-left rounded-lg border border-green-300 bg-white p-3 hover:bg-green-50 transition-colors disabled:opacity-50"
+            >
+              <div className="text-sm font-medium text-green-800">🆕 创建为新项目</div>
+              <div className="text-xs text-slate-500 mt-0.5">作为独立新项目导入，不会影响任何现有项目</div>
+            </button>
+            <button
+              onClick={() => doImportWithMode("merge")}
+              disabled={importing}
+              className="w-full text-left rounded-lg border border-blue-300 bg-white p-3 hover:bg-blue-50 transition-colors disabled:opacity-50"
+            >
+              <div className="text-sm font-medium text-blue-800">🔗 合并数据</div>
+              <div className="text-xs text-slate-500 mt-0.5">保留现有数据 + 追加导入数据（重复项以导入为准）</div>
+            </button>
+          </div>
+          <button
+            onClick={() => { setImportModeDialog(null); if (fileInputRef.current) fileInputRef.current.value = ""; }}
+            className="text-xs text-slate-400 hover:text-slate-600 underline"
+          >
+            取消导入
+          </button>
+        </div>
+      )}
 
       {msg && (
         <div className={`rounded-lg px-3 py-2 text-xs ${msg.startsWith("✅") ? "bg-green-50 text-green-700" : "bg-red-50 text-red-600"}`}>

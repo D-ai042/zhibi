@@ -1,4 +1,4 @@
-use crate::db::{open_project_db, with_conn, DbState};
+use crate::db::{open_project_db, projects_dir, with_conn, DbState};
 use crate::models::{ApiConfig, FrameworkProgress, Project, ProviderSttConfig, SttConfig};
 use chrono::Utc;
 use rusqlite::params;
@@ -1054,30 +1054,65 @@ pub fn list_app_settings(_state: State<'_, DbState>) -> Result<Vec<serde_json::V
     Ok(result)
 }
 
+/// 备份 project.db（保留最近 5 个备份）
+fn backup_project_db(project_id: &str) -> std::io::Result<()> {
+    let db_path = projects_dir().join(project_id).join("project.db");
+    if !db_path.exists() { return Ok(()); }
+    let ts = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
+    let backup_path = projects_dir().join(project_id).join(format!("project_backup_{}.db", ts));
+    std::fs::copy(&db_path, &backup_path)?;
+    // 清理旧备份：只保留最新 5 个
+    let parent = projects_dir().join(project_id);
+    let mut backups: Vec<_> = std::fs::read_dir(&parent)?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_name().to_string_lossy().starts_with("project_backup_"))
+        .collect();
+    backups.sort_by_key(|e| e.metadata().and_then(|m| m.modified()).ok());
+    while backups.len() > 5 {
+        if let Some(oldest) = backups.first() {
+            std::fs::remove_file(oldest.path()).ok();
+            backups.remove(0);
+        }
+    }
+    Ok(())
+}
+
 #[tauri::command]
-pub fn import_project(project_data: serde_json::Value, state: State<'_, DbState>) -> Result<String, String> {
+pub fn import_project(project_data: serde_json::Value, mode: String, state: State<'_, DbState>) -> Result<String, String> {
     let project = project_data.get("project").ok_or("缺少 project 字段")?;
-    let project_id = project.get("id").and_then(|v| v.as_str()).ok_or("缺少 project.id")?.to_string();
     let project_name = project.get("name").and_then(|v| v.as_str()).unwrap_or("导入的项目").to_string();
 
-    // 先打开该项目的数据库
+    // ── "new" 模式：生成新 UUID，不覆盖任何现有项目 ──
+    let (project_id, is_new) = if mode == "new" {
+        (Uuid::new_v4().to_string(), true)
+    } else {
+        let pid = project.get("id").and_then(|v| v.as_str()).ok_or("缺少 project.id")?.to_string();
+        // ── "overwrite" 模式：先备份 ──
+        if mode == "overwrite" {
+            backup_project_db(&pid).map_err(|e| format!("备份数据库失败: {}", e))?;
+        }
+        (pid, false)
+    };
+
+    // 打开/创建该项目的数据库
     open_project_db(&project_id, &state).map_err(|e| format!("打开项目数据库失败: {}", e))?;
 
     with_conn(&state, |conn| {
-        // 清理旧数据（如果已存在相同 project_id）
-        // 注意：部分表没有直接的 project_id 列，需要通过关联删除
-        conn.execute("DELETE FROM beat_cards WHERE chapter_id IN (SELECT c.id FROM chapters c JOIN volumes v ON c.volume_id=v.id WHERE v.project_id=?1)", params![project_id]).ok();
-        conn.execute("DELETE FROM chapter_contents WHERE chapter_id IN (SELECT c.id FROM chapters c JOIN volumes v ON c.volume_id=v.id WHERE v.project_id=?1)", params![project_id]).ok();
-        conn.execute("DELETE FROM chapters WHERE volume_id IN (SELECT id FROM volumes WHERE project_id=?1)", params![project_id]).ok();
-        conn.execute("DELETE FROM volumes WHERE project_id=?1", params![project_id]).ok();
-        conn.execute("DELETE FROM plot_events WHERE project_id=?1", params![project_id]).ok();
-        conn.execute("DELETE FROM timeline_nodes WHERE project_id=?1", params![project_id]).ok();
-        conn.execute("DELETE FROM relationship_edges WHERE project_id=?1", params![project_id]).ok();
-        conn.execute("DELETE FROM characters WHERE project_id=?1", params![project_id]).ok();
-        conn.execute("DELETE FROM world_terms WHERE project_id=?1", params![project_id]).ok();
-        // locked_fields 没有 project_id 关联，暂不清理
+        // "overwrite" 模式：清理旧数据
+        if mode == "overwrite" {
+            conn.execute("DELETE FROM beat_cards WHERE chapter_id IN (SELECT c.id FROM chapters c JOIN volumes v ON c.volume_id=v.id WHERE v.project_id=?1)", params![project_id]).ok();
+            conn.execute("DELETE FROM chapter_contents WHERE chapter_id IN (SELECT c.id FROM chapters c JOIN volumes v ON c.volume_id=v.id WHERE v.project_id=?1)", params![project_id]).ok();
+            conn.execute("DELETE FROM chapters WHERE volume_id IN (SELECT id FROM volumes WHERE project_id=?1)", params![project_id]).ok();
+            conn.execute("DELETE FROM volumes WHERE project_id=?1", params![project_id]).ok();
+            conn.execute("DELETE FROM plot_events WHERE project_id=?1", params![project_id]).ok();
+            conn.execute("DELETE FROM timeline_nodes WHERE project_id=?1", params![project_id]).ok();
+            conn.execute("DELETE FROM relationship_edges WHERE project_id=?1", params![project_id]).ok();
+            conn.execute("DELETE FROM characters WHERE project_id=?1", params![project_id]).ok();
+            conn.execute("DELETE FROM world_terms WHERE project_id=?1", params![project_id]).ok();
+        }
+        // "merge" / "new" 模式：不删除，直接 INSERT OR REPLACE
 
-        // 插入或替换 project
+        // 插入或替换 project（new 模式下覆盖 id 为新 UUID）
         let locked_at_val: Option<String> = project.get("framework_locked_at").and_then(|v| match v {
             serde_json::Value::Null => None,
             serde_json::Value::String(s) if s.is_empty() => None,
@@ -1138,13 +1173,19 @@ pub fn import_project(project_data: serde_json::Value, state: State<'_, DbState>
             String::new()
         }
 
+        // ★ "new" 模式：所有子记录使用新 UUID
+        fn pid_for_item(val: &serde_json::Value, field: &str, is_new: bool, new_pid: &str) -> String {
+            if is_new && field == "project_id" { new_pid.to_string() }
+            else { json_str(val, field) }
+        }
+
         // 批量插入各表（列名需与 schema.sql 一致）
         if let Some(items) = project_data.get("worldTerms").and_then(|v| v.as_array()) {
             for item in items {
                 conn.execute(
                     "INSERT OR REPLACE INTO world_terms (id, project_id, term_type, title, one_liner, detail, ring_level, forbidden_json, is_locked, layout_x, layout_y) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
                     params![
-                        json_str(item, "id"), json_str(item, "project_id"), json_str(item, "term_type"),
+                        json_str(item, "id"), pid_for_item(item, "project_id", is_new, &project_id), json_str(item, "term_type"),
                         json_str(item, "title"), json_str(item, "one_liner"), json_str(item, "detail"),
                         json_i64(item, "ring_level"), json_str_or_arr(item, "forbidden_json"),
                         json_i64(item, "is_locked"), json_str(item, "layout_x"), json_str(item, "layout_y"),
@@ -1159,7 +1200,7 @@ pub fn import_project(project_data: serde_json::Value, state: State<'_, DbState>
                 conn.execute(
                     "INSERT OR REPLACE INTO characters (id, project_id, name, gender, age, race, appearance, personality, background, ability, style, interests, faction, weight, desire, fear, flaw, arc, voice_style, ending_node_id, avatar_path, layout_x, layout_y, is_locked, snapshots_json) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25)",
                     params![
-                        json_str(item, "id"), json_str(item, "project_id"), json_str(item, "name"),
+                        json_str(item, "id"), pid_for_item(item, "project_id", is_new, &project_id), json_str(item, "name"),
                         json_str(item, "gender"), json_str(item, "age"), json_str(item, "race"),
                         json_str(item, "appearance"), json_str(item, "personality"), json_str(item, "background"),
                         json_str(item, "ability"), json_str(item, "style"), json_str(item, "interests"),
@@ -1179,7 +1220,7 @@ pub fn import_project(project_data: serde_json::Value, state: State<'_, DbState>
                 conn.execute(
                     "INSERT OR REPLACE INTO relationship_edges (id, project_id, source_id, target_id, relation_type, strength, is_secret) VALUES (?1,?2,?3,?4,?5,?6,?7)",
                     params![
-                        json_str(item, "id"), json_str(item, "project_id"),
+                        json_str(item, "id"), pid_for_item(item, "project_id", is_new, &project_id),
                         json_str(item, "source_id"), json_str(item, "target_id"),
                         json_str(item, "relation_type"), json_i64(item, "strength"),
                         json_i64(item, "is_secret"),
@@ -1194,7 +1235,7 @@ pub fn import_project(project_data: serde_json::Value, state: State<'_, DbState>
                 conn.execute(
                     "INSERT OR REPLACE INTO plot_events (id, project_id, line_type, title, chapter_start, chapter_end, reader_knowledge, truth_content, plant_method, convergence_chapter, is_locked, character_ids_json) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
                     params![
-                        json_str(item, "id"), json_str(item, "project_id"), json_str(item, "line_type"),
+                        json_str(item, "id"), pid_for_item(item, "project_id", is_new, &project_id), json_str(item, "line_type"),
                         json_str(item, "title"), json_i64(item, "chapter_start"), json_i64(item, "chapter_end"),
                         json_str(item, "reader_knowledge"), json_str(item, "truth_content"),
                         json_str(item, "plant_method"), json_i64(item, "convergence_chapter"),
@@ -1210,7 +1251,7 @@ pub fn import_project(project_data: serde_json::Value, state: State<'_, DbState>
                 conn.execute(
                     "INSERT OR REPLACE INTO timeline_nodes (id, project_id, type, title, summary, volume_id, sort_order, is_locked, layout_y, must_achieve_json, character_ids_json, linked_chapter_id) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
                     params![
-                        json_str(item, "id"), json_str(item, "project_id"), json_str(item, "type"),
+                        json_str(item, "id"), pid_for_item(item, "project_id", is_new, &project_id), json_str(item, "type"),
                         json_str(item, "title"), json_str(item, "summary"), json_str(item, "volume_id"),
                         json_i64(item, "sort_order"), json_i64(item, "is_locked"), json_str(item, "layout_y"),
                         json_str_or_arr(item, "must_achieve_json"), json_str_or_arr(item, "character_ids_json"),
@@ -1226,7 +1267,7 @@ pub fn import_project(project_data: serde_json::Value, state: State<'_, DbState>
                 conn.execute(
                     "INSERT OR REPLACE INTO volumes (id, project_id, title, sort_order) VALUES (?1,?2,?3,?4)",
                     params![
-                        json_str(item, "id"), json_str(item, "project_id"),
+                        json_str(item, "id"), pid_for_item(item, "project_id", is_new, &project_id),
                         json_str(item, "title"), json_i64(item, "sort_order"),
                     ],
                 ).ok();
@@ -1275,7 +1316,14 @@ pub fn import_project(project_data: serde_json::Value, state: State<'_, DbState>
 
         Ok(project_id)
     })
-    .map(|pid| format!("项目 {} 导入成功", pid))
+    .map(|_pid| {
+        let mode_label = match mode.as_str() {
+            "new" => "（新建项目）",
+            "merge" => "（合并数据）",
+            _ => "（已自动备份原数据）",
+        };
+        format!("项目「{}」导入成功{}", project_name, mode_label)
+    })
     .map_err(|e| e.to_string())
 }
 

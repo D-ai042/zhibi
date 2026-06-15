@@ -171,9 +171,9 @@ export const api = {
   saveExportFile: (projectId: string, filename: string, dataBase64: string, filePath: string) =>
     call<string>("save_export_file", { projectId, filename, dataBase64, filePath }),
 
-  /** 导入项目数据（从 JSON 恢复到 SQLite） */
-  importProject: (projectData: Record<string, unknown>) =>
-    call<string>("import_project", { projectData }),
+  /** 导入项目数据（支持三种模式：overwrite 覆盖/new 新建/merge 合并） */
+  importProject: (projectData: Record<string, unknown>, mode?: string) =>
+    call<string>("import_project", { projectData, mode: mode || "overwrite" }),
 
   /** 列出所有 app_settings（用于备份导出） */
   listAppSettings: () => call<{ key: string; value: string }[]>("list_app_settings"),
