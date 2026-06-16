@@ -931,6 +931,26 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
         return out;
       };
 
+      // 从 localStorage 读取剧情走向 + 卷章树 + 世界观画布数据
+      const getLocal = (key: string): any[] => {
+        try { return JSON.parse(localStorage.getItem(key) || "[]"); } catch { return []; }
+      };
+      const getLocalObj = (key: string): Record<string, any> => {
+        try { return JSON.parse(localStorage.getItem(key) || "{}"); } catch { return {}; }
+      };
+      const plotSegments = getLocal(`plot-segments-${pid}`);
+      const plotEdges = getLocal(`plot-edges-${pid}`);
+      const plotChapters = getLocal(`plot-chapters-${pid}`);
+      const chapterIndex = getLocal(`chapter-index-${pid}`);
+      const worldviewEdges = getLocal(`worldview-edges-${pid}`);
+      const worldviewGroups = getLocal(`worldview-groups-${pid}`);
+      // 分片章节数据
+      const chapterShards: Record<string, any> = {};
+      for (const chId of chapterIndex) {
+        const chData = getLocalObj(`chapter-${pid}-${chId}`);
+        if (chData && chData.id) chapterShards[chId] = chData;
+      }
+
       return {
         project: proj as Record<string, unknown>,
         worldTerms: (s.worldTerms || []).filter(t => t.project_id === pid).map(t => normalizeItem(t as Record<string, unknown>, "world_term")) as Record<string, unknown>[],
@@ -942,6 +962,13 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
         chapters: chapters.map(c => normalizeItem(c as Record<string, unknown>, "chapter")) as Record<string, unknown>[],
         beatCards: (s.beatCards || []).filter(b => chapterIds.has(b.chapter_id)).map(b => normalizeItem(b as Record<string, unknown>, "beat_card")) as Record<string, unknown>[],
         chapterContents: (s.chapterContents || []).filter(cc => chapterIds.has(cc.chapter_id)).map(cc => normalizeItem(cc as Record<string, unknown>, "chapter_content")) as Record<string, unknown>[],
+        plotSegments,
+        plotEdges,
+        plotChapters,
+        chapterIndex,
+        chapterShards,
+        worldviewEdges,
+        worldviewGroups,
       } as T;
     }
 

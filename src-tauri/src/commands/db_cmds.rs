@@ -1027,6 +1027,42 @@ pub fn export_project(project_id: String, state: State<'_, DbState>) -> Result<V
             .filter(|c| c.get("chapter_id").and_then(|v| v.as_str()).map(|id| chapter_ids.iter().any(|cid| cid == id)).unwrap_or(false))
             .collect();
 
+        // 从 app_settings 读取 localStorage 同步的数据（剧情走向、卷章树、世界观画布）
+        let settings_conn = open_or_create_settings_db();
+        let read_setting_array = |key: &str| -> Vec<Value> {
+            settings_conn.query_row(
+                "SELECT value FROM app_settings WHERE key=?1", params![key],
+                |row| { let raw: String = row.get(0)?; Ok(raw) },
+            ).ok().and_then(|raw| serde_json::from_str(&raw).ok()).unwrap_or_default()
+        };
+        let plot_segments: Vec<Value> = read_setting_array(&format!("plot-segments-{}", project_id));
+        let plot_edges: Vec<Value> = read_setting_array(&format!("plot-edges-{}", project_id));
+        let plot_chapters: Vec<Value> = read_setting_array(&format!("plot-chapters-{}", project_id));
+        let chapter_index: Vec<Value> = read_setting_array(&format!("chapter-index-{}", project_id));
+        let worldview_edges: Vec<Value> = read_setting_array(&format!("worldview-edges-{}", project_id));
+        let worldview_groups: Vec<Value> = read_setting_array(&format!("worldview-groups-{}", project_id));
+        // 分片章节数据
+        let mut chapter_shards = serde_json::Map::new();
+        if let Some(ids) = serde_json::from_str::<Vec<String>>(
+            &settings_conn.query_row(
+                "SELECT value FROM app_settings WHERE key=?1",
+                params![format!("chapter-index-{}", project_id)],
+                |row| row.get::<_, String>(0),
+            ).unwrap_or_default()
+        ).ok() {
+            for ch_id in ids {
+                let key = format!("chapter-{}-{}", project_id, ch_id);
+                if let Ok(raw) = settings_conn.query_row(
+                    "SELECT value FROM app_settings WHERE key=?1", params![key],
+                    |row| row.get::<_, String>(0),
+                ) {
+                    if let Ok(val) = serde_json::from_str::<Value>(&raw) {
+                        chapter_shards.insert(ch_id, val);
+                    }
+                }
+            }
+        }
+
         Ok(serde_json::json!({
             "project": proj,
             "worldTerms": world_terms,
@@ -1038,6 +1074,13 @@ pub fn export_project(project_id: String, state: State<'_, DbState>) -> Result<V
             "chapters": chapters,
             "beatCards": beat_cards,
             "chapterContents": chapter_contents,
+            "plotSegments": plot_segments,
+            "plotEdges": plot_edges,
+            "plotChapters": plot_chapters,
+            "chapterIndex": chapter_index,
+            "chapterShards": chapter_shards,
+            "worldviewEdges": worldview_edges,
+            "worldviewGroups": worldview_groups,
         }))
     })
     .map_err(|e| e.to_string())
