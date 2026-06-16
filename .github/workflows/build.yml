@@ -15,10 +15,10 @@ jobs:
         include:
           - os: macos-latest
             target: x86_64-apple-darwin
-            ext: dmg
+            ext: dmg-x64
           - os: macos-latest
             target: aarch64-apple-darwin
-            ext: dmg
+            ext: dmg-arm64
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             ext: nsis
@@ -127,8 +127,8 @@ jobs:
             fi
           done
           WIN_URL="https://ghfast.top/github.com/D-ai042/zhibi/releases/download/$TAG/zhibi-$TAG-nsis.$WIN_EXT"
-          MAC_INTEL_URL="https://ghfast.top/github.com/D-ai042/zhibi/releases/download/$TAG/zhibi-$TAG-dmg.dmg"
-          MAC_ARM_URL="https://ghfast.top/github.com/D-ai042/zhibi/releases/download/$TAG/zhibi-$TAG-dmg.dmg"
+          MAC_INTEL_URL="https://ghfast.top/github.com/D-ai042/zhibi/releases/download/$TAG/zhibi-$TAG-dmg-x64.dmg"
+          MAC_ARM_URL="https://ghfast.top/github.com/D-ai042/zhibi/releases/download/$TAG/zhibi-$TAG-dmg-arm64.dmg"
 
           cat > latest.json << EOF
           {
