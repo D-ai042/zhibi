@@ -1030,6 +1030,7 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
         "plot-segments-", "plot-edges-", "worldview-edges-", "worldview-groups-",
         "material-", "ai-pending-chars-", "ai-pending-world-terms-",
         "inspiration-cards-", "char-groups-", "writing-sidebar-width-",
+        "chapter-", "draft-",
         "novel-workbench-mock", "novel-workbench-snapshots-",
       ];
       const result: { key: string; value: string }[] = [];

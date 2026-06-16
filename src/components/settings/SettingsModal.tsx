@@ -1009,8 +1009,43 @@ function DataMigration() {
       for (const projectData of projectsToImport) {
         if (projectData && typeof projectData === 'object' && (projectData as Record<string, unknown>).project) {
           try {
-            await api.importProject(projectData as Record<string, unknown>, mode);
+            const importedPid = await api.importProject(projectData as Record<string, unknown>, mode);
             projectCount++;
+            // ★ 补充写入 localStorage 中的剧情走向 + 卷章树数据
+            // api.importProject 只恢复 SQLite 核心数据，但剧情走向和卷章树存在 localStorage
+            const pvt = projectData as Record<string, unknown>;
+            if (importedPid) {
+              // 恢复 plot-segments（剧情走向明暗线段落）
+              if (pvt.plotSegments && Array.isArray(pvt.plotSegments)) {
+                await writeKey(`plot-segments-${importedPid}`, JSON.stringify(pvt.plotSegments));
+              }
+              // 恢复 plot-edges（剧情走向连线）
+              if (pvt.plotEdges && Array.isArray(pvt.plotEdges)) {
+                await writeKey(`plot-edges-${importedPid}`, JSON.stringify(pvt.plotEdges));
+              }
+              // 恢复 plot-chapters（卷章树）
+              if (pvt.plotChapters && Array.isArray(pvt.plotChapters)) {
+                await writeKey(`plot-chapters-${importedPid}`, JSON.stringify(pvt.plotChapters));
+              }
+              // 恢复 chapter-index（分片存储索引）
+              if (pvt.chapterIndex && Array.isArray(pvt.chapterIndex)) {
+                await writeKey(`chapter-index-${importedPid}`, JSON.stringify(pvt.chapterIndex));
+              }
+              // 恢复分片章节数据
+              if (pvt.chapterShards && typeof pvt.chapterShards === 'object') {
+                for (const [chId, chData] of Object.entries(pvt.chapterShards as Record<string, unknown>)) {
+                  await writeKey(`chapter-${importedPid}-${chId}`, JSON.stringify(chData));
+                }
+              }
+              // 恢复 worldview-edges（世界观连线）
+              if (pvt.worldviewEdges && Array.isArray(pvt.worldviewEdges)) {
+                await writeKey(`worldview-edges-${importedPid}`, JSON.stringify(pvt.worldviewEdges));
+              }
+              // 恢复 worldview-groups（世界观编组）
+              if (pvt.worldviewGroups && Array.isArray(pvt.worldviewGroups)) {
+                await writeKey(`worldview-groups-${importedPid}`, JSON.stringify(pvt.worldviewGroups));
+              }
+            }
           } catch (e) {
             const errMsg = e instanceof Error ? e.message : String(e);
             importErrors.push(errMsg);
