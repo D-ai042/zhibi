@@ -301,8 +301,9 @@ export async function updateMemory(
                 if (!hasActualDiff) continue;
 
                 const existingSnaps = (targetChar.snapshots || []) as { age: string; changes: Record<string, string> }[];
-                const snapAge = parseInt(snap.age);
-                const idx = existingSnaps.findIndex(s => parseInt(s.age) === snapAge);
+                const snapAge = parseInt(snap.age) || 0;
+                if (!snapAge) continue; // 无效年龄，跳过
+                const idx = existingSnaps.findIndex(s => (parseInt(s.age) || 0) === snapAge);
 
                 if (idx >= 0) {
                     // 合并而非覆盖：保留已有变化，新增/更新 AI 报告的变化
@@ -310,7 +311,7 @@ export async function updateMemory(
                 } else {
                     existingSnaps.push({ age: snap.age, changes });
                 }
-                existingSnaps.sort((a, b) => parseInt(a.age) - parseInt(b.age));
+                existingSnaps.sort((a, b) => (parseInt(a.age) || 0) - (parseInt(b.age) || 0));
 
                 // ★ 通过 api.saveCharacter 保存，确保走完整的序列化路径
                 const updatedChar = { ...targetChar, snapshots: existingSnaps };

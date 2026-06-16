@@ -1430,6 +1430,11 @@ export function WritingModule() {
                                 {/* 定稿按钮（保存 + 更新记忆 + 词条激活 + 快照） */}
                                 <button type="button" onClick={async () => {
                                     if (!pid || !selectedChapter || !selectedChapterId) return;
+                                    // 快照当前章节信息，防止用户切换章节后异步操作写入错误目标
+                                    const finalizeChapterId = selectedChapterId;
+                                    const finalizeChapterNum = selectedChapter.number;
+                                    const finalizeChapterTitle = selectedChapter.title;
+                                    const finalizeContent = editingContent;
                                     // 先保存
                                     saveContent();
                                     // 更新记忆（摘要 + 角色状态 + 故事线 + 伏笔）
@@ -1437,9 +1442,9 @@ export function WritingModule() {
                                     try {
                                         await updateMemory({
                                             projectId: pid,
-                                            chapterNumber: selectedChapter.number,
-                                            chapterTitle: selectedChapter.title,
-                                            chapterContent: editingContent,
+                                            chapterNumber: finalizeChapterNum,
+                                            chapterTitle: finalizeChapterTitle,
+                                            chapterContent: finalizeContent,
                                             characters: [],
                                         });
                                         useAppStore.getState().setAutosaveStatus("✅ 摘要已生成");
@@ -1457,7 +1462,7 @@ export function WritingModule() {
                                         const recentSummaries = logStore.summaries || [];
                                         await activateNextChapterTerms(
                                             pid,
-                                            selectedChapter.number,
+                                            finalizeChapterNum,
                                             allWorldTerms.map(t => ({
                                                 id: t.id, title: t.title,
                                                 one_liner: t.one_liner, term_type: t.term_type,
@@ -1473,7 +1478,7 @@ export function WritingModule() {
                                     // ★ AI 预测下章角色调度
                                     try {
                                         useAppStore.getState().setAutosaveStatus("正在预测角色...");
-                                        await activateNextChapterCharacters(pid, selectedChapter.number);
+                                        await activateNextChapterCharacters(pid, finalizeChapterNum);
                                         useAppStore.getState().setAutosaveStatus("✅ 角色已预测");
                                     } catch (e) {
                                         console.error("定稿 - 角色预测失败:", e);
@@ -1483,9 +1488,9 @@ export function WritingModule() {
                                         useAppStore.getState().setAutosaveStatus("正在质量检查...");
                                         const qcResult = await runQualityCheck({
                                             projectId: pid,
-                                            chapterId: selectedChapterId,
-                                            chapterNumber: selectedChapter.number,
-                                            chapterContent: editingContent,
+                                            chapterId: finalizeChapterId,
+                                            chapterNumber: finalizeChapterNum,
+                                            chapterContent: finalizeContent,
                                         });
                                         if (!qcResult.passed) {
                                             const errors = qcResult.checks.filter(c => c.severity === "error");
@@ -1508,9 +1513,29 @@ export function WritingModule() {
                                         console.error("备份创建失败:", e);
                                     }
                                     // 创建快照标记定稿
-                                    createSnapshot(pid, `第${selectedChapter.number}章「${selectedChapter.title}」定稿`);
+                                    createSnapshot(pid, `第${finalizeChapterNum}章「${finalizeChapterTitle}」定稿`);
                                     // AI 识别新角色
-                                    aiExtractNewCharacters(pid, selectedChapter.number, editingContent);
+                                    aiExtractNewCharacters(pid, finalizeChapterNum, finalizeContent);
+                                    // 更新项目阶段
+                                    try {
+                                        const store = useAppStore.getState();
+                                        const proj = store.currentProject;
+                                        if (proj) {
+                                            let newStage = proj.stage;
+                                            if (proj.stage === "framework_locked" || proj.stage === "framework_review") {
+                                                newStage = "writing";
+                                            }
+                                            // 检查是否所有章节都已定稿（有内容）
+                                            if (newStage === "writing") {
+                                                const allChs = loadChapters(pid);
+                                                const allWritten = allChs.length > 0 && allChs.every(c => c.content?.trim());
+                                                if (allWritten) newStage = "completed";
+                                            }
+                                            if (newStage !== proj.stage) {
+                                                store.setCurrentProject({ ...proj, stage: newStage });
+                                            }
+                                        }
+                                    } catch { /* stage 更新失败不阻塞定稿 */ }
                                     useAppStore.getState().setAutosaveStatus("✅ 已定稿");
                                 }} className="flex items-center gap-1 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs text-white hover:bg-emerald-700">
                                     <CheckCircle className="h-3.5 w-3.5" />

@@ -124,7 +124,7 @@ ${text}`;
         const rounds = Math.floor(processable.filter(m => m.role === "user").length);
         const COMPRESS_INTERVAL = 20;
         if (rounds < COMPRESS_INTERVAL) return 0;
-        const messagesToCompress = processable.slice(0, rounds);
+        const messagesToCompress = processable;
         const sourceMsgIds = messagesToCompress.map(m => m.id);
 
         try {

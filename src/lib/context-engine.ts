@@ -793,7 +793,7 @@ function assembleP3(allCharacters: Character[], currentChapterNumber: number, al
             // 应用最新快照（年龄最大），字段级合并到角色卡
             const merged = { ...c };
             if (merged.snapshots?.length) {
-                const latest = [...merged.snapshots].sort((a, b) => parseInt(b.age) - parseInt(a.age))[0];
+                const latest = [...merged.snapshots].sort((a, b) => (parseInt(b.age) || 0) - (parseInt(a.age) || 0))[0];
                 if (latest.changes.personality) merged.personality = latest.changes.personality;
                 if (latest.changes.ability) merged.ability = latest.changes.ability;
                 if (latest.changes.appearance) merged.appearance = latest.changes.appearance;

@@ -79,10 +79,14 @@ export function AiWritingDialog({
         dragState.current.dragging = true;
         dragState.current.startX = e.clientX;
         dragState.current.startY = e.clientY;
-        dragState.current.origX = pos.x;
-        dragState.current.origY = pos.y;
+        // 从 DOM 读取当前位置，避免依赖 pos state 导致频繁重建
+        if (dialogRef.current) {
+            const rect = dialogRef.current.getBoundingClientRect();
+            dragState.current.origX = rect.left;
+            dragState.current.origY = rect.top;
+        }
         document.body.style.userSelect = "none";
-    }, [pos]);
+    }, []);
 
     useEffect(() => {
         const onMove = (e: MouseEvent) => {
