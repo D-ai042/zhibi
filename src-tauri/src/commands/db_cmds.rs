@@ -1041,6 +1041,7 @@ pub fn export_project(project_id: String, state: State<'_, DbState>) -> Result<V
         let chapter_index: Vec<Value> = read_setting_array(&format!("chapter-index-{}", project_id));
         let worldview_edges: Vec<Value> = read_setting_array(&format!("worldview-edges-{}", project_id));
         let worldview_groups: Vec<Value> = read_setting_array(&format!("worldview-groups-{}", project_id));
+        let char_groups: Vec<Value> = read_setting_array(&format!("char-groups-{}", project_id));
         // 分片章节数据
         let mut chapter_shards = serde_json::Map::new();
         if let Some(ids) = serde_json::from_str::<Vec<String>>(
@@ -1081,6 +1082,7 @@ pub fn export_project(project_id: String, state: State<'_, DbState>) -> Result<V
             "chapterShards": chapter_shards,
             "worldviewEdges": worldview_edges,
             "worldviewGroups": worldview_groups,
+            "charGroups": char_groups,
         }))
     })
     .map_err(|e| e.to_string())
@@ -1384,14 +1386,6 @@ pub fn import_project(project_data: serde_json::Value, mode: String, state: Stat
         }
 
         Ok(project_id)
-    })
-    .map(|_pid| {
-        let mode_label = match mode.as_str() {
-            "new" => "（新建项目）",
-            "merge" => "（合并数据）",
-            _ => "（已自动备份原数据）",
-        };
-        format!("项目「{}」导入成功{}", project_name, mode_label)
     })
     .map_err(|e| e.to_string())
 }

@@ -267,6 +267,35 @@ export function AppShell({ children }: AppShellProps) {
     return MODULE_LABEL[activeModule as keyof typeof MODULE_LABEL] ?? "未知";
   }, [activeModule, activeExtraId, customModules, navItems]);
 
+  /** 合并 SQLite chapterContents + localStorage chapterShards，localStorage 优先（最新数据） */
+  function mergeChapterContents(
+    dbContents: Record<string, unknown>[],
+    shards: Record<string, unknown> | undefined
+  ): Record<string, unknown>[] {
+    const map = new Map<string, Record<string, unknown>>();
+    // 先放 SQLite 数据
+    for (const cc of (dbContents || [])) {
+      const chId = cc.chapter_id as string;
+      if (chId) map.set(chId, cc);
+    }
+    // 再用 localStorage 分片数据覆盖（更新）
+    if (shards) {
+      for (const [chId, chData] of Object.entries(shards)) {
+        const ch = chData as Record<string, unknown>;
+        const content = (ch.content as string) || "";
+        if (content) {
+          map.set(chId, {
+            chapter_id: chId,
+            body_html: content,
+            body_text: content.replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " "),
+            updated_at: new Date().toISOString(),
+          });
+        }
+      }
+    }
+    return Array.from(map.values());
+  }
+
   const handleExport = async (type: "setup" | "chapters") => {
     if (!currentProject) return;
     setExporting(true);
@@ -287,12 +316,14 @@ export function AppShell({ children }: AppShellProps) {
           timelineNodes: raw.timelineNodes,
         }, currentProject.id);
       } else {
+        // 合并 chapterShards（localStorage 分片存储）到 chapterContents
+        const mergedContents = mergeChapterContents(raw.chapterContents as any[], (raw as any).chapterShards);
         await exportChaptersDoc({
           ...base,
           volumes: raw.volumes,
           chapters: raw.chapters,
           beatCards: raw.beatCards,
-          chapterContents: raw.chapterContents,
+          chapterContents: mergedContents,
         }, currentProject.id);
       }
     } catch (e) {
@@ -308,6 +339,7 @@ export function AppShell({ children }: AppShellProps) {
     try {
       const { exportFullDoc } = await import("@/lib/export-doc");
       const raw = await api.exportProject(currentProject.id);
+      const mergedContents = mergeChapterContents(raw.chapterContents as any[], (raw as any).chapterShards);
       await exportFullDoc({
         projectName: raw.project.name as string,
         exportTime: new Date().toISOString(),
@@ -319,7 +351,7 @@ export function AppShell({ children }: AppShellProps) {
         volumes: raw.volumes,
         chapters: raw.chapters,
         beatCards: raw.beatCards,
-        chapterContents: raw.chapterContents,
+        chapterContents: mergedContents,
       }, currentProject.id);
     } catch (e) {
       alert(`导出失败: ${e instanceof Error ? e.message : String(e)}`);

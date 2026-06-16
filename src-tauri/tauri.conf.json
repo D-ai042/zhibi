@@ -31,13 +31,17 @@
     "targets": [
       "nsis",
       "msi",
-      "dmg",
-      "appimage"
+      "dmg"
     ],
     "icon": [
       "icons/icon.ico",
       "icons/icon.icns"
-    ]
+    ],
+    "windows": {
+      "nsis": {
+        "template": "nsis/installer.nsi"
+      }
+    }
   },
   "plugins": {
     "updater": {

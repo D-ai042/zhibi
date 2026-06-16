@@ -944,6 +944,7 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
       const chapterIndex = getLocal(`chapter-index-${pid}`);
       const worldviewEdges = getLocal(`worldview-edges-${pid}`);
       const worldviewGroups = getLocal(`worldview-groups-${pid}`);
+      const charGroups = getLocal(`char-groups-${pid}`);
       // 分片章节数据
       const chapterShards: Record<string, any> = {};
       for (const chId of chapterIndex) {
@@ -969,6 +970,7 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
         chapterShards,
         worldviewEdges,
         worldviewGroups,
+        charGroups,
       } as T;
     }
 
@@ -1046,7 +1048,7 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
       }
 
       save(s);
-      return `项目 ${proj.name || pid} 导入成功` as T;
+      return pid as T;
     }
 
     case "list_app_settings": {

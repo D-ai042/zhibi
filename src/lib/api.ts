@@ -165,6 +165,7 @@ export const api = {
       chapters: Record<string, unknown>[];
       beatCards: Record<string, unknown>[];
       chapterContents: Record<string, unknown>[];
+      charGroups: Record<string, unknown>[];
     }>("export_project", { projectId }),
 
   /** 保存导出文件（Tauri 模式） */

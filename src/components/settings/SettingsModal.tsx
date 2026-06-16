@@ -1045,6 +1045,10 @@ function DataMigration() {
               if (pvt.worldviewGroups && Array.isArray(pvt.worldviewGroups)) {
                 await writeKey(`worldview-groups-${importedPid}`, JSON.stringify(pvt.worldviewGroups));
               }
+              // 恢复 char-groups（角色编组）
+              if (pvt.charGroups && Array.isArray(pvt.charGroups)) {
+                await writeKey(`char-groups-${importedPid}`, JSON.stringify(pvt.charGroups));
+              }
             }
           } catch (e) {
             const errMsg = e instanceof Error ? e.message : String(e);

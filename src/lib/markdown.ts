@@ -13,12 +13,12 @@ export function renderMarkdown(text: string): string {
         // 代码块 ``` ... ```
         .replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
             const langClass = lang ? ` class="language-${lang}"` : "";
-            return `<pre${langClass} style="background:#1e293b;color:#e2e8f0;border-radius:8px;padding:12px;overflow-x:auto;font-size:13px;line-height:1.5;margin:8px 0;"><code>${code.trim()}</code></pre>`;
+            return `<pre${langClass} style="background:#1e293b;color:#e2e8f0;border-radius:8px;padding:12px;overflow-x:auto;font-size:0.8125em;line-height:1.5;margin:8px 0;"><code>${code.trim()}</code></pre>`;
         })
         // 行内代码 `...`
         .replace(
             /`([^`]+)`/g,
-            '<code style="background:#f1f5f9;padding:2px 6px;border-radius:4px;font-size:13px;">$1</code>',
+            '<code style="background:#f1f5f9;padding:2px 6px;border-radius:4px;font-size:0.8125em;">$1</code>',
         )
         // 表格行
         .replace(/\|(.+)\|/g, (line) => {
@@ -27,7 +27,7 @@ export function renderMarkdown(text: string): string {
                 .filter((c) => c.trim())
                 .map(
                     (c) =>
-                        `<td style="border:1px solid #e2e8f0;padding:6px 12px;text-align:left;font-size:13px;">${c.trim()}</td>`,
+                        `<td style="border:1px solid #e2e8f0;padding:6px 12px;text-align:left;font-size:0.8125em;">${c.trim()}</td>`,
                 )
                 .join("");
             return `<tr>${cells}</tr>`;
@@ -40,31 +40,31 @@ export function renderMarkdown(text: string): string {
         // 标题 ###
         .replace(
             /^### (.+)$/gm,
-            '<h3 style="font-size:16px;font-weight:600;margin:16px 0 8px;color:#1e293b;">$1</h3>',
+            '<h3 style="font-size:1em;font-weight:600;margin:16px 0 8px;color:#1e293b;">$1</h3>',
         )
         // 标题 ##
         .replace(
             /^## (.+)$/gm,
-            '<h2 style="font-size:18px;font-weight:700;margin:20px 0 8px;color:#1e293b;">$1</h2>',
+            '<h2 style="font-size:1.125em;font-weight:700;margin:20px 0 8px;color:#1e293b;">$1</h2>',
         )
         // 标题 #
         .replace(
             /^# (.+)$/gm,
-            '<h1 style="font-size:22px;font-weight:700;margin:24px 0 12px;color:#0f172a;">$1</h1>',
+            '<h1 style="font-size:1.375em;font-weight:700;margin:24px 0 12px;color:#0f172a;">$1</h1>',
         )
         // 粗体
         .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
         // 无序列表
-        .replace(/^- (.+)$/gm, '<li style="margin:4px 0;font-size:14px;">$1</li>')
+        .replace(/^- (.+)$/gm, '<li style="margin:4px 0;font-size:0.875em;">$1</li>')
         // 有序列表
         .replace(
             /^\d+\. (.+)$/gm,
-            '<li style="margin:4px 0;font-size:14px;">$1</li>',
+            '<li style="margin:4px 0;font-size:0.875em;">$1</li>',
         )
         // 段落 (连续两换行)
         .replace(
             /\n\n/g,
-            '</p><p style="margin:8px 0;line-height:1.7;font-size:14px;">',
+            '</p><p style="margin:8px 0;line-height:1.7;font-size:0.875em;">',
         )
         // 换行
         .replace(/\n/g, "<br>");
@@ -79,5 +79,5 @@ export function renderMarkdown(text: string): string {
                 : `<ul style="padding-left:24px;margin:8px 0;">${match}</ul>`,
     );
 
-    return `<p style="margin:8px 0;line-height:1.7;font-size:14px;">${html}</p>`;
+    return `<p style="margin:8px 0;line-height:1.7;font-size:0.875em;">${html}</p>`;
 }

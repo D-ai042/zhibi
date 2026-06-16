@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Plus, Trash2, FileText, Sparkles, AlignLeft, Undo2, Redo2, CheckCircle } from "lucide-react";
+import { Plus, Minus, Trash2, FileText, Sparkles, AlignLeft, Undo2, Redo2, CheckCircle } from "lucide-react";
 import { useAppStore } from "@/stores/app-store";
 import { api } from "@/lib/api";
 import { buildProjectContext } from "@/lib/context-engine";
@@ -252,6 +252,7 @@ export function WritingModule() {
     const selIdSet = new Set(storeSelIds);
     const [volCollapsed, setVolCollapsed] = useState<Record<string, boolean>>({});
     const editorRef = useRef<HTMLDivElement>(null);
+    const [fontSize, setFontSize] = useState<number>(getJSONSync("editor-font-size", 16));
     const insertLockRef = useRef(false);
     const _ignoreNextInput = useRef(false);
     // ref 版 editingContent，供撤销/重做/键盘事件在闭包中安全使用
@@ -808,6 +809,7 @@ export function WritingModule() {
                 setEditingContent(safeContent);
                 const tid = setTimeout(() => syncEditorHTML(safeContent), 0);
                 timeoutIdsRef.current.push(tid);
+                _skipNextChapterEffect.current = true;
                 setChapters(prev => {
                     const upd = prev.map(c => c.id === selectedChapter.id ? { ...c, content: safeContent } : c);
                     saveChapters(pid, upd);
@@ -853,6 +855,7 @@ export function WritingModule() {
                 setEditingContent(safeContent);
                 const tid = setTimeout(() => syncEditorHTML(safeContent), 0);
                 timeoutIdsRef.current.push(tid);
+                _skipNextChapterEffect.current = true;
                 setChapters(prev => {
                     const upd = prev.map(c => c.id === selectedChapter.id ? { ...c, content: safeContent } : c);
                     saveChapters(pid, upd);
@@ -991,6 +994,7 @@ export function WritingModule() {
                 setEditingContent(safeContent);
                 const tid = setTimeout(() => syncEditorHTML(safeContent), 0);
                 timeoutIdsRef.current.push(tid);
+                _skipNextChapterEffect.current = true;
                 setChapters(prev => {
                     const upd = prev.map(c => c.id === selectedChapter.id ? { ...c, content: safeContent } : c);
                     saveChapters(pid, upd);
@@ -1430,7 +1434,7 @@ export function WritingModule() {
                                     <Redo2 className="h-3.5 w-3.5" />
                                 </button>
                                 <button onClick={saveContent}
-                                    className={`rounded-lg px-4 py-1.5 text-sm text-white ${isDirty ? "bg-amber-500 hover:bg-amber-600" : "bg-slate-300 cursor-default"}`}>
+                                    className={`rounded-lg px-3 py-1.5 text-xs text-white ${isDirty ? "bg-amber-500 hover:bg-amber-600" : "bg-slate-300 cursor-default"}`}>
                                     保存
                                 </button>
                                 {/* 定稿按钮（保存 + 更新记忆 + 词条激活 + 快照） */}
@@ -1581,13 +1585,25 @@ export function WritingModule() {
                                 }} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50" title="自动排版段落缩进">
                                     <AlignLeft className="h-3.5 w-3.5" />
                                 </button>
+                                {/* 字体大小调节 */}
+                                <div className="flex items-stretch rounded-lg border border-slate-200 overflow-hidden" title={`正文字体 ${fontSize}px`}>
+                                    <button type="button" onClick={() => { const n = Math.max(fontSize - 1, 12); setFontSize(n); setJSONSync("editor-font-size", n); }}
+                                        className="flex items-center justify-center px-1 py-1.5 text-xs text-slate-600 hover:bg-slate-100 leading-none">
+                                        <Minus className="h-3.5 w-3.5" />
+                                    </button>
+                                    <button type="button" onClick={() => { const n = Math.min(fontSize + 1, 100); setFontSize(n); setJSONSync("editor-font-size", n); }}
+                                        className="flex items-center justify-center px-1 py-1.5 text-xs text-slate-600 hover:bg-slate-100 leading-none">
+                                        <Plus className="h-3.5 w-3.5" />
+                                    </button>
+                                </div>
                             </div>
                         </div>
                         <div className="relative flex-1 min-h-0">
                             <>
                                 <div
                                     ref={editorRef as any}
-                                    className="absolute inset-0 overflow-y-auto bg-stone-50 p-6 font-serif text-base font-medium leading-relaxed text-stone-800 outline-none cursor-text"
+                                    className="absolute inset-0 overflow-y-auto bg-stone-50 p-6 font-serif font-medium leading-relaxed text-stone-800 outline-none cursor-text"
+                                    style={{ fontSize }}
                                     contentEditable
                                     suppressContentEditableWarning
                                     onInput={e => {
