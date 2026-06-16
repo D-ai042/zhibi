@@ -53,7 +53,11 @@ jobs:
         run: |
           TAG="${{ github.ref_name }}"
           rm -rf src-tauri/target/release/bundle
-          npm run tauri build -- --target ${{ matrix.target }} 2>&1
+          case "${{ matrix.ext }}" in
+            dmg-*) BUNDLE_TYPE="--bundles dmg" ;;
+            nsis) BUNDLE_TYPE="--bundles nsis" ;;
+          esac
+          npm run tauri build -- --target ${{ matrix.target }} $BUNDLE_TYPE 2>&1
 
       - name: 重命名产物
         shell: bash
@@ -61,35 +65,27 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${{ github.ref_name }}"
-          BUNDLE_DIR="src-tauri/target/${{ matrix.target }}/release/bundle"
-          echo "Looking for artifacts in: $BUNDLE_DIR"
-          ls -la "$BUNDLE_DIR" 2>/dev/null || echo "No bundle dir at $BUNDLE_DIR"
-          case "${{ matrix.ext }}" in
-            dmg) SRC=$(find "$BUNDLE_DIR" -name "*.dmg" | head -1) ;;
-            nsis) SRC=$(find "$BUNDLE_DIR" -name "*.exe" | head -1) ;;
-          esac
-          if [ -z "$SRC" ]; then
-            echo "No primary artifact, trying secondary..."
+          # 搜索所有可能的 bundle 输出路径
+          SEARCH_DIRS=(
+            "src-tauri/target/${{ matrix.target }}/release/bundle"
+            "src-tauri/target/release/bundle"
+          )
+          SRC=""
+          for BUNDLE_DIR in "${SEARCH_DIRS[@]}"; do
+            echo "Searching: $BUNDLE_DIR"
+            ls -la "$BUNDLE_DIR" 2>/dev/null || echo "  (not found)"
             case "${{ matrix.ext }}" in
-              dmg) SRC=$(find "$BUNDLE_DIR" -name "*.dmg" | head -1) ;;
-              nsis) SRC=$(find "$BUNDLE_DIR" -name "*.msi" | head -1) ;;
+              dmg-*) SRC=$(find "$BUNDLE_DIR" -name "*.dmg" 2>/dev/null | head -1) ;;
+              nsis) SRC=$(find "$BUNDLE_DIR" -name "*.exe" 2>/dev/null | head -1) ;;
             esac
-          fi
+            if [ -n "$SRC" ]; then break; fi
+          done
           if [ -z "$SRC" ]; then
-            echo "No artifact found, checking default bundle path..."
-            BUNDLE_DIR="src-tauri/target/release/bundle"
-            ls -la "$BUNDLE_DIR" 2>/dev/null || echo "No bundle dir there either"
-            case "${{ matrix.ext }}" in
-              dmg) SRC=$(find "$BUNDLE_DIR" -name "*.dmg" | head -1) ;;
-              nsis) SRC=$(find "$BUNDLE_DIR" -name "*.exe" | head -1) ;;
-            esac
-            if [ -z "$SRC" ]; then
-              case "${{ matrix.ext }}" in
-                nsis) SRC=$(find "$BUNDLE_DIR" -name "*.msi" | head -1) ;;
-              esac
-            fi
+            echo "No artifact found!"
+            echo "Listing all bundles:"
+            find src-tauri/target -name "*.dmg" -o -name "*.exe" -o -name "*.app" 2>/dev/null
+            exit 1
           fi
-          if [ -z "$SRC" ]; then echo "No artifact found!"; exit 1; fi
           EXT="${SRC##*.}"
           DST="zhibi-$TAG-${{ matrix.ext }}.$EXT"
           echo "Moving $SRC -> $DST"
