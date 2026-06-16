@@ -35,11 +35,13 @@ export async function prewarmFromSqlite(): Promise<void> {
         let count = 0;
         for (const { key, value } of all) {
             _sqliteCache.set(key, value);
-            // 写回 localStorage，让后续同步读直接命中
-            localStorage.setItem(key, value);
+            // 只写入 localStorage 中不存在的 key，避免覆盖更新的本地数据
+            if (localStorage.getItem(key) === null) {
+                localStorage.setItem(key, value);
+            }
             count++;
         }
-        console.log(`[storage] 预暖完成: ${count} 条从 SQLite 载入 localStorage`);
+        console.log(`[storage] 预暖完成: ${count} 条从 SQLite 载入`);
     } catch (e) {
         console.warn("[storage] 预暖失败（首次启动无数据属于正常）:", e);
     }

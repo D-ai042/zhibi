@@ -502,7 +502,12 @@ export function WritingModule() {
     }, [pid]);
 
     // ===== 选中章节加载内容 + 修订感知检测 + 上下文面板数据 =====
+    const _skipNextChapterEffect = useRef(false);
     useEffect(() => {
+        if (_skipNextChapterEffect.current) {
+            _skipNextChapterEffect.current = false;
+            return;
+        }
         if (selectedChapterId && pid) {
             const ch = chapters.find(c => c.id === selectedChapterId);
             if (ch) {
@@ -625,6 +630,7 @@ export function WritingModule() {
             c.id === selectedChapterId ? { ...c, content: editingContent } : c
         );
         try {
+            _skipNextChapterEffect.current = true; // 防止 setChapters 触发 effect 重置编辑器
             saveChapters(pid, nextChapters);  // 先写存储
             setChapters(nextChapters);         // 成功后更新 state
             savedContentRef.current = editingContent;
