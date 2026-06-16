@@ -6,7 +6,7 @@
  */
 
 export function uuid(): string {
-    if (typeof crypto.randomUUID === "function") {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === "function") {
         return crypto.randomUUID();
     }
     // fallback: 使用 crypto.getRandomValues 生成 UUID v4

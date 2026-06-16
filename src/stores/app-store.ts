@@ -142,6 +142,10 @@ interface AppState {
   /** 递增以通知 PlotDirectionPanel 重新加载 */
   plotBump: number;
   bumpPlot: () => void;
+
+  /** 自动保存触发函数（由 WritingModule 注册，用于 SYS-1 真自动保存） */
+  triggerAutosave?: () => void;
+  setTriggerAutosave: (fn: () => void) => void;
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -386,4 +390,5 @@ export const useAppStore = create<AppState>((set, get) => ({
   setWorldviewGroups: (g) => set((s) => ({ worldviewGroups: typeof g === "function" ? (g as (prev: AppState["worldviewGroups"]) => AppState["worldviewGroups"])(s.worldviewGroups) : g })),
   focusGroupBump: 0,
   focusGroup: (id) => set((s) => ({ focusGroupBump: s.focusGroupBump + 1, activeExtraId: id })),
+  setTriggerAutosave: (fn) => set({ triggerAutosave: fn }),
 }));

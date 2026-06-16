@@ -13,6 +13,7 @@ import { MemoryEngine } from "@/lib/memory-engine";
 import type { ChatMessage, Character, MemoryEntry, WorldTerm } from "@/types";
 import { MODULE_LABEL, OUTLINE_SECTION_LABEL } from "@/types";
 import { uuid } from "@/lib/uuid";
+import { getJSONSync, setJSONSync } from "@/lib/storage";
 
 /** 上传的文本文件 */
 interface UploadedFile {
@@ -205,8 +206,10 @@ function parseEdgeActions(content: string): { sourceTitle: string; targetTitle: 
   // 优先从 WORLD_TERMS 标记中读
   const wtm = content.match(/---WORLD_TERMS---\s*([\s\S]*?)\s*---END_WORLD_TERMS---/);
   const source = wtm ? wtm[1] : content;
-  // 尝试匹配裸 JSON 数组
-  const arrMatch = source.match(/\[[\s\S]*?\]/);
+  // 只匹配 ---WORLD_TERMS--- 标记内或标记前的 JSON 数组
+  const markerPos = content.indexOf('---WORLD_TERMS---');
+  const searchSpace = markerPos >= 0 ? content.slice(0, markerPos) : source;
+  const arrMatch = searchSpace.match(/\[[\s\S]*?\]/);
   if (!arrMatch) return [];
   try {
     const parsed = JSON.parse(arrMatch[0]);
@@ -455,6 +458,8 @@ export function AiChatPanel() {
   const [thinkingDuration, setThinkingDuration] = useState(0);
   const [editingMsgId, setEditingMsgId] = useState<string | null>(null);
   const [editingContent, setEditingContent] = useState("");
+  const editingContentRef = useRef("");
+  editingContentRef.current = editingContent;
   const thinkingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -667,7 +672,7 @@ export function AiChatPanel() {
     // 连线
     if (pendingEdges.length > 0 && curProject) {
       const edgeKey = "worldview-edges-" + curProject.id;
-      const existing = JSON.parse(localStorage.getItem(edgeKey) || "[]");
+      const existing = getJSONSync(edgeKey, []);
       for (const ea of pendingEdges) {
         const srcId = idMap.get(ea.sourceTitle);
         const tgtId = idMap.get(ea.targetTitle);
@@ -681,7 +686,7 @@ export function AiChatPanel() {
           });
         }
       }
-      localStorage.setItem(edgeKey, JSON.stringify(existing));
+      try { localStorage.setItem(edgeKey, JSON.stringify(existing)); } catch { /* quota full */ }
     }
 
     store.bumpWorldTerms();
@@ -764,7 +769,7 @@ export function AiChatPanel() {
     }
 
     // 删除旧关系
-    const existingEdges = await api.listRelationshipEdges(curProject.id);
+    let existingEdges = await api.listRelationshipEdges(curProject.id);
     for (const re of pendingRemoveEdges) {
       const srcId = nameMap.get(re.sourceName);
       const tgtId = nameMap.get(re.targetName);
@@ -774,6 +779,8 @@ export function AiChatPanel() {
       );
       for (const e of toRemove) await api.deleteRelationshipEdge(e.id);
     }
+    // 删除后重新加载 edges 集合（ME-6：避免重复检查用旧快照）
+    existingEdges = await api.listRelationshipEdges(curProject.id);
 
     // 新增关系（若已有连线则更新关系类型，不新增）
     for (const ea of pendingCharEdges) {
@@ -826,7 +833,7 @@ export function AiChatPanel() {
         const scIdx = storeData.characters?.findIndex((c: any) => c.id === targetChar.id);
         if (scIdx >= 0) {
           storeData.characters[scIdx] = { ...storeData.characters[scIdx], snapshots: existingSnaps };
-          localStorage.setItem(MOCK_KEY, JSON.stringify(storeData));
+          try { localStorage.setItem(MOCK_KEY, JSON.stringify(storeData)); } catch { /* quota full */ }
         }
       }
     }
@@ -856,7 +863,7 @@ export function AiChatPanel() {
   const handlePlotInsert = useCallback(async () => {
     if (!currentProject) return;
     const pid = currentProject.id;
-    const existing = JSON.parse(localStorage.getItem("plot-segments-" + pid) || "[]");
+    const existing = getJSONSync("plot-segments-" + pid, []);
     const nameMap = new Map<string, string>();
     for (const s of existing) nameMap.set(s.title, s.id);
 
@@ -881,10 +888,10 @@ export function AiChatPanel() {
         }
       }
     }
-    localStorage.setItem("plot-segments-" + pid, JSON.stringify(existing));
+    try { localStorage.setItem("plot-segments-" + pid, JSON.stringify(existing)); } catch { /* quota full */ }
 
     // 3. 连线
-    const existingEdges = JSON.parse(localStorage.getItem("plot-edges-" + pid) || "[]");
+    const existingEdges = getJSONSync("plot-edges-" + pid, []);
     for (const ea of pendingPlotEdges) {
       const srcId = nameMap.get(ea.sourceTitle);
       const tgtId = nameMap.get(ea.targetTitle);
@@ -896,7 +903,7 @@ export function AiChatPanel() {
         });
       }
     }
-    localStorage.setItem("plot-edges-" + pid, JSON.stringify(existingEdges));
+    try { localStorage.setItem("plot-edges-" + pid, JSON.stringify(existingEdges)); } catch { /* quota full */ }
 
     // 触发刷新
     const store = useAppStore.getState();
@@ -922,8 +929,8 @@ export function AiChatPanel() {
   const handleChapterInsert = useCallback(async () => {
     if (!currentProject || pendingChapters.length === 0) return;
     const pid = currentProject.id;
-    const segs = JSON.parse(localStorage.getItem("plot-segments-" + pid) || "[]");
-    const existing = JSON.parse(localStorage.getItem("plot-chapters-" + pid) || "[]");
+    const segs = getJSONSync("plot-segments-" + pid, []);
+    const existing = getJSONSync("plot-chapters-" + pid, []);
     let created = 0;
     for (const pc of pendingChapters) {
       const seg = segs.find((s: any) => s.title === pc.volumeTitle && s.type === "bright");
@@ -937,7 +944,7 @@ export function AiChatPanel() {
       });
       created++;
     }
-    localStorage.setItem("plot-chapters-" + pid, JSON.stringify(existing));
+    try { localStorage.setItem("plot-chapters-" + pid, JSON.stringify(existing)); } catch { /* quota full */ }
     setPendingChapters([]);
     const store = useAppStore.getState();
     store.bumpPlot();
@@ -1057,7 +1064,7 @@ export function AiChatPanel() {
     if (idx < 0) return;
     const newMsgs = store.chatMessages.slice(0, idx);
     useAppStore.setState({ chatMessages: newMsgs });
-    const text = editingContent.trim();
+    const text = (editingContentRef.current || "").trim();
     if (text) {
       setInput(text);
       requestAnimationFrame(() => {
@@ -1108,8 +1115,12 @@ export function AiChatPanel() {
     const idx = [...all].reverse().findIndex((m) => m.role === "assistant");
     if (idx < 0) return;
     const realIdx = all.length - 1 - idx;
-    const userIdx = realIdx - 1;
-    const userMsg = userIdx >= 0 && all[userIdx]?.role === "user" ? all[userIdx] : null;
+    // 往前找到最近一条 user 消息（不假设 realIdx-1）
+    let userIdx = -1;
+    for (let i = realIdx - 1; i >= 0; i--) {
+      if (all[i].role === "user") { userIdx = i; break; }
+    }
+    const userMsg = userIdx >= 0 ? all[userIdx] : null;
     const toRemove = new Set<number>([realIdx]);
     if (userMsg) toRemove.add(userIdx);
     useAppStore.setState({ chatMessages: all.filter((_, i) => !toRemove.has(i)) });
@@ -1182,7 +1193,7 @@ export function AiChatPanel() {
       let segmentsContext = "";
       if (currentProject && (activeModule === "outline" || activeModule === "writing")) {
         try {
-          const segs = JSON.parse(localStorage.getItem("plot-segments-" + currentProject.id) || "[]");
+          const segs = getJSONSync("plot-segments-" + currentProject.id, [] as any[]);
           if (segs.length > 0) {
             const segList = segs.map((s: any) =>
               `「${s.title}」(${s.type === "bright" ? "明线" : "暗线"},` +
@@ -1740,7 +1751,7 @@ export function AiChatPanel() {
         // ====== 细纲更新/删除：立即执行（无需待确认） ======
         if (plotBatch.updateBeats.length > 0 || plotBatch.deleteBeats.length > 0) {
           const pid = currentProject!.id;
-          const segs = JSON.parse(localStorage.getItem("plot-segments-" + pid) || "[]");
+          const segs = getJSONSync("plot-segments-" + pid, [] as any[]);
           let updatedInfo: string[] = [];
 
           for (const ub of plotBatch.updateBeats) {
@@ -1766,7 +1777,7 @@ export function AiChatPanel() {
           }
 
           if (updatedInfo.length > 0) {
-            localStorage.setItem("plot-segments-" + pid, JSON.stringify(segs));
+            try { localStorage.setItem("plot-segments-" + pid, JSON.stringify(segs)); } catch { /* quota full */ }
             useAppStore.getState().bumpPlot();
             displayContent = displayContent
               .replace(/---PLOT_SEGMENTS---[\s\S]*?---END_PLOT_SEGMENTS---/g, "")
@@ -2117,7 +2128,7 @@ export function AiChatPanel() {
             </div>
             <div className="flex flex-wrap gap-2">
               {pendingChars.map((c, i) => (
-                <div key={i} className="relative group rounded-lg border bg-white p-2 shadow-sm min-w-[120px]" style={{ borderColor: "#3b82f6", borderLeftWidth: 3 }}>
+                <div key={c.name} className="relative group rounded-lg border bg-white p-2 shadow-sm min-w-[120px]" style={{ borderColor: "#3b82f6", borderLeftWidth: 3 }}>
                   <button className="absolute top-1 right-1 z-10 opacity-0 group-hover:opacity-100 text-slate-400 hover:text-red-500 text-xs leading-none"
                     onClick={() => setPendingChars(prev => prev.filter((_, j) => j !== i))}>✕</button>
                   <p className="text-xs font-semibold text-slate-800 pr-4">{c.name}</p>

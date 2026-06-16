@@ -374,15 +374,21 @@ export async function buildProjectContext(input: ContextEngineInput): Promise<Co
     // P4: 前一章正文（后段优先，token 预算弹性分配）
     const p4 = assembleP4(projectId, currentChapter?.number || 1);
 
+    // FUNC-9: 伏笔回收提醒
+    const foreshadowReminder = assembleForeshadowReminders(projectId, currentChapter?.number || 1);
+
     const layers: Record<string, string> = { p0, p1, p2, p3, p4 };
     const { text: clippedText, omitted } = enforceTokenBudget({ ...layers }, EFFECTIVE_MAX_TOKENS);
+
+    // 将伏笔提醒追加到 P1 之后（不受裁剪影响，因为它是简短提醒）
+    const finalHint = clippedText + foreshadowReminder;
 
     // 提取关键词用于过滤
     const keywords = extractKeywords([], currentChapter);
     const activeTerms = filterWorldTerms(allWorldTerms, keywords);
 
     return {
-        systemHint: clippedText,
+        systemHint: finalHint,
         layers: { p0, p1, p2, p3, p4 },
         totalTokens: estimateTokens(clippedText),
         omitted,
@@ -827,11 +833,11 @@ function assembleP3(allCharacters: Character[], currentChapterNumber: number, al
         parts.push("");
     }
 
-    // === 第二层：角色关系（仅活跃角色之间） ===
+    // === 第二层：角色关系（任一端活跃即发送 — FUNC-4 修复） ===
     if (allEdges.length > 0 && activeChars.length > 1) {
         const activeIds = new Set(activeChars.map(c => c.id));
         const appearedEdges = allEdges
-            .filter(e => activeIds.has(e.source_id) && activeIds.has(e.target_id))
+            .filter(e => activeIds.has(e.source_id) || activeIds.has(e.target_id))
             .sort((a, b) => b.strength - a.strength)
             .slice(0, 20);
         if (appearedEdges.length > 0) {
@@ -856,7 +862,7 @@ function assembleP3(allCharacters: Character[], currentChapterNumber: number, al
             } else if (!activeCharNames.has(c.name)) {
                 lastInfo = " | 尚未出场";
             }
-            parts.push(`· ${c.name}（${c.faction || "无"}）${lastInfo} | ${summary}`);
+            parts.push(`· ${c.name}（${c.faction || "无"}）${lastInfo} | ${summary}${c.voice_style ? ` | 口吻：${c.voice_style.slice(0, 30)}` : ""}`);
         }
         parts.push("");
     }
@@ -888,6 +894,19 @@ function assembleP4(projectId: string, currentChapterNumber: number): string {
     }
 }
 
+/** FUNC-9: 伏笔回收提醒 — 检查待回收伏笔并追加提醒 */
+function assembleForeshadowReminders(projectId: string, currentChapterNumber: number): string {
+    const logStore = getLogStoreV2(projectId);
+    const pendingForeshadows = (logStore.foreshadows || [])
+        .filter(f => f.status === "pending" && f.expected_resolve_chapter <= currentChapterNumber + 3);
+    if (pendingForeshadows.length === 0) return "";
+    const parts = ["\n===== 🔔 待回收伏笔提醒 ====="];
+    for (const f of pendingForeshadows) {
+        parts.push(`· 第${f.planted_chapter}章埋下，建议在第${f.expected_resolve_chapter}章回收：${f.description}`);
+    }
+    return parts.join("\n");
+}
+
 // ===== token 裁剪（v3.0 三明治布局） =====
 
 /** 各层 Token 预算 */
@@ -900,7 +919,7 @@ const LAYER_BUDGET: Record<string, { max: number; fixed: boolean }> = {
 };
 
 /** 裁剪顺序：P2(风格) → P3(角色) → P0(铁则) → P1(剧情)，P4 最后裁 */
-const LAYER_CULL_ORDER = ["p2", "p3", "p0", "p1"];
+const LAYER_CULL_ORDER = ["p4", "p2", "p3", "p0", "p1"];
 
 /**
  * 三明治布局 + 按层裁剪。

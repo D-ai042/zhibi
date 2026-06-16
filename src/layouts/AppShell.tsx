@@ -435,7 +435,7 @@ export function AppShell({ children }: AppShellProps) {
                           const isActive = apiConfig?.api_model === m.value && m.provider === activeProvider;
                           return (
                             <button
-                              key={m.value}
+                              key={`${m.provider}::${m.value}`}
                               type="button"
                               className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-slate-50 ${isActive ? "bg-amber-50 text-amber-700 font-medium" : "text-slate-600"}`}
                               onClick={async () => {

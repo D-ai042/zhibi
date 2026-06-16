@@ -11,6 +11,8 @@ import { renderMarkdown } from "@/lib/markdown";
 import { getJSONSync, setJSONSync } from "@/lib/storage";
 import type { ChapterSummary, BeatCard } from "@/types";
 import { uuid } from "@/lib/uuid";
+import { createBackup } from "@/lib/backup";
+import { runQualityCheck } from "@/lib/quality-checker";
 
 // ===== 章节 =====
 interface PlotChapter {
@@ -26,8 +28,35 @@ interface PlotSegment {
     title: string; characters: string; location: string; time: string; event: string;
 }
 
-function loadChapters(pid: string): PlotChapter[] { return getJSONSync(`plot-chapters-${pid}`, []); }
-function saveChapters(pid: string, chs: PlotChapter[]) { setJSONSync(`plot-chapters-${pid}`, chs); }
+function loadChapters(pid: string): PlotChapter[] {
+    // 从索引读取所有章节 ID，然后逐章加载（SYS-2：每章独立存储，避免单 key 全丢）
+    const ids: string[] = getJSONSync(`chapter-index-${pid}`, []);
+    if (ids.length === 0) {
+        // 兼容旧格式：尝试从单 key 读取，自动迁移
+        const old = getJSONSync(`plot-chapters-${pid}`, null as PlotChapter[] | null);
+        if (old && old.length > 0) {
+            saveChapters(pid, old); // 触发迁移到分片存储
+            return old;
+        }
+        return [];
+    }
+    const chapters: PlotChapter[] = [];
+    for (const id of ids) {
+        const ch = getJSONSync(`chapter-${pid}-${id}`, null as PlotChapter | null);
+        if (ch) chapters.push(ch);
+    }
+    return chapters;
+}
+function saveChapters(pid: string, chs: PlotChapter[]) {
+    // 每章独立存储 + 维护索引 + 同步聚合缓存供其他模块读取
+    const ids: string[] = [];
+    for (const ch of chs) {
+        setJSONSync(`chapter-${pid}-${ch.id}`, ch);
+        ids.push(ch.id);
+    }
+    setJSONSync(`chapter-index-${pid}`, ids);
+    setJSONSync(`plot-chapters-${pid}`, chs);
+}
 function loadSegments(pid: string): PlotSegment[] { return getJSONSync(`plot-segments-${pid}`, []); }
 function loadEdges(pid: string): { source: string; target: string; sourceHandle?: string; targetHandle?: string }[] { return getJSONSync(`plot-edges-${pid}`, []); }
 
@@ -132,7 +161,8 @@ async function aiExtractNewCharacters(projectId: string, chapterNumber: number, 
             // 解析 ---CHARACTERS--- 块（与 AiChatPanel 的 parseCharacterBatch 逻辑一致）
             const m = charRes.content.match(/---CHARACTERS---\s*([\s\S]*?)\s*---END_CHARACTERS---/);
             if (!m) return;
-            const arr = JSON.parse(m[1]);
+            let arr: any[];
+            try { arr = JSON.parse(m[1]); } catch { return; }
             if (!Array.isArray(arr) || arr.length === 0) return;
 
             const chars = arr
@@ -233,6 +263,8 @@ export function WritingModule() {
     useEffect(() => () => { timeoutIdsRef.current.forEach(clearTimeout); timeoutIdsRef.current = []; }, []);
     // AI 写作并发守卫 ref
     const aiWritingRef = useRef(false);
+    const polishingRef = useRef(false);
+    const humanizingRef = useRef(false);
     /**
      * 将 Markdown 内容渲染为 HTML 并同步到内容可编辑区。
      * 仅在外部内容变更时调用（加载章节、AI 写作、撤销、排版等），
@@ -255,7 +287,8 @@ export function WritingModule() {
     const [canRedo, setCanRedo] = useState(false);
 
     /** 将当前内容推入撤销栈 */
-    function pushUndo(content: string) {
+    function pushUndo() {
+        const content = editingContentRef.current;
         const stack = undoContentStackRef.current;
         // 避免重复推相同内容
         if (stack.length > 0 && stack[stack.length - 1] === content) return;
@@ -504,16 +537,18 @@ export function WritingModule() {
     const [ctxStyleTone, setCtxStyleTone] = useState("");                   // P2 文笔基调
     const [ctxCollapsed, setCtxCollapsed] = useState(true);
 
+    let loadGen = 0;
     async function loadContextPanelData(projectId: string, chapterNumber: number, chapterId: string) {
+        const gen = ++loadGen;
         try {
             const [summaries, beatCards, styleGuide] = await Promise.all([
                 api.getChapterSummaries(projectId).catch(() => [] as ChapterSummary[]),
                 api.listBeatCards(chapterId).catch(() => [] as BeatCard[]),
                 api.getStyleGuide(projectId).catch(() => null as import('@/types').StyleGuide | null),
             ]);
+            if (gen !== loadGen) return;
             setCtxSummaries(summaries.filter(s => s.chapter_number < chapterNumber && s.chapter_number >= chapterNumber - 5).sort((a, b) => a.chapter_number - b.chapter_number));
             setCtxBeatCards(beatCards);
-            // P2 风格指南
             if (styleGuide) {
                 setCtxStyleRedlines(styleGuide.writing_rules || "");
                 setCtxStyleNarrative(styleGuide.narrative_style || "");
@@ -526,23 +561,23 @@ export function WritingModule() {
                 if (store) {
                     const states = store.characterStates || [];
                     const active = states.filter((s: any) => s.last_active_chapter >= chapterNumber - 10);
+                    if (gen !== loadGen) return;
                     setCtxCharacters(active.map((s: any) => ({ name: s.character_name, status: s.current_status })));
                 }
             } catch { /* ignore */ }
-            // ★ P0: 规则词条
             try {
                 const allTerms = await api.listWorldTerms(projectId);
+                if (gen !== loadGen) return;
                 const rules = allTerms.filter(t => t.term_type === "rule").map(t => `· ${t.title}：${t.one_liner || ""}`);
                 setCtxWorldRules(rules.slice(0, 8));
             } catch { setCtxWorldRules([]); }
-            // ★ P4: 加载前一章正文
             try {
+                if (gen !== loadGen) return;
                 const allChapters = getJSONSync(`plot-chapters-${projectId}`, [] as any[]);
                 const prev = allChapters.find((ch: any) => ch.number === chapterNumber - 1);
                 if (prev && prev.content) {
                     const clean = prev.content.replace(/<[^>]+>/g, '').trim();
                     if (clean) {
-                        // 只取后段 3000 字（最近的写作内容）
                         setCtxPrevContent({ number: prev.number, title: prev.title || "", content: clean.slice(-3000) });
                     } else {
                         setCtxPrevContent(null);
@@ -582,23 +617,60 @@ export function WritingModule() {
     const selectedChapter = chapters.find(c => c.id === selectedChapterId);
     const selectedVolume = volumes.find(v => v.id === selectedChapter?.volumeSegmentId);
 
-    // ===== 保存内容（纯文本保存，不调用 AI 摘要） =====
+    // ===== 保存内容（先写存储，再更新 state — SYS-4 原子性修复） =====
     const saveContent = useCallback(() => {
         if (!pid || !selectedChapterId || !selectedChapter) return;
-        // 保存前推入撤销栈
-        pushUndo(editingContent);
-        setChapters(prev => {
-            const upd = prev.map(c => c.id === selectedChapterId ? { ...c, content: editingContent } : c);
-            saveChapters(pid, upd);
-            return upd;
-        });
-        savedContentRef.current = editingContent;
-        setIsDirty(false);
-        bumpSavedChapterVersion(pid, selectedChapter.number);
-        useAppStore.getState().setAutosaveStatus("✅ 已保存");
-        const tid = setTimeout(() => useAppStore.getState().setAutosaveStatus("已就绪"), 2000);
-        timeoutIdsRef.current.push(tid);
-    }, [pid, selectedChapterId, selectedChapter, editingContent]);
+        pushUndo();
+        const nextChapters = chapters.map(c =>
+            c.id === selectedChapterId ? { ...c, content: editingContent } : c
+        );
+        try {
+            saveChapters(pid, nextChapters);  // 先写存储
+            setChapters(nextChapters);         // 成功后更新 state
+            savedContentRef.current = editingContent;
+            setIsDirty(false);
+            bumpSavedChapterVersion(pid, selectedChapter.number);
+            useAppStore.getState().setAutosaveStatus("✅ 已保存");
+            const tid = setTimeout(() => useAppStore.getState().setAutosaveStatus("已就绪"), 2000);
+            timeoutIdsRef.current.push(tid);
+        } catch (e) {
+            useAppStore.getState().setAutosaveStatus("⚠ 保存失败，请重试");
+            console.error("saveContent failed:", e);
+        }
+    }, [pid, selectedChapterId, selectedChapter, editingContent, chapters]);
+
+    // ===== 注册自动保存（SYS-1）—— 用 ref 避免 saveContent 身份变化导致死循环 =====
+    const saveContentRef = useRef(saveContent);
+    saveContentRef.current = saveContent;
+    useEffect(() => {
+        useAppStore.getState().setTriggerAutosave(() => saveContentRef.current());
+        return () => useAppStore.getState().setTriggerAutosave(() => { });
+    }, []);
+
+    // ===== SYS-3：草稿自动持久化（2秒防抖） =====
+    const DRAFT_KEY = (pid: string, chId: string) => `draft-${pid}-${chId}`;
+    const [pendingDraft, setPendingDraft] = useState<{ content: string; savedAt: string } | null>(null);
+    useEffect(() => {
+        if (!editingContent || !selectedChapterId || !pid) return;
+        const timer = setTimeout(() => {
+            setJSONSync(DRAFT_KEY(pid, selectedChapterId), {
+                content: editingContent,
+                savedAt: new Date().toISOString(),
+            });
+        }, 2000);
+        return () => clearTimeout(timer);
+    }, [editingContent, selectedChapterId, pid]);
+    // 选中章节时检查是否有未恢复的草稿
+    useEffect(() => {
+        if (selectedChapterId && pid) {
+            const draft = getJSONSync(DRAFT_KEY(pid, selectedChapterId), null as { content: string; savedAt: string } | null);
+            if (draft && draft.content !== savedContentRef.current) {
+                setPendingDraft(draft);
+            } else {
+                setPendingDraft(null);
+            }
+        }
+    }, [selectedChapterId, pid]);
 
     // ===== 新建章节 =====
     const addChapter = useCallback((volumeSegmentId: string) => {
@@ -626,9 +698,11 @@ export function WritingModule() {
         if (!pid) return;
         const ch = chapters.find(c => c.id === chId);
         if (!window.confirm(`确定删除「${ch?.title || chId}」？章节内容将永久丢失。`)) return;
-        const all = loadChapters(pid).filter(c => c.id !== chId);
-        saveChapters(pid, all);
-        setChapters(all);
+        setChapters(prev => {
+            const all = prev.filter(c => c.id !== chId);
+            saveChapters(pid, all);
+            return all;
+        });
         if (selectedChapterId === chId) { setSelectedChapterId(null); setEditingContent(""); }
     }, [pid, selectedChapterId, chapters]);
 
@@ -706,8 +780,9 @@ export function WritingModule() {
     const handlePolish = useCallback(async () => {
         if (!pid) { useAppStore.getState().setAutosaveStatus("⚠ 未选择项目"); return; }
         if (!selectedChapter) { useAppStore.getState().setAutosaveStatus("⚠ 未选择章节"); return; }
-        if (!editingContent.trim()) { useAppStore.getState().setAutosaveStatus("⚠ 章节内容为空"); return; }
-        if (polishing) return; // 防止重复点击
+        if (!String(editingContent ?? '').trim()) { useAppStore.getState().setAutosaveStatus("⚠ 章节内容为空"); return; }
+        if (polishingRef.current) return; // ref 守卫防止双击竞态
+        polishingRef.current = true;
         setPolishing(true);
         useAppStore.getState().setAutosaveStatus("正在精修...");
         try {
@@ -722,15 +797,18 @@ export function WritingModule() {
                 },
             });
             if (res.content && !res.error) {
-                pushUndo(editingContent);
-                setEditingContent(res.content);
-                const tid = setTimeout(() => syncEditorHTML(res.content), 0);
+                const safeContent = String(res.content ?? '');
+                pushUndo();
+                setEditingContent(safeContent);
+                const tid = setTimeout(() => syncEditorHTML(safeContent), 0);
                 timeoutIdsRef.current.push(tid);
                 setChapters(prev => {
-                    const upd = prev.map(c => c.id === selectedChapter.id ? { ...c, content: res.content } : c);
+                    const upd = prev.map(c => c.id === selectedChapter.id ? { ...c, content: safeContent } : c);
                     saveChapters(pid, upd);
                     return upd;
                 });
+                savedContentRef.current = safeContent;
+                setIsDirty(false);
                 useAppStore.getState().setAutosaveStatus("✅ 精修完成");
             } else {
                 useAppStore.getState().setAutosaveStatus("⚠ 精修失败：" + (res.error || "未知错误"));
@@ -739,6 +817,7 @@ export function WritingModule() {
             useAppStore.getState().setAutosaveStatus("⚠ 请求失败");
             console.error("polish failed:", e);
         } finally {
+            polishingRef.current = false;
             setPolishing(false);
         }
     }, [pid, selectedChapter, editingContent, polishing]);
@@ -746,8 +825,9 @@ export function WritingModule() {
     const handleHumanize = useCallback(async () => {
         if (!pid) { useAppStore.getState().setAutosaveStatus("⚠ 未选择项目"); return; }
         if (!selectedChapter) { useAppStore.getState().setAutosaveStatus("⚠ 未选择章节"); return; }
-        if (!editingContent.trim()) { useAppStore.getState().setAutosaveStatus("⚠ 章节内容为空"); return; }
-        if (humanizing) return; // 防止重复点击
+        if (!String(editingContent ?? '').trim()) { useAppStore.getState().setAutosaveStatus("⚠ 章节内容为空"); return; }
+        if (humanizingRef.current) return; // ref 守卫防止双击竞态
+        humanizingRef.current = true;
         setHumanizing(true);
         useAppStore.getState().setAutosaveStatus("正在去 AI 味...");
         try {
@@ -762,15 +842,18 @@ export function WritingModule() {
                 },
             });
             if (res.content && !res.error) {
-                pushUndo(editingContent);
-                setEditingContent(res.content);
-                const tid = setTimeout(() => syncEditorHTML(res.content), 0);
+                const safeContent = String(res.content ?? '');
+                pushUndo();
+                setEditingContent(safeContent);
+                const tid = setTimeout(() => syncEditorHTML(safeContent), 0);
                 timeoutIdsRef.current.push(tid);
                 setChapters(prev => {
-                    const upd = prev.map(c => c.id === selectedChapter.id ? { ...c, content: res.content } : c);
+                    const upd = prev.map(c => c.id === selectedChapter.id ? { ...c, content: safeContent } : c);
                     saveChapters(pid, upd);
                     return upd;
                 });
+                savedContentRef.current = safeContent;
+                setIsDirty(false);
                 useAppStore.getState().setAutosaveStatus("✅ 去 AI 味完成");
             } else {
                 useAppStore.getState().setAutosaveStatus("⚠ 处理失败：" + (res.error || "未知错误"));
@@ -779,6 +862,7 @@ export function WritingModule() {
             useAppStore.getState().setAutosaveStatus("⚠ 请求失败");
             console.error("humanize failed:", e);
         } finally {
+            humanizingRef.current = false;
             setHumanizing(false);
         }
     }, [pid, selectedChapter, editingContent, humanizing]);
@@ -823,7 +907,7 @@ export function WritingModule() {
                 // 灵感参考（放在 user_message）
                 const inspIds = refIds.filter(r => r.startsWith("insp:")).map(r => r.slice(5));
                 if (inspIds.length > 0) {
-                    const allCards = JSON.parse(localStorage.getItem(`inspiration-cards-${pid}`) || "[]");
+                    const allCards = getJSONSync(`inspiration-cards-${pid}`, [] as any[]);
                     const selected = allCards.filter((c: any) => inspIds.includes(c.id));
                     if (selected.length > 0) {
                         inspContext = "\n【灵感参考】\n";
@@ -835,7 +919,7 @@ export function WritingModule() {
                 // 已结构分析的素材注入 system_hint（最高优先级）
                 const matIds = refIds.filter(r => r.startsWith("mat:")).map(r => r.slice(4));
                 if (matIds.length > 0) {
-                    const allItems = JSON.parse(localStorage.getItem(`material-items-${pid}`) || "[]");
+                    const allItems = getJSONSync(`material-items-${pid}`, [] as any[]);
                     const selected = allItems.filter((i: any) => matIds.includes(i.id) && (i.type === "text" || i.content));
                     if (selected.length > 0) {
                         const analyzed = selected.filter((i: any) => i.structureAnalysis);
@@ -895,13 +979,14 @@ export function WritingModule() {
             } else {
                 // AI 写本章前，先把编辑器当前内容推入撤销栈
                 if (editingContent) {
-                    pushUndo(editingContent);
+                    pushUndo();
                 }
-                setEditingContent(res.content);
-                const tid = setTimeout(() => syncEditorHTML(res.content), 0);
+                const safeContent = String(res.content ?? '');
+                setEditingContent(safeContent);
+                const tid = setTimeout(() => syncEditorHTML(safeContent), 0);
                 timeoutIdsRef.current.push(tid);
                 setChapters(prev => {
-                    const upd = prev.map(c => c.id === selectedChapter.id ? { ...c, content: res.content } : c);
+                    const upd = prev.map(c => c.id === selectedChapter.id ? { ...c, content: safeContent } : c);
                     saveChapters(pid, upd);
                     return upd;
                 });
@@ -978,7 +1063,7 @@ export function WritingModule() {
             resizingRef.current = false;
             document.body.style.cursor = '';
             document.body.style.userSelect = '';
-            if (pid) localStorage.setItem("writing-sidebar-width-" + pid, String(sidebarWidthRef.current));
+            if (pid) try { localStorage.setItem("writing-sidebar-width-" + pid, String(sidebarWidthRef.current)); } catch { /* quota full */ }
         };
         document.addEventListener('mousemove', handler);
         document.addEventListener('mouseup', up);
@@ -1302,7 +1387,7 @@ export function WritingModule() {
                                 <button
                                     type="button"
                                     onClick={handleHumanize}
-                                    disabled={!selectedChapter || !editingContent.trim() || humanizing}
+                                    disabled={!selectedChapter || !String(editingContent ?? '').trim() || humanizing}
                                     className="relative flex items-center gap-1.5 rounded-md bg-emerald-600 px-3 py-1.5 text-xs text-white hover:bg-emerald-700 disabled:opacity-50"
                                 >
                                     <Sparkles className="h-3.5 w-3.5" />
@@ -1313,7 +1398,7 @@ export function WritingModule() {
                                 <button
                                     type="button"
                                     onClick={handlePolish}
-                                    disabled={!selectedChapter || !editingContent.trim() || polishing}
+                                    disabled={!selectedChapter || !String(editingContent ?? '').trim() || polishing}
                                     className="relative flex items-center gap-1.5 rounded-md bg-amber-600 px-3 py-1.5 text-xs text-white hover:bg-amber-700 disabled:opacity-50"
                                 >
                                     <Sparkles className="h-3.5 w-3.5" />
@@ -1366,9 +1451,9 @@ export function WritingModule() {
                                     try {
                                         useAppStore.getState().setAutosaveStatus("正在分析词条...");
                                         const allWorldTerms = await api.listWorldTerms(pid);
-                                        const segs = JSON.parse(localStorage.getItem(`plot-segments-${pid}`) || "[]");
-                                        const chaps = JSON.parse(localStorage.getItem(`plot-chapters-${pid}`) || "[]");
-                                        const logStore = JSON.parse(localStorage.getItem(`novel-workbench-log-${pid}`) || "{}");
+                                        const segs = getJSONSync(`plot-segments-${pid}`, []);
+                                        const chaps = getJSONSync(`plot-chapters-${pid}`, []);
+                                        const logStore = getJSONSync(`novel-workbench-log-${pid}`, {});
                                         const recentSummaries = logStore.summaries || [];
                                         await activateNextChapterTerms(
                                             pid,
@@ -1392,6 +1477,35 @@ export function WritingModule() {
                                         useAppStore.getState().setAutosaveStatus("✅ 角色已预测");
                                     } catch (e) {
                                         console.error("定稿 - 角色预测失败:", e);
+                                    }
+                                    // 质量检查（FUNC-7：接线 runQualityCheck）
+                                    try {
+                                        useAppStore.getState().setAutosaveStatus("正在质量检查...");
+                                        const qcResult = await runQualityCheck({
+                                            projectId: pid,
+                                            chapterId: selectedChapterId,
+                                            chapterNumber: selectedChapter.number,
+                                            chapterContent: editingContent,
+                                        });
+                                        if (!qcResult.passed) {
+                                            const errors = qcResult.checks.filter(c => c.severity === "error");
+                                            if (errors.length > 0) {
+                                                useAppStore.getState().addChatMessage({
+                                                    id: uuid(),
+                                                    role: "system",
+                                                    content: `⚠️ 质量检查发现 ${errors.length} 个问题：\n${errors.map(e => `· ${e.message}`).join("\n")}`,
+                                                    created_at: new Date().toISOString(),
+                                                });
+                                            }
+                                        }
+                                    } catch (e) {
+                                        console.error("质量检查失败:", e);
+                                    }
+                                    // 创建备份（SYS-5）
+                                    try {
+                                        createBackup(pid);
+                                    } catch (e) {
+                                        console.error("备份创建失败:", e);
                                     }
                                     // 创建快照标记定稿
                                     createSnapshot(pid, `第${selectedChapter.number}章「${selectedChapter.title}」定稿`);
@@ -1450,7 +1564,7 @@ export function WritingModule() {
                                         // 用户输入时推入撤销栈（防抖：仅当内容变化时）
                                         if (text !== editingContent) {
                                             if (!_ignoreNextInput.current) {
-                                                pushUndo(editingContent);
+                                                pushUndo();
                                             }
                                             _ignoreNextInput.current = false;
                                             setEditingContent(text);

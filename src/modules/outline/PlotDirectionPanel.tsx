@@ -181,7 +181,7 @@ export function PlotDirectionPanel() {
   // 加载角色名和世界观地名
   useEffect(() => {
     if (!currentProject) return;
-    api.listCharacters(currentProject.id).then(chars => setCharacterNames(chars.map(c => c.name)));
+    api.listCharacters(currentProject.id).then(chars => setCharacterNames(chars.map(c => c.name))).catch(() => {});
     api.listWorldTerms(currentProject.id).then(terms => {
       setPlaceNames(terms.filter(t => t.term_type === "place").map(t => t.title));
       setTermNames(terms.map(t => t.title));

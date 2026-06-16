@@ -1,20 +1,17 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useAppStore } from "@/stores/app-store";
+import { getJSONSync } from "@/lib/storage";
 import { BookOpen, BarChart3, Users, Globe2, ListTree, Eye } from "lucide-react";
 
 /** 从写作台的 localStorage 中读取含正文内容的章节列表 */
 function loadPlotChapters(pid: string): { id: string; content: string }[] {
-    try {
-        return JSON.parse(localStorage.getItem("plot-chapters-" + pid) || "[]");
-    } catch { return []; }
+    return getJSONSync("plot-chapters-" + pid, [] as { id: string; content: string }[]);
 }
 
 /** 从剧情走向读取段落和细纲 */
 function loadSegments(pid: string): { type: string; beats?: any[] }[] {
-    try {
-        return JSON.parse(localStorage.getItem("plot-segments-" + pid) || "[]");
-    } catch { return []; }
+    return getJSONSync("plot-segments-" + pid, [] as { type: string; beats?: any[] }[]);
 }
 
 export function WritingStatsPanel() {

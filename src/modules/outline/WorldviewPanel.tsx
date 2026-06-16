@@ -546,10 +546,30 @@ export function WorldviewPanel() {
 
   // ==== undo ==== （必须在 onConnect/onEdgeDbl 之前定义）
   const hist = useRef<{ nodes: Node[]; edges: Edge[] }[]>([]);
-  const pushH = useCallback(() => { hist.current.push({ nodes: JSON.parse(JSON.stringify(nodes)), edges: JSON.parse(JSON.stringify(edges)) }); if (hist.current.length > 50) hist.current.shift(); }, [nodes, edges]);
-  const undo = useCallback(() => { const s = hist.current.pop(); if (s) { setNodes(s.nodes); setEdges(s.edges); } }, [setNodes, setEdges]);
+  const redoStack = useRef<{ nodes: Node[]; edges: Edge[] }[]>([]);
+  const [canUndo, setCanUndo] = useState(false);
+  const [canRedo, setCanRedo] = useState(false);
+  const pushH = useCallback(() => { hist.current.push({ nodes: JSON.parse(JSON.stringify(nodes)), edges: JSON.parse(JSON.stringify(edges)) }); if (hist.current.length > 50) hist.current.shift(); redoStack.current = []; setCanUndo(true); setCanRedo(false); }, [nodes, edges]);
+  const undo = useCallback(() => {
+    const s = hist.current.pop();
+    if (s) {
+      redoStack.current.push({ nodes: JSON.parse(JSON.stringify(nodes)), edges: JSON.parse(JSON.stringify(edges)) });
+      setNodes(s.nodes); setEdges(s.edges);
+      setCanUndo(hist.current.length > 0);
+      setCanRedo(true);
+    }
+  }, [setNodes, setEdges, nodes, edges]);
+  const redo = useCallback(() => {
+    const s = redoStack.current.pop();
+    if (s) {
+      hist.current.push({ nodes: JSON.parse(JSON.stringify(nodes)), edges: JSON.parse(JSON.stringify(edges)) });
+      setNodes(s.nodes); setEdges(s.edges);
+      setCanUndo(true);
+      setCanRedo(redoStack.current.length > 0);
+    }
+  }, [setNodes, setEdges, nodes, edges]);
   const onNodeDragStart = useCallback(() => { pushH(); }, [pushH]);
-  useEffect(() => { const h = (e: KeyboardEvent) => { if (e.ctrlKey && !e.shiftKey && e.key === "z") { e.preventDefault(); undo(); } }; window.addEventListener("keydown", h); return () => window.removeEventListener("keydown", h); }, [undo]);
+  useEffect(() => { const h = (e: KeyboardEvent) => { if (e.ctrlKey && !e.shiftKey && e.key === "z") { e.preventDefault(); undo(); } if ((e.ctrlKey && e.key === "y") || (e.ctrlKey && e.shiftKey && e.key === "z")) { e.preventDefault(); redo(); } }; window.addEventListener("keydown", h); return () => window.removeEventListener("keydown", h); }, [undo, redo]);
 
   // ==== connect + infect ====
 
@@ -818,6 +838,14 @@ export function WorldviewPanel() {
         <div>
           <h1 className="text-lg font-bold">世界观 · 概念图谱</h1>
           <p className="text-xs text-slate-400">双击编辑 · 拖拽连线 · 右键平移 · Ctrl+G 编组</p>
+        </div>
+        <div className="flex items-center gap-1">
+          <button type="button" onClick={undo} disabled={!canUndo}
+            className={`rounded px-2 py-1 text-xs font-medium ${canUndo ? "text-slate-700 hover:bg-slate-100" : "text-slate-300 cursor-not-allowed"}`}
+            title="撤回 (Ctrl+Z)">↩ 撤回</button>
+          <button type="button" onClick={redo} disabled={!canRedo}
+            className={`rounded px-2 py-1 text-xs font-medium ${canRedo ? "text-slate-700 hover:bg-slate-100" : "text-slate-300 cursor-not-allowed"}`}
+            title="重做 (Ctrl+Y)">↪ 重做</button>
         </div>
       </div>
 

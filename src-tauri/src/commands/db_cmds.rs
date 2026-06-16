@@ -134,9 +134,17 @@ pub fn get_projects() -> Result<Vec<Project>, String> {
         if !db_path.exists() {
             continue;
         }
-        let conn = rusqlite::Connection::open(&db_path).map_err(|e| e.to_string())?;
+        let conn = match rusqlite::Connection::open(&db_path) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("[WARN] 跳过损坏的项目数据库 {}: {}", db_path.display(), e);
+                continue;
+            }
+        };
         let schema = include_str!("../db/schema.sql");
-        conn.execute_batch(schema).ok();
+        if let Err(e) = conn.execute_batch(schema) {
+            eprintln!("[WARN] 项目 {} schema 执行失败: {}", db_path.display(), e);
+        }
         if let Ok(p) = conn.query_row(
             "SELECT id, name, stage, framework_locked_at, created_at, updated_at FROM projects LIMIT 1",
             [],
@@ -206,6 +214,18 @@ pub fn delete_project(project_id: String, state: State<'_, DbState>) -> Result<(
     let dir = crate::db::projects_dir().join(&project_id);
     if dir.exists() {
         std::fs::remove_dir_all(&dir).map_err(|e| format!("删除项目失败: {}", e))?;
+    }
+    // 清理 settings.db 中该项目的所有 key（chapter-{pid}-*, plot-*-{pid}, draft-{pid}-* 等）
+    let settings_conn = open_or_create_settings_db();
+    if let Err(e) = settings_conn.execute(
+        "DELETE FROM app_settings WHERE key LIKE ?1 OR key LIKE ?2 OR key LIKE ?3",
+        rusqlite::params![
+            format!("%-{}", project_id),
+            format!("chapter-{}-%", project_id),
+            format!("draft-{}-%", project_id),
+        ],
+    ) {
+        eprintln!("[WARN] 清理 settings.db 失败: {}", e);
     }
     Ok(())
 }
@@ -939,10 +959,16 @@ pub fn save_chapter_content(content: ChapterContentIn, state: State<'_, DbState>
 
 #[tauri::command]
 pub fn list_locked_fields(project_id: String, state: State<'_, DbState>) -> Result<Value, String> {
-    let _ = project_id;
     with_conn(&state, |conn| {
-        let mut stmt = conn.prepare("SELECT id, entity_type, entity_id, field_name FROM locked_fields")?;
-        let rows = stmt.query_map([], |row| {
+        let mut stmt = conn.prepare(
+            "SELECT lf.id, lf.entity_type, lf.entity_id, lf.field_name FROM locked_fields lf \
+             WHERE \
+              (lf.entity_type = 'character' AND EXISTS (SELECT 1 FROM characters c WHERE c.id = lf.entity_id AND c.project_id = ?1)) \
+              OR (lf.entity_type = 'timeline_node' AND EXISTS (SELECT 1 FROM timeline_nodes tn WHERE tn.id = lf.entity_id AND tn.project_id = ?1)) \
+              OR (lf.entity_type = 'world_term' AND EXISTS (SELECT 1 FROM world_terms wt WHERE wt.id = lf.entity_id AND wt.project_id = ?1)) \
+              OR lf.entity_type NOT IN ('character', 'timeline_node', 'world_term')"
+        )?;
+        let rows = stmt.query_map(params![project_id], |row| {
             Ok(serde_json::json!({
                 "id": row.get::<_, String>(0)?,
                 "entity_type": row.get::<_, String>(1)?,

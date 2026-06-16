@@ -167,20 +167,27 @@ function load(): MockStore {
 function save(s: MockStore) {
   // 缓存变脏，下次 load() 重新解析
   _mockStoreCache = null;
-  // 只混淆需要混淆的字段，不深克隆整个 store
-  if (s.apiConfig.api_key) s.apiConfig.api_key = obfuscate(s.apiConfig.api_key);
-  if (s.apiConfig.provider_keys) {
-    for (const k of Object.keys(s.apiConfig.provider_keys)) {
-      if (s.apiConfig.provider_keys[k]) s.apiConfig.provider_keys[k] = obfuscate(s.apiConfig.provider_keys[k]);
+  const copy = JSON.parse(JSON.stringify(s)); // 深拷贝，防止原地污染 API Key
+  if (copy.apiConfig.api_key) copy.apiConfig.api_key = obfuscate(copy.apiConfig.api_key);
+  if (copy.apiConfig.provider_keys) {
+    for (const k of Object.keys(copy.apiConfig.provider_keys)) {
+      if (copy.apiConfig.provider_keys[k]) copy.apiConfig.provider_keys[k] = obfuscate(copy.apiConfig.provider_keys[k]);
     }
   }
-  if (s.apiConfig.stt?.providers) {
-    for (const p of Object.keys(s.apiConfig.stt.providers)) {
-      if (s.apiConfig.stt.providers[p].api_key) s.apiConfig.stt.providers[p].api_key = obfuscate(s.apiConfig.stt.providers[p].api_key);
-      if (s.apiConfig.stt.providers[p].secret_key) s.apiConfig.stt.providers[p].secret_key = obfuscate(s.apiConfig.stt.providers[p].secret_key);
+  if (copy.apiConfig.stt?.providers) {
+    for (const p of Object.keys(copy.apiConfig.stt.providers)) {
+      if (copy.apiConfig.stt.providers[p].api_key) copy.apiConfig.stt.providers[p].api_key = obfuscate(copy.apiConfig.stt.providers[p].api_key);
+      if (copy.apiConfig.stt.providers[p].secret_key) copy.apiConfig.stt.providers[p].secret_key = obfuscate(copy.apiConfig.stt.providers[p].secret_key);
     }
   }
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(s));
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(copy));
+  } catch (e) {
+    console.error("[mock-backend] ⚠️ 存储空间不足，数据未能保存！请清理旧项目或导出数据后删除。", e);
+    // 尝试清理缓存以释放读取路径
+    _mockStoreCache = null;
+    throw new Error("存储空间不足，数据未能保存。请清理旧项目或导出备份。");
+  }
 }
 
 function progressFor(projectId: string, s: MockStore): FrameworkProgress {
@@ -210,28 +217,13 @@ export function clearMockStoreCache() {
 /** 百度 STT：获取 access_token */
 let baiduTokenCache: { token: string; expiresAt: number } | null = null;
 
-async function getBaiduAccessToken(apiKey: string, secretKey: string): Promise<string> {
-  if (baiduTokenCache && Date.now() < baiduTokenCache.expiresAt) {
-    return baiduTokenCache.token;
-  }
-  const resp = await fetch(`https://aip.baidubce.com/oauth/2.0/token?grant_type=client_credentials&client_id=${apiKey}&client_secret=${secretKey}`, { method: "POST" });
-  const data = await resp.json();
-  if (data.access_token) {
-    baiduTokenCache = { token: data.access_token, expiresAt: Date.now() + (data.expires_in - 60) * 1000 };
-    return data.access_token;
-  }
-  throw new Error(`百度 token 获取失败: ${data.error_description || "未知错误"}`);
-}
+// 百度 STT 相关函数已删除 — LO-3: 死代码清理
 
 /** 百度 STT：语音转文字 */
 async function handleBaiduStt(audioBase64: string, apiKey: string, secretKey: string): Promise<{ text: string; error?: string }> {
   if (!apiKey || !secretKey) return { text: "", error: "请填写 API Key 和 Secret Key" };
-  // Tauri EXE 无 Vite proxy，需直接请求完整 URL
-  const isTauri = typeof window !== "undefined" && !!(window as any).__TAURI_INTERNALS__;
-  const baiduApi = isTauri ? "https://aip.baidubce.com" : "";
-  const baiduVop = isTauri ? "https://vop.baidu.com" : "";
   try {
-    const tokenResp = await fetch(`${baiduApi}/oauth/2.0/token?grant_type=client_credentials&client_id=${apiKey}&client_secret=${secretKey}`, { method: "POST" });
+    const tokenResp = await fetch(`https://aip.baidubce.com/oauth/2.0/token?grant_type=client_credentials&client_id=${apiKey}&client_secret=${secretKey}`, { method: "POST" });
     const tokenData = await tokenResp.json();
     if (!tokenData.access_token) {
       return { text: "", error: `百度 token 获取失败: ${tokenData.error_description || tokenData.error || "未知错误"}` };
@@ -240,7 +232,7 @@ async function handleBaiduStt(audioBase64: string, apiKey: string, secretKey: st
 
     const binaryLen = atob(audioBase64).length;
 
-    const resp = await fetch(`${baiduVop}/server_api`, {
+    const resp = await fetch("https://vop.baidu.com/server_api", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -298,6 +290,7 @@ async function realAiComplete(req: AiRequest, apiKey: string, baseUrl: string, m
         messages,
         stream: false,
       }),
+      signal: AbortSignal.timeout(120_000),
     });
 
     if (resp.status === 401) {
@@ -400,7 +393,7 @@ export async function realAiCompleteStream(
       Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify(body),
-    signal,
+    signal: signal || AbortSignal.timeout(120_000),
   });
 
   if (resp.status === 401) return { content: "", citations: [], error: "API Key 无效 (401)" };
@@ -1009,6 +1002,12 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
 
       // beatCards + chapterContents
       const beatCards = projectData.beatCards as any[] | undefined;
+      if (importMode === "overwrite") {
+        // 覆盖模式：清理旧 beatCards/chapterContents 中的相关数据
+        const newChapterIds = new Set((chapters || []).map((c: any) => c.id));
+        s.beatCards = (s.beatCards || []).filter((b: any) => !newChapterIds.has(b.chapter_id));
+        s.chapterContents = (s.chapterContents || []).filter((cc: any) => !newChapterIds.has(cc.chapter_id));
+      }
       if (beatCards) {
         s.beatCards = s.beatCards || [];
         s.beatCards.push(...beatCards);

@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect } from "react";
 import { X, Sparkles } from "lucide-react";
 import { useAppStore } from "@/stores/app-store";
+import { getJSONSync } from "@/lib/storage";
 
 interface AiWriteChapterDialogProps {
     chapterNumber: number;
@@ -137,8 +138,8 @@ export function AiWriteChapterDialog({
                             className="flex w-full items-center justify-between rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none hover:border-violet-400 bg-white"
                             onClick={() => {
                                 if (pid) {
-                                    const cards = JSON.parse(localStorage.getItem(`inspiration-cards-${pid}`) || "[]");
-                                    const rawItems = JSON.parse(localStorage.getItem(`material-items-${pid}`) || "[]");
+                                    const cards = getJSONSync(`inspiration-cards-${pid}`, [] as any[]);
+                                    const rawItems = getJSONSync(`material-items-${pid}`, [] as any[]);
                                     const textItems = rawItems.filter((i: any) => i.content);
                                     setInspirationList(cards);
                                     setMaterialList(textItems);

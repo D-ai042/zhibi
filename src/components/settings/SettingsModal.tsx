@@ -724,6 +724,7 @@ function DataMigration() {
       key === "novel-workbench-mock" ||
       key.startsWith("novel-workbench-") ||
       key.startsWith("plot-") ||
+      key.startsWith("chapter-") ||
       key.startsWith("char-groups-") ||
       key.startsWith("worldview-edges-") ||
       key.startsWith("worldview-groups-") ||
@@ -731,14 +732,15 @@ function DataMigration() {
       key.startsWith("material-") ||
       key.startsWith("writing-sidebar-width-") ||
       key.startsWith("ai-pending-chars-") ||
-      key.startsWith("ai-pending-world-terms-")
+      key.startsWith("ai-pending-world-terms-") ||
+      key.startsWith("draft-")
     );
   };
 
   /** 判断 key 是否属于指定项目（pid 为 null/undef 时不过滤） */
   const keyBelongsToProject = (key: string, pid: string): boolean => {
     if (key === "novel-workbench-mock") return true;
-    return key.endsWith(`-${pid}`);
+    return key.includes(`-${pid}`);
   };
 
   /** 收集应用相关 key，可选按 projectId 过滤 */
@@ -854,7 +856,7 @@ function DataMigration() {
   /** 写入一条 key-value 到所有存储层（localStorage + EXE 模式额外写入 SQLite） */
   const writeKey = useCallback(async (key: string, value: string) => {
     // 始终写入 localStorage（兼容直接读 localStorage 的代码）
-    localStorage.setItem(key, value);
+    try { localStorage.setItem(key, value); } catch { /* quota full; SQLite handles */ }
     // EXE 模式：同步写入 SQLite（兼容通过 api.getSetting 读的代码）
     if (isTauri()) {
       try {

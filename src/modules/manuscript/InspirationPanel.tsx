@@ -17,7 +17,7 @@ function loadCards(pid: string): InspirationCard[] {
     try { return JSON.parse(localStorage.getItem(sk(pid)) || "[]"); } catch { return []; }
 }
 function saveCards(pid: string, cards: InspirationCard[]) {
-    localStorage.setItem(sk(pid), JSON.stringify(cards));
+    try { localStorage.setItem(sk(pid), JSON.stringify(cards)); } catch { /* quota full */ }
 }
 
 export function InspirationPanel() {

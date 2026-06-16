@@ -27,9 +27,9 @@ export interface VersionInfo {
 /** 获取当前应用版本号 */
 export function getCurrentVersion(): string {
     try {
-        return __APP_VERSION__ || "0.3.2";
+        return __APP_VERSION__ || "0.3.3";
     } catch {
-        return "0.3.2";
+        return "0.3.3";
     }
 }
 

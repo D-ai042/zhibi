@@ -106,8 +106,8 @@ export function getSync(key: string): string | null {
     if (isTauri()) {
         const cached = _sqliteCache.get(key);
         if (cached !== undefined) {
-            // 写回 localStorage 加速下次访问
-            localStorage.setItem(key, cached);
+            // 写回 localStorage 加速下次访问（配额满时静默跳过，SQLite 兜底）
+            try { localStorage.setItem(key, cached); } catch { /* quota full */ }
             return cached;
         }
     }
@@ -115,11 +115,15 @@ export function getSync(key: string): string | null {
 }
 
 export function setSync(key: string, value: string): void {
-    localStorage.setItem(key, value);
+    try { localStorage.setItem(key, value); } catch (e) {
+        console.warn(`[storage] localStorage 写入失败: ${key}`, e);
+    }
     // 在 EXE 模式下异步同步写入 SQLite（fire-and-forget，不阻塞 UI）
     if (isTauri()) {
         _sqliteCache.set(key, value);
-        api.setSetting(key, value).catch(() => { });
+        api.setSetting(key, value).catch((e) => {
+            console.warn(`[storage] SQLite 写入失败: ${key}`, e);
+        });
     }
 }
 
@@ -154,5 +158,9 @@ export function getJSONSync<T>(key: string, def: T): T {
 }
 
 export function setJSONSync(key: string, value: unknown): void {
-    setSync(key, JSON.stringify(value));
+    try {
+        setSync(key, JSON.stringify(value));
+    } catch {
+        // JSON.stringify 失败（循环引用等极端情况），静默跳过
+    }
 }

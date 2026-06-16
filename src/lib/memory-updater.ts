@@ -106,7 +106,7 @@ ${knownStorylines || "（暂无）"}
 ${prevSummary || "（首章，无前情）"}
 
 【本章正文（前6000字）】
-${chapterContent.slice(0, 6000)}
+${chapterContent.slice(0, 3000)}\n...\n${chapterContent.slice(-3000)}
 
 请严格按以下 JSON 格式输出（放在 ---CHAPTER_ANALYSIS--- 块中），不要有任何额外文字：
 

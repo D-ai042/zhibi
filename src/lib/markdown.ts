@@ -4,6 +4,7 @@
  * MVP 阶段内联渲染，后续可替换为完整 markdown 库。
  */
 export function renderMarkdown(text: string): string {
+    if (!text) return '';
     let html = text
         // 转义 HTML
         .replace(/&/g, "&amp;")

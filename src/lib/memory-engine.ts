@@ -111,8 +111,9 @@ ${text}`;
         }
     }
 
-    performCompression(messages: ChatMessage[]): number {
-        return 0; // 压缩需要等待 AI 完成，调用方通过 compressionTrigger 异步执行
+    /** @deprecated 不再使用，由 executeAICCompression 替代 */
+    performCompression(_messages: ChatMessage[]): number {
+        return 0;
     }
 
     /** 执行 AI 压缩：调用 AI 生成记忆条目，异步执行，不阻塞发送 */
