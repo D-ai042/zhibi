@@ -143,6 +143,11 @@ interface AppState {
   plotBump: number;
   bumpPlot: () => void;
 
+  // ===== 全局保存/刷新 =====
+  /** 递增以通知所有模块立即持久化当前位置/状态 */
+  saveAllBump: number;
+  bumpSaveAll: () => void;
+
   /** 自动保存触发函数（由 WritingModule 注册，用于 SYS-1 真自动保存） */
   triggerAutosave?: () => void;
   setTriggerAutosave: (fn: () => void) => void;
@@ -208,6 +213,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   pendingInsertContent: "",
   insertTextBump: 0,
   setPendingInsertContent: (text) => set((s) => ({ pendingInsertContent: text, insertTextBump: s.insertTextBump + 1 })),
+  saveAllBump: 0,
+  bumpSaveAll: () => set((s) => ({ saveAllBump: s.saveAllBump + 1 })),
 
   // ===== 聊天持久化 =====
   persistChat: () => {

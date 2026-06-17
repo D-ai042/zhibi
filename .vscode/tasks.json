@@ -212,6 +212,16 @@
 			],
 			"problemMatcher": [],
 			"group": "build"
+		},
+		{
+			"label": "tauri-build-foreground",
+			"type": "shell",
+			"command": "npm.cmd",
+			"args": [
+				"run",
+				"tauri:build"
+			],
+			"group": "build"
 		}
 	]
 }

@@ -937,6 +937,28 @@ function DataMigration() {
                 const chIds = new Set(chs.map((c: any) => c.id));
                 projData.beatCards = (mockStore.beatCards || []).filter((b: any) => chIds.has(b.chapter_id));
                 projData.chapterContents = (mockStore.chapterContents || []).filter((cc: any) => chIds.has(cc.chapter_id));
+                // 从 data.keys 中提取补充数据（旧版备份的 chapters/编组/剧情走向在不同 key 里）
+                const oldPid = pid;
+                const tryGetKey = (prefix: string): any => {
+                  const entry = data.keys?.find((k: any) => k.key === `${prefix}${oldPid}`);
+                  if (entry) { try { return JSON.parse(entry.value); } catch { return null; } }
+                  return null;
+                };
+                (projData as any).plotSegments = tryGetKey("plot-segments-") || [];
+                (projData as any).plotEdges = tryGetKey("plot-edges-") || [];
+                (projData as any).plotChapters = tryGetKey("plot-chapters-") || [];
+                (projData as any).chapterIndex = tryGetKey("chapter-index-") || [];
+                (projData as any).worldviewEdges = tryGetKey("worldview-edges-") || [];
+                (projData as any).worldviewGroups = tryGetKey("worldview-groups-") || [];
+                (projData as any).charGroups = tryGetKey("char-groups-") || [];
+                // 章节分片重建
+                const shards: Record<string, any> = {};
+                for (const k of (data.keys || [])) {
+                  if (k.key && k.key.startsWith(`chapter-`) && k.key.includes(`-${oldPid}-`)) {
+                    try { const v = JSON.parse(k.value); if (v && v.id) shards[v.id] = v; } catch { }
+                  }
+                }
+                (projData as any).chapterShards = shards;
                 projectsToImport.push(projData);
               }
             }
@@ -1009,46 +1031,64 @@ function DataMigration() {
       for (const projectData of projectsToImport) {
         if (projectData && typeof projectData === 'object' && (projectData as Record<string, unknown>).project) {
           try {
+            // ★ 在 importProject 前捕获旧 PID（new 模式会修改 project.id）
+            const oldPid = (projectData as any).project?.id as string | undefined;
             const importedPid = await api.importProject(projectData as Record<string, unknown>, mode);
             projectCount++;
-            // ★ 补充写入 localStorage 中的剧情走向 + 卷章树数据
-            // api.importProject 只恢复 SQLite 核心数据，但剧情走向和卷章树存在 localStorage
+            // ★ 补充写入 localStorage 中的剧情走向 + 卷章树 + 编组数据
+            // api.importProject 只恢复 SQLite 核心数据，这些存在 localStorage
             const pvt = projectData as Record<string, unknown>;
             if (importedPid) {
+              // 辅助函数：从 data.keys 按旧 PID 提取字段（用于旧版备份回退）
+              const getFromKeys = (prefix: string): any => {
+                if (!oldPid) return null;
+                const targetKey = `${prefix}${oldPid}`;
+                const entry = (data as any).keys?.find((k: any) => k.key === targetKey);
+                if (entry) { try { return JSON.parse(entry.value); } catch { return null; } }
+                return null;
+              };
               // 恢复 plot-segments（剧情走向明暗线段落）
-              if (pvt.plotSegments && Array.isArray(pvt.plotSegments)) {
-                await writeKey(`plot-segments-${importedPid}`, JSON.stringify(pvt.plotSegments));
-              }
+              const ps = (pvt.plotSegments && Array.isArray(pvt.plotSegments)) ? pvt.plotSegments : getFromKeys("plot-segments-");
+              if (ps) await writeKey(`plot-segments-${importedPid}`, JSON.stringify(ps));
               // 恢复 plot-edges（剧情走向连线）
-              if (pvt.plotEdges && Array.isArray(pvt.plotEdges)) {
-                await writeKey(`plot-edges-${importedPid}`, JSON.stringify(pvt.plotEdges));
-              }
+              const pe = (pvt.plotEdges && Array.isArray(pvt.plotEdges)) ? pvt.plotEdges : getFromKeys("plot-edges-");
+              if (pe) await writeKey(`plot-edges-${importedPid}`, JSON.stringify(pe));
               // 恢复 plot-chapters（卷章树）
-              if (pvt.plotChapters && Array.isArray(pvt.plotChapters)) {
-                await writeKey(`plot-chapters-${importedPid}`, JSON.stringify(pvt.plotChapters));
-              }
+              const pc = (pvt.plotChapters && Array.isArray(pvt.plotChapters)) ? pvt.plotChapters : getFromKeys("plot-chapters-");
+              if (pc) await writeKey(`plot-chapters-${importedPid}`, JSON.stringify(pc));
               // 恢复 chapter-index（分片存储索引）
-              if (pvt.chapterIndex && Array.isArray(pvt.chapterIndex)) {
-                await writeKey(`chapter-index-${importedPid}`, JSON.stringify(pvt.chapterIndex));
-              }
+              const ci = (pvt.chapterIndex && Array.isArray(pvt.chapterIndex)) ? pvt.chapterIndex : getFromKeys("chapter-index-");
+              if (ci) await writeKey(`chapter-index-${importedPid}`, JSON.stringify(ci));
               // 恢复分片章节数据
-              if (pvt.chapterShards && typeof pvt.chapterShards === 'object') {
-                for (const [chId, chData] of Object.entries(pvt.chapterShards as Record<string, unknown>)) {
+              const shards = (pvt.chapterShards && typeof pvt.chapterShards === 'object') ? pvt.chapterShards : null;
+              const shardsFromKeys = !shards ? (() => {
+                const result: Record<string, unknown> = {};
+                if (!oldPid) return result;
+                for (const k of ((data as any).keys || [])) {
+                  if (k.key && k.key.startsWith(`chapter-`) && k.key.includes(`-${oldPid}-`)) {
+                    try { const v = JSON.parse(k.value); if (v && v.id) result[v.id] = v; } catch { }
+                  }
+                }
+                return Object.keys(result).length > 0 ? result : null;
+              })() : null;
+              if (shards && Object.keys(shards).length > 0) {
+                for (const [chId, chData] of Object.entries(shards)) {
+                  await writeKey(`chapter-${importedPid}-${chId}`, JSON.stringify(chData));
+                }
+              } else if (shardsFromKeys && Object.keys(shardsFromKeys).length > 0) {
+                for (const [chId, chData] of Object.entries(shardsFromKeys)) {
                   await writeKey(`chapter-${importedPid}-${chId}`, JSON.stringify(chData));
                 }
               }
               // 恢复 worldview-edges（世界观连线）
-              if (pvt.worldviewEdges && Array.isArray(pvt.worldviewEdges)) {
-                await writeKey(`worldview-edges-${importedPid}`, JSON.stringify(pvt.worldviewEdges));
-              }
+              const we = (pvt.worldviewEdges && Array.isArray(pvt.worldviewEdges)) ? pvt.worldviewEdges : getFromKeys("worldview-edges-");
+              if (we) await writeKey(`worldview-edges-${importedPid}`, JSON.stringify(we));
               // 恢复 worldview-groups（世界观编组）
-              if (pvt.worldviewGroups && Array.isArray(pvt.worldviewGroups)) {
-                await writeKey(`worldview-groups-${importedPid}`, JSON.stringify(pvt.worldviewGroups));
-              }
+              const wg = (pvt.worldviewGroups && Array.isArray(pvt.worldviewGroups)) ? pvt.worldviewGroups : getFromKeys("worldview-groups-");
+              if (wg) await writeKey(`worldview-groups-${importedPid}`, JSON.stringify(wg));
               // 恢复 char-groups（角色编组）
-              if (pvt.charGroups && Array.isArray(pvt.charGroups)) {
-                await writeKey(`char-groups-${importedPid}`, JSON.stringify(pvt.charGroups));
-              }
+              const cg = (pvt.charGroups && Array.isArray(pvt.charGroups)) ? pvt.charGroups : getFromKeys("char-groups-");
+              if (cg) await writeKey(`char-groups-${importedPid}`, JSON.stringify(cg));
             }
           } catch (e) {
             const errMsg = e instanceof Error ? e.message : String(e);

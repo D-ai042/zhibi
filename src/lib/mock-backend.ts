@@ -55,7 +55,7 @@ interface MockStore {
 }
 
 function uid() {
-  if (typeof crypto.randomUUID === "function") {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === "function") {
     return crypto.randomUUID();
   }
   // fallback for environments where crypto.randomUUID is not available (e.g. VS Code embedded browser)
@@ -952,6 +952,22 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
         if (chData && chData.id) chapterShards[chId] = chData;
       }
 
+      // 章节正文：优先从 s.chapterContents，缺失的从 chapterShards 重建
+      const storeContents = (s.chapterContents || []).filter(cc => chapterIds.has(cc.chapter_id));
+      const storeContentIds = new Set(storeContents.map(cc => cc.chapter_id));
+      const shardContents = Object.entries(chapterShards)
+        .filter(([chId]) => !storeContentIds.has(chId))
+        .map(([chId, ch]) => ({
+          chapter_id: chId,
+          body_json: JSON.stringify({ content: (ch as any).content || "" }),
+          body_html: (ch as any).content || "",
+          updated_at: new Date().toISOString(),
+        }));
+      const mergedChapterContents = [
+        ...storeContents,
+        ...shardContents,
+      ];
+
       return {
         project: proj as Record<string, unknown>,
         worldTerms: (s.worldTerms || []).filter(t => t.project_id === pid).map(t => normalizeItem(t as Record<string, unknown>, "world_term")) as Record<string, unknown>[],
@@ -962,7 +978,7 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
         volumes: (s.volumes || []).filter(v => v.project_id === pid).map(v => normalizeItem(v as Record<string, unknown>, "volume")) as Record<string, unknown>[],
         chapters: chapters.map(c => normalizeItem(c as Record<string, unknown>, "chapter")) as Record<string, unknown>[],
         beatCards: (s.beatCards || []).filter(b => chapterIds.has(b.chapter_id)).map(b => normalizeItem(b as Record<string, unknown>, "beat_card")) as Record<string, unknown>[],
-        chapterContents: (s.chapterContents || []).filter(cc => chapterIds.has(cc.chapter_id)).map(cc => normalizeItem(cc as Record<string, unknown>, "chapter_content")) as Record<string, unknown>[],
+        chapterContents: mergedChapterContents.map(cc => normalizeItem(cc as Record<string, unknown>, "chapter_content")) as Record<string, unknown>[],
         plotSegments,
         plotEdges,
         plotChapters,
@@ -982,10 +998,26 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
       const importMode = mode || "overwrite";
       let pid = proj.id as string;
 
-      // "new" 模式：生成新 ID
+      // "new" 模式：生成新 ID，并将所有子数据的 project_id 重映射到新 ID
+      const oldPid = pid;
       if (importMode === "new") {
-        pid = crypto.randomUUID();
+        pid = uid();
         proj.id = pid;
+        // 重映射所有含 project_id 的子项
+        const remapId = (key: string) => {
+          const items = projectData[key] as any[] | undefined;
+          if (items) {
+            for (const item of items) {
+              if (item.project_id === oldPid) item.project_id = pid;
+            }
+          }
+        };
+        remapId("worldTerms");
+        remapId("characters");
+        remapId("relationships");
+        remapId("plotEvents");
+        remapId("timelineNodes");
+        remapId("volumes");
       }
 
       // "overwrite" 模式：清理旧数据；"merge"/"new" 模式不清理

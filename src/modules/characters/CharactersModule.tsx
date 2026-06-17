@@ -57,7 +57,7 @@ function rebuildEdges(
 }
 
 export function CharactersModule() {
-  const { currentProject, setSelectedEntity, characterBump } = useAppStore();
+  const { currentProject, setSelectedEntity, characterBump, saveAllBump } = useAppStore();
   const rfRef = useRef<any>(null);
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
@@ -367,6 +367,37 @@ export function CharactersModule() {
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => { if (characterBump > 0) load(); }, [characterBump]);
+
+  // 全局保存：将当前所有角色+编组位置刷入存储（只写存储，不触发渲染）
+  useEffect(() => {
+    if (saveAllBump <= 0 || !currentProject || !rfRef.current) return;
+    const liveNodes: Node[] = rfRef.current.getNodes();
+    const gs = loadGroups(currentProject.id);
+    let dirty = false;
+
+    for (const node of liveNodes) {
+      if (node.type === "group") {
+        const g = gs.find(x => x.id === node.id);
+        if (g && (g.x !== node.position.x || g.y !== node.position.y)) {
+          g.x = node.position.x;
+          g.y = node.position.y;
+          dirty = true;
+          for (const cid of g.childIds) {
+            const childNode = liveNodes.find((n: Node) => n.id === cid);
+            if (childNode) {
+              api.saveNodeLayout("character", cid,
+                node.position.x + childNode.position.x,
+                node.position.y + childNode.position.y,
+              ).catch(() => { });
+            }
+          }
+        }
+      } else if (node.type === "characterNode" && !node.parentId) {
+        api.saveNodeLayout("character", node.id, node.position.x, node.position.y).catch(() => { });
+      }
+    }
+    if (dirty) saveGroups(currentProject.id, gs);
+  }, [saveAllBump]);
 
   // ★ load() 后同步 selectedChar 到最新数据
   useEffect(() => {

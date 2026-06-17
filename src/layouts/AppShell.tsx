@@ -15,6 +15,7 @@ import {
   BookMarked,
   Lightbulb,
   Archive,
+  RefreshCw,
 } from "lucide-react";
 import { useAppStore } from "@/stores/app-store";
 import { api } from "@/lib/api";
@@ -203,6 +204,7 @@ export function AppShell({ children }: AppShellProps) {
   const [exporting, setExporting] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<VersionInfo | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
 
   // 首次加载时同步 __active_provider__
   useEffect(() => {
@@ -255,6 +257,12 @@ export function AppShell({ children }: AppShellProps) {
     };
   }, [isDragging]);
 
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 2000);
+    return () => clearTimeout(t);
+  }, [toast]);
+
   const currentLabel = useMemo(() => {
     if (activeModule === "custom") {
       const mod = customModules.find((m) => m.id === activeExtraId);
@@ -273,12 +281,10 @@ export function AppShell({ children }: AppShellProps) {
     shards: Record<string, unknown> | undefined
   ): Record<string, unknown>[] {
     const map = new Map<string, Record<string, unknown>>();
-    // 先放 SQLite 数据
     for (const cc of (dbContents || [])) {
       const chId = cc.chapter_id as string;
       if (chId) map.set(chId, cc);
     }
-    // 再用 localStorage 分片数据覆盖（更新）
     if (shards) {
       for (const [chId, chData] of Object.entries(shards)) {
         const ch = chData as Record<string, unknown>;
@@ -294,6 +300,61 @@ export function AppShell({ children }: AppShellProps) {
       }
     }
     return Array.from(map.values());
+  }
+
+  /**
+   * 从 chapterShards 构建卷章树（写作台数据在 localStorage，不在 mock-store/SQLite）
+   * 返回 { volumes, chapters } 供 Word 导出使用。
+   */
+  function buildVolumeChapterTree(projectId: string, shards: Record<string, unknown> | undefined): {
+    volumes: Record<string, unknown>[];
+    chapters: Record<string, unknown>[];
+  } {
+    if (!shards) return { volumes: [], chapters: [] };
+    const items = Object.entries(shards)
+      .map(([id, ch]) => ({ id, ...(ch as Record<string, unknown>) }))
+      .sort((a, b) => ((a.number as number) || 0) - ((b.number as number) || 0));
+    if (items.length === 0) return { volumes: [], chapters: [] };
+
+    // 按 volumeSegmentId 分组为卷
+    const volMap = new Map<string, { ids: string[]; title: string }>();
+    for (const ch of items) {
+      const segId = (ch.volumeSegmentId as string) || "__default__";
+      if (!volMap.has(segId)) volMap.set(segId, { ids: [], title: "" });
+      volMap.get(segId)!.ids.push(ch.id as string);
+    }
+    // 尝试从 plot-segments 读取实际名称
+    if (projectId && typeof localStorage !== "undefined") {
+      try {
+        const segs = JSON.parse(localStorage.getItem(`plot-segments-${projectId}`) || "[]");
+        for (const seg of segs) {
+          const entry = volMap.get(seg.id);
+          if (entry) entry.title = seg.title || "";
+        }
+      } catch { /* ignore */ }
+    }
+
+    const volumes: Record<string, unknown>[] = [];
+    const chapters: Record<string, unknown>[] = [];
+    let volIdx = 0;
+    for (const [segId, info] of volMap) {
+      const vid = `exp-vol-${volIdx++}`;
+      volumes.push({ id: vid, title: info.title || `第 ${volIdx} 卷` });
+      for (const chId of info.ids) {
+        const ch = items.find(c => c.id === chId);
+        if (ch) {
+          chapters.push({
+            id: ch.id,
+            volume_id: vid,
+            number: ch.number as number ?? 0,
+            title: (ch.title as string) || `第${ch.number}章`,
+            status: "draft",
+            word_count: ((ch.content as string) || "").length,
+          });
+        }
+      }
+    }
+    return { volumes, chapters };
   }
 
   const handleExport = async (type: "setup" | "chapters") => {
@@ -317,11 +378,17 @@ export function AppShell({ children }: AppShellProps) {
         }, currentProject.id);
       } else {
         // 合并 chapterShards（localStorage 分片存储）到 chapterContents
-        const mergedContents = mergeChapterContents(raw.chapterContents as any[], (raw as any).chapterShards);
+        const shards = (raw as any).chapterShards;
+        const mergedContents = mergeChapterContents(raw.chapterContents as any[], shards);
+        // 写作台的卷章树在 localStorage 不在 mock-store/SQLite；shard 数据优先
+        const hasShards = shards && Object.keys(shards).length > 0;
+        const { volumes, chapters } = hasShards
+          ? buildVolumeChapterTree(currentProject.id, shards)
+          : { volumes: raw.volumes, chapters: raw.chapters };
         await exportChaptersDoc({
           ...base,
-          volumes: raw.volumes,
-          chapters: raw.chapters,
+          volumes,
+          chapters,
           beatCards: raw.beatCards,
           chapterContents: mergedContents,
         }, currentProject.id);
@@ -339,7 +406,13 @@ export function AppShell({ children }: AppShellProps) {
     try {
       const { exportFullDoc } = await import("@/lib/export-doc");
       const raw = await api.exportProject(currentProject.id);
-      const mergedContents = mergeChapterContents(raw.chapterContents as any[], (raw as any).chapterShards);
+      const shards = (raw as any).chapterShards;
+      const mergedContents = mergeChapterContents(raw.chapterContents as any[], shards);
+      // 写作台的卷章树在 localStorage 不在 mock-store/SQLite；shard 数据优先
+      const hasShards = shards && Object.keys(shards).length > 0;
+      const { volumes, chapters } = hasShards
+        ? buildVolumeChapterTree(currentProject.id, shards)
+        : { volumes: raw.volumes, chapters: raw.chapters };
       await exportFullDoc({
         projectName: raw.project.name as string,
         exportTime: new Date().toISOString(),
@@ -348,8 +421,8 @@ export function AppShell({ children }: AppShellProps) {
         relationships: raw.relationships,
         plotEvents: raw.plotEvents,
         timelineNodes: raw.timelineNodes,
-        volumes: raw.volumes,
-        chapters: raw.chapters,
+        volumes,
+        chapters,
         beatCards: raw.beatCards,
         chapterContents: mergedContents,
       }, currentProject.id);
@@ -423,7 +496,38 @@ export function AppShell({ children }: AppShellProps) {
           </div>
         )}
 
+        {/* 刷新按钮 */}
+        {currentProject && (
+          <button
+            type="button"
+            onClick={async () => {
+              try {
+                const { clearMockStoreCache } = await import("@/lib/mock-backend");
+                clearMockStoreCache();
+                const projects = await api.getProjects();
+                const store = useAppStore.getState();
+                store.setProjects(projects);
+                const proj = projects.find(p => p.id === currentProject.id);
+                if (proj) store.setCurrentProject(proj);
+                setToast("✅ 刷新成功");
+              } catch {
+                setToast("❌ 刷新失败");
+              }
+            }}
+            className="flex items-center gap-1 rounded px-2 py-1 text-xs text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+            title="刷新数据"
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+            刷新
+          </button>
+        )}
+
         <div className="flex-1" />
+
+        {/* 刷新 Toast */}
+        {toast && (
+          <span className="text-xs text-slate-500 animate-pulse">{toast}</span>
+        )}
 
         {/* 模型切换 */}
         {currentProject && (

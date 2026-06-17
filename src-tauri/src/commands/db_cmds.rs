@@ -1064,6 +1064,24 @@ pub fn export_project(project_id: String, state: State<'_, DbState>) -> Result<V
             }
         }
 
+        // 章节正文：优先 SQLite chapter_contents 表，缺失的从 chapter_shards 重建
+        let mut merged_chapter_contents = chapter_contents.clone();
+        let existing_ids: std::collections::HashSet<String> = merged_chapter_contents
+            .iter()
+            .filter_map(|c| c.get("chapter_id").and_then(|v| v.as_str().map(String::from)))
+            .collect();
+        for (ch_id, ch) in &chapter_shards {
+            if !existing_ids.contains(ch_id) {
+                let content = ch.get("content").and_then(|v| v.as_str()).unwrap_or("");
+                merged_chapter_contents.push(serde_json::json!({
+                    "chapter_id": ch_id,
+                    "body_json": serde_json::json!({ "content": content }).to_string(),
+                    "body_html": content,
+                    "updated_at": chrono::Utc::now().to_rfc3339(),
+                }));
+            }
+        }
+
         Ok(serde_json::json!({
             "project": proj,
             "worldTerms": world_terms,
@@ -1074,7 +1092,7 @@ pub fn export_project(project_id: String, state: State<'_, DbState>) -> Result<V
             "volumes": volumes,
             "chapters": chapters,
             "beatCards": beat_cards,
-            "chapterContents": chapter_contents,
+            "chapterContents": merged_chapter_contents,
             "plotSegments": plot_segments,
             "plotEdges": plot_edges,
             "plotChapters": plot_chapters,

@@ -477,17 +477,17 @@ export function WorldviewPanel() {
       const gs = loadGroups(currentProject.id);
       const g = gs.find(x => x.id === node.id);
       if (g) {
-        const dx = node.position.x - g.x;
-        const dy = node.position.y - g.y;
         g.x = node.position.x; g.y = node.position.y; saveGroups(currentProject.id, gs);
-        // 同步更新子节点的绝对坐标，避免下次 load 时 computeLayout 用旧坐标导致偏移
+        // 用 ReactFlow 实时相对位置反算绝对坐标（不依赖可能已损坏的 DB 旧值）
+        const liveNodes: Node[] = rfRef.current?.getNodes() || nodes;
         for (const cid of g.childIds) {
-          const ct = terms.find(t => t.id === cid);
-          if (ct) {
-            const nx = ct.layout_x + dx;
-            const ny = ct.layout_y + dy;
-            api.saveNodeLayout("world_term", cid, nx, ny).catch(e => console.error("saveNodeLayout failed:", e));
-            setTerms(p => p.map(t => t.id === cid ? { ...t, layout_x: nx, layout_y: ny } : t));
+          const childNode = liveNodes.find((n: Node) => n.id === cid);
+          if (childNode) {
+            // childNode.position 在 ReactFlow 中是相对父编组的坐标，始终正确
+            const absX = node.position.x + childNode.position.x;
+            const absY = node.position.y + childNode.position.y;
+            api.saveNodeLayout("world_term", cid, absX, absY).catch(e => console.error("saveNodeLayout failed:", e));
+            setTerms(p => p.map(t => t.id === cid ? { ...t, layout_x: absX, layout_y: absY } : t));
           }
         }
         setWorldviewGroups(p => p.map(gr => gr.id === g.id ? { ...gr, x: g.x, y: g.y } : gr));
@@ -497,6 +497,48 @@ export function WorldviewPanel() {
     const t = terms.find(x => x.id === node.id);
     if (t) { const u = { ...t, layout_x: node.position.x, layout_y: node.position.y }; setTerms(p => p.map(x => x.id === t.id ? u : x)); await api.saveNodeLayout("world_term", node.id, node.position.x, node.position.y); }
   }, [terms, currentProject, setWorldviewGroups]);
+
+  // ==== onNodesChange wrapper: 自动保存编组位置 ====
+  const handleNodesChange = useCallback((changes: any[]) => {
+    // 先应用 ReactFlow 的默认变更
+    onNodesChange(changes);
+
+    // 检测位置变更并保存编组位置
+    if (!currentProject) return;
+    const positionChanges = changes.filter((c: any) => c.type === "position" && c.position && !c.dragging);
+    if (positionChanges.length === 0) return;
+
+    const gs = loadGroups(currentProject.id);
+    let dirty = false;
+
+    for (const change of positionChanges) {
+      const g = gs.find(x => x.id === change.id);
+      if (g) {
+        const newX = change.position.x;
+        const newY = change.position.y;
+        g.x = newX;
+        g.y = newY;
+        dirty = true;
+
+        // 用 ReactFlow 实时相对位置反算绝对坐标（不依赖可能已损坏的 DB 旧值）
+        const liveNodes: Node[] = rfRef.current?.getNodes() || nodes;
+        for (const cid of g.childIds) {
+          const childNode = liveNodes.find((n: Node) => n.id === cid);
+          if (childNode) {
+            const absX = newX + childNode.position.x;
+            const absY = newY + childNode.position.y;
+            api.saveNodeLayout("world_term", cid, absX, absY).catch(e => console.error("saveNodeLayout failed:", e));
+            setTerms(p => p.map(t => t.id === cid ? { ...t, layout_x: absX, layout_y: absY } : t));
+          }
+        }
+      }
+    }
+
+    if (dirty) {
+      saveGroups(currentProject.id, gs);
+      setWorldviewGroups(gs.map(g => ({ id: g.id, name: g.name, x: g.x, y: g.y, locked: g.locked })));
+    }
+  }, [currentProject, onNodesChange, terms, setTerms, setWorldviewGroups]);
 
   // ==== connect + infect ====
   const onConnect = useCallback((conn: Connection) => {
@@ -655,18 +697,47 @@ export function WorldviewPanel() {
     pushH();
     const sel = nodes.filter(n => effectiveIds.has(n.id));
     const xs = sel.map(n => n.position.x), ys = sel.map(n => n.position.y);
+    const targetX = dir === "left" ? Math.min(...xs) : dir === "ch" ? (Math.min(...xs) + Math.max(...xs)) / 2 : dir === "right" ? Math.max(...xs) : undefined;
+    const targetY = dir === "top" ? Math.min(...ys) : dir === "cv" ? (Math.min(...ys) + Math.max(...ys)) / 2 : dir === "bottom" ? Math.max(...ys) : undefined;
+
     setNodes(nds => nds.map(n => {
       if (!effectiveIds.has(n.id)) return n;
       let nx = n.position.x, ny = n.position.y;
-      if (dir === "left") nx = Math.min(...xs);
-      else if (dir === "ch") nx = (Math.min(...xs) + Math.max(...xs)) / 2;
-      else if (dir === "right") nx = Math.max(...xs);
-      if (dir === "top") ny = Math.min(...ys);
-      else if (dir === "cv") ny = (Math.min(...ys) + Math.max(...ys)) / 2;
-      else if (dir === "bottom") ny = Math.max(...ys);
+      if (targetX !== undefined) nx = targetX;
+      if (targetY !== undefined) ny = targetY;
       return { ...n, position: { x: nx, y: ny } };
     }));
-  }, [selIds, nodes, setNodes, pushH, resolveEffective]);
+
+    // 保存编组位置到 localStorage，并同步子词条绝对坐标
+    if (currentProject) {
+      const gs = loadGroups(currentProject.id);
+      let dirty = false;
+      for (const id of effectiveIds) {
+        const g = gs.find(x => x.id === id);
+        if (g) {
+          const node = nodes.find(n => n.id === id);
+          if (node) {
+            const dx = (targetX ?? g.x) - g.x;
+            const dy = (targetY ?? g.y) - g.y;
+            g.x = targetX ?? g.x;
+            g.y = targetY ?? g.y;
+            dirty = true;
+            // ★ 同步子词条绝对坐标，否则下次 load 时相对位置错位
+            for (const cid of g.childIds) {
+              const ct = terms.find(t => t.id === cid);
+              if (ct) {
+                const nx = ct.layout_x + dx;
+                const ny = ct.layout_y + dy;
+                api.saveNodeLayout("world_term", cid, nx, ny).catch(e => console.error("saveNodeLayout failed:", e));
+                setTerms(p => p.map(t => t.id === cid ? { ...t, layout_x: nx, layout_y: ny } : t));
+              }
+            }
+          }
+        }
+      }
+      if (dirty) saveGroups(currentProject.id, gs);
+    }
+  }, [selIds, nodes, setNodes, pushH, resolveEffective, currentProject, terms]);
 
   const dist = useCallback((d: "h" | "v") => {
     const effectiveIds = resolveEffective(selIds);
@@ -674,6 +745,8 @@ export function WorldviewPanel() {
     pushH();
     const sel = nodes.filter(n => effectiveIds.has(n.id)).sort((a, b) => d === "h" ? a.position.x - b.position.x : a.position.y - b.position.y);
     const f = sel[0].position, l = sel[sel.length - 1].position;
+    const newPositions = new Map<string, { x: number; y: number }>();
+
     setNodes(nds => nds.map(n => {
       const i = sel.findIndex(s => s.id === n.id);
       if (i < 0 || i === 0 || i === sel.length - 1) return n;
@@ -681,9 +754,40 @@ export function WorldviewPanel() {
       let nx = n.position.x, ny = n.position.y;
       if (d === "h") nx = f.x + t * (l.x - f.x);
       else ny = f.y + t * (l.y - f.y);
+      newPositions.set(n.id, { x: nx, y: ny });
       return { ...n, position: { x: nx, y: ny } };
     }));
-  }, [selIds, nodes, setNodes, pushH, resolveEffective]);
+
+    // 保存编组位置到 localStorage，并同步子词条绝对坐标
+    if (currentProject) {
+      const gs = loadGroups(currentProject.id);
+      let dirty = false;
+      for (const id of effectiveIds) {
+        const g = gs.find(x => x.id === id);
+        if (g) {
+          const pos = newPositions.get(id);
+          if (pos) {
+            const dx = pos.x - g.x;
+            const dy = pos.y - g.y;
+            g.x = pos.x;
+            g.y = pos.y;
+            dirty = true;
+            // ★ 同步子词条绝对坐标，否则下次 load 时相对位置错位
+            for (const cid of g.childIds) {
+              const ct = terms.find(t => t.id === cid);
+              if (ct) {
+                const nx = ct.layout_x + dx;
+                const ny = ct.layout_y + dy;
+                api.saveNodeLayout("world_term", cid, nx, ny).catch(e => console.error("saveNodeLayout failed:", e));
+                setTerms(p => p.map(t => t.id === cid ? { ...t, layout_x: nx, layout_y: ny } : t));
+              }
+            }
+          }
+        }
+      }
+      if (dirty) saveGroups(currentProject.id, gs);
+    }
+  }, [selIds, nodes, setNodes, pushH, resolveEffective, currentProject, terms]);
 
   // ==== group =====================================================================
   const toggleLock = useCallback((gid: string) => {
@@ -780,9 +884,22 @@ export function WorldviewPanel() {
     saveGroups(currentProject.id, gs);
     setWorldviewGroups(p => [...p.filter(gr => !oldGroupIds.has(gr.id)), { id: gid, name, x: gx, y: gy, locked: false }]);
     // 同步所有子节点的绝对坐标到 DB
-    for (const n of [...selectedTerms, ...nodes.filter(n => subChildIds.has(n.id))]) {
-      api.saveNodeLayout("world_term", n.id, n.position.x, n.position.y).catch(e => console.error("saveNodeLayout failed:", e));
-      setTerms(p => p.map(t => t.id === n.id ? { ...t, layout_x: n.position.x, layout_y: n.position.y } : t));
+    // 注意：nodes 中是编组前的旧状态；有 parentId 的节点 position 是相对坐标（需 + 父编组坐标）
+    for (const cid of allChildIds) {
+      const n = nodes.find(x => x.id === cid);
+      if (n) {
+        let absX: number, absY: number;
+        if (n.parentId) {
+          const oldParent = nodes.find(x => x.id === n.parentId);
+          absX = (oldParent ? oldParent.position.x : 0) + n.position.x;
+          absY = (oldParent ? oldParent.position.y : 0) + n.position.y;
+        } else {
+          absX = n.position.x;
+          absY = n.position.y;
+        }
+        api.saveNodeLayout("world_term", cid, absX, absY).catch(e => console.error("saveNodeLayout failed:", e));
+        setTerms(p => p.map(t => t.id === cid ? { ...t, layout_x: absX, layout_y: absY } : t));
+      }
     }
     setSelIds([]); setShowDlg(false);
   }, [pendSel, nodes, gName, currentProject, pushH, setNodes, setWorldviewGroups, toggleLock]);
@@ -891,7 +1008,7 @@ export function WorldviewPanel() {
         <ReactFlow
           onInit={(inst: any) => { rfRef.current = inst; }}
           nodes={nodes} edges={edges}
-          onNodesChange={onNodesChange as any} onEdgesChange={onEdgesChange}
+          onNodesChange={handleNodesChange as any} onEdgesChange={onEdgesChange}
           onNodeDragStop={onDragStop} onNodeDragStart={onNodeDragStart} onConnect={onConnect}
           onEdgeDoubleClick={onEdgeDbl} onSelectionChange={onSel}
           onNodeContextMenu={onNodeCtx as any}
