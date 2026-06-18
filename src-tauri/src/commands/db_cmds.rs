@@ -282,11 +282,19 @@ pub fn set_api_config(
     if let Some(m) = model {
         cfg.api_model = m;
     }
-    if let Some(k) = api_key.filter(|s| !s.is_empty()) {
-        if let Some(provider) = provider_name.filter(|s| !s.is_empty()) {
-            cfg.provider_keys.insert(provider.clone(), k.clone());
-            cfg.provider_base_urls.insert(provider, cfg.api_base_url.clone());
+    // 保存 provider 标记（即使不传 Key 也保存 base_url，与 mock 后端一致）
+    // 传空字符串 key 表示删除该厂商的密钥
+    let has_key = api_key.as_ref().map(|s| !s.is_empty()).unwrap_or(false);
+    if let Some(provider) = provider_name.filter(|s| !s.is_empty()) {
+        cfg.provider_base_urls.insert(provider.clone(), cfg.api_base_url.clone());
+        cfg.provider_base_urls.insert("__active_provider__".into(), provider.clone());
+        match api_key {
+            Some(k) if !k.is_empty() => { cfg.provider_keys.insert(provider, k); }
+            Some(_) => { cfg.provider_keys.remove(&provider); } // 空 key = 删除该厂商密钥
+            None => {} // 未传 key = 不修改
         }
+    }
+    if has_key {
         cfg.has_api_key = true;
     }
     if let Some(stt_val) = stt {

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useAppStore } from "@/stores/app-store";
 import {
     FileText, Trash2, File as FileIcon, Plus, Image as ImageIcon, Sparkles,
-    FileUp, Folder, FolderPlus, GripVertical, ChevronRight, ChevronDown
+    FileUp, Folder, FolderPlus, ChevronRight, ChevronDown
 } from "lucide-react";
 import { uuid } from "@/lib/uuid";
 import { getJSONSync, setJSONSync } from "@/lib/storage";
@@ -68,6 +68,9 @@ export function MaterialModule() {
     const [renameValue, setRenameValue] = useState("");
     const [newGroupName, setNewGroupName] = useState("");
     const [showNewGroup, setShowNewGroup] = useState(false);
+    const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
+    const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+    const [deleteDialog, setDeleteDialog] = useState<{ groupId: string; groupName: string } | null>(null);
 
     const fileInputRef = useRef<HTMLInputElement>(null);
     const dropRef = useRef<HTMLDivElement>(null);
@@ -92,15 +95,17 @@ export function MaterialModule() {
         if (!pid || !newGroupName.trim()) return;
         const g: MaterialGroup = { id: uuid(), name: newGroupName.trim(), createdAt: new Date().toLocaleString("zh-CN") };
         persist([...groups, g], items);
+        setSelectedGroupId(g.id);
         setNewGroupName("");
         setShowNewGroup(false);
     }, [pid, newGroupName, groups, items, persist]);
 
-    const deleteGroup = useCallback((gid: string) => {
+    const deleteGroup = useCallback((gid: string, deleteItems: boolean) => {
         if (!pid) return;
         const ng = groups.filter(g => g.id !== gid);
-        const ni = items.map(i => i.groupId === gid ? { ...i, groupId: null } : i);
+        const ni = deleteItems ? items.filter(i => i.groupId !== gid) : items.map(i => i.groupId === gid ? { ...i, groupId: null } : i);
         persist(ng, ni);
+        setDeleteDialog(null);
     }, [pid, groups, items, persist]);
 
     const renameGroup = useCallback((gid: string, name: string) => {
@@ -112,6 +117,30 @@ export function MaterialModule() {
         if (!pid) return;
         persist(groups, items.map(i => i.id === itemId ? { ...i, groupId: gid } : i));
     }, [pid, groups, items, persist]);
+
+    const moveSelectedToGroup = useCallback((gid: string | null) => {
+        if (!pid || selectedIds.size === 0) return;
+        persist(groups, items.map(i => selectedIds.has(i.id) ? { ...i, groupId: gid } : i));
+        setSelectedIds(new Set());
+    }, [pid, groups, items, selectedIds, persist]);
+
+    const deleteSelectedItems = useCallback(() => {
+        if (!pid || selectedIds.size === 0) return;
+        if (!window.confirm(`确定删除选中的 ${selectedIds.size} 项素材？此操作不可恢复。`)) return;
+        persist(groups, items.filter(i => !selectedIds.has(i.id)));
+        if (selectedId && selectedIds.has(selectedId)) { setSelectedId(null); setEditingContent(""); }
+        setSelectedIds(new Set());
+    }, [pid, groups, items, selectedIds, selectedId, persist]);
+
+    const toggleSelectGroup = useCallback((itemIds: string[]) => {
+        setSelectedIds(prev => {
+            const next = new Set(prev);
+            const allSelected = itemIds.every(id => next.has(id));
+            if (allSelected) { itemIds.forEach(id => next.delete(id)); }
+            else { itemIds.forEach(id => next.add(id)); }
+            return next;
+        });
+    }, []);
 
     // ===== 素材重命名 =====
     const startRename = useCallback((id: string, currentName: string) => {
@@ -290,9 +319,9 @@ ${sample}
     }, [pid, groups, items, persist]);
 
     const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-        if (e.target.files?.length) processFiles(e.target.files, null);
+        if (e.target.files?.length) processFiles(e.target.files, selectedGroupId);
         if (fileInputRef.current) fileInputRef.current.value = "";
-    }, [processFiles]);
+    }, [processFiles, selectedGroupId]);
 
     // ===== 拖拽上传 =====
     const handleDragOver = useCallback((e: React.DragEvent) => {
@@ -315,12 +344,12 @@ ${sample}
     const handleDrop = useCallback((e: React.DragEvent) => {
         e.preventDefault();
         e.stopPropagation();
-        const gid = dragState.groupTarget;
+        const gid = dragState.groupTarget ?? selectedGroupId;
         setDragState({ over: false, groupTarget: null });
         if (e.dataTransfer.files?.length) {
             processFiles(e.dataTransfer.files, gid);
         }
-    }, [processFiles, dragState.groupTarget]);
+    }, [processFiles, dragState.groupTarget, selectedGroupId]);
 
     const selected = items.find(i => i.id === selectedId);
 
@@ -347,8 +376,8 @@ ${sample}
                             <FileUp size={32} className="mx-auto mb-1" />
                             <p className="text-sm font-medium">拖放到此处</p>
                             <p className="text-xs">
-                                {dragState.groupTarget
-                                    ? `→ 放入「${groups.find(g => g.id === dragState.groupTarget)?.name || "分组"}」`
+                                {(dragState.groupTarget ?? selectedGroupId)
+                                    ? `→ 放入「${groups.find(g => g.id === (dragState.groupTarget ?? selectedGroupId))?.name || "分组"}」`
                                     : "→ 未分组区域"}
                             </p>
                         </div>
@@ -363,7 +392,7 @@ ${sample}
                             placeholder="素材名称…"
                             value={newName}
                             onChange={e => setNewName(e.target.value)}
-                            onKeyDown={e => { if (e.key === "Enter") addTextItem(null); }}
+                            onKeyDown={e => { if (e.key === "Enter") addTextItem(selectedGroupId); }}
                         />
                         <button onClick={() => setShowNewGroup(!showNewGroup)}
                             className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-slate-500 hover:bg-amber-50 hover:text-amber-600" title="新建分组 + 素材">
@@ -394,6 +423,25 @@ ${sample}
 
                 <p className="mb-2 text-xs text-slate-400">共 {items.length} 项素材 · {groups.length} 个分组</p>
 
+                {/* 批量操作栏 */}
+                {selectedIds.size > 0 && (
+                    <div className="mb-2 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-2 py-1.5">
+                        <span className="text-xs font-medium text-amber-700">已选 {selectedIds.size} 项</span>
+                        <select className="flex-1 rounded border border-amber-300 px-1.5 py-0.5 text-xs outline-none bg-white"
+                            defaultValue=""
+                            onChange={e => { if (e.target.value !== "__placeholder__") moveSelectedToGroup(e.target.value || null); }}
+                        >
+                            <option value="__placeholder__" disabled>移动到…</option>
+                            <option value="">未分组</option>
+                            {groups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
+                        </select>
+                        <button onClick={deleteSelectedItems}
+                            className="rounded px-1.5 py-0.5 text-xs text-red-400 hover:bg-red-50 hover:text-red-500">删除</button>
+                        <button onClick={() => setSelectedIds(new Set())}
+                            className="rounded px-1.5 py-0.5 text-xs text-slate-400 hover:text-slate-600">取消</button>
+                    </div>
+                )}
+
                 {items.length === 0 && groups.length === 0 ? (
                     <div className="py-10 text-center text-xs text-slate-400">
                         <FileUp size={32} className="mx-auto mb-2 text-slate-200" />
@@ -407,9 +455,12 @@ ${sample}
                             const isGrpRenaming = renamingGroupId === group.id;
                             return (
                                 <div key={group.id} data-group-id={group.id}>
-                                    <div className="group flex items-center gap-1 rounded-lg px-1 py-1 hover:bg-slate-50"
+                                    <div className={`group flex items-center gap-1 rounded-lg px-1 py-1 cursor-pointer ${selectedGroupId === group.id ? "bg-amber-50 ring-1 ring-amber-200" : "hover:bg-slate-50"}`}
+                                        onClick={() => setSelectedGroupId(selectedGroupId === group.id ? null : group.id)}
                                         onDoubleClick={() => startGroupRename(group.id, group.name)}
                                     >
+                                        <input type="checkbox" checked={gItems.length > 0 && gItems.every(i => selectedIds.has(i.id))} onChange={(e) => { e.stopPropagation(); toggleSelectGroup(gItems.map(i => i.id)); }}
+                                            className="shrink-0 size-3 accent-amber-500 cursor-pointer" />
                                         <button onClick={() => toggleCollapse(group.id)} className="rounded p-0.5 hover:bg-slate-200 text-slate-400">
                                             {collapsedGroups.has(group.id) ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
                                         </button>
@@ -429,7 +480,7 @@ ${sample}
                                             <span className="flex-1 truncate text-xs font-medium text-slate-700">{group.name}</span>
                                         )}
                                         <span className="text-[10px] text-slate-400">{gItems.length}</span>
-                                        <button onClick={() => { if (window.confirm(`删除分组「${group.name}」？组内素材将移至未分组`)) deleteGroup(group.id); }}
+                                        <button onClick={(e) => { e.stopPropagation(); setDeleteDialog({ groupId: group.id, groupName: group.name }); }}
                                             className="rounded p-1 text-red-300 hover:bg-red-50 hover:text-red-500" title="删除分组">
                                             <Trash2 size={14} />
                                         </button>
@@ -442,13 +493,32 @@ ${sample}
                         {ungrouped.length > 0 && (
                             <div>
                                 <div className="flex items-center gap-1 px-2 py-1">
-                                    <FileText size={12} className="text-slate-400" />
+                                    <input type="checkbox" checked={ungrouped.every(i => selectedIds.has(i.id))} onChange={() => toggleSelectGroup(ungrouped.map(i => i.id))}
+                                        className="shrink-0 size-3 accent-amber-500 cursor-pointer" />
                                     <span className="flex-1 text-[10px] font-medium text-slate-400 uppercase">未分组</span>
                                     <span className="text-[10px] text-slate-400">{ungrouped.length}</span>
                                 </div>
                                 {ungrouped.map(item => renderItem(item))}
                             </div>
                         )}
+                    </div>
+                )}
+
+                {/* 删除分组确认弹窗 */}
+                {deleteDialog && (
+                    <div className="absolute inset-0 z-20 flex items-start justify-center pt-20 bg-black/20" onClick={() => setDeleteDialog(null)}>
+                        <div className="rounded-xl bg-white shadow-xl border border-slate-200 p-5 w-72" onClick={e => e.stopPropagation()}>
+                            <p className="text-sm font-semibold text-slate-800 mb-1">删除分组「{deleteDialog.groupName}」</p>
+                            <p className="text-xs text-slate-500 mb-4">组内素材如何处理？</p>
+                            <div className="flex gap-2">
+                                <button onClick={() => deleteGroup(deleteDialog.groupId, true)}
+                                    className="flex-1 rounded-lg bg-red-500 px-3 py-2 text-xs font-medium text-white hover:bg-red-600">是（删素材）</button>
+                                <button onClick={() => deleteGroup(deleteDialog.groupId, false)}
+                                    className="flex-1 rounded-lg bg-amber-500 px-3 py-2 text-xs font-medium text-white hover:bg-amber-600">否（移出）</button>
+                                <button onClick={() => setDeleteDialog(null)}
+                                    className="flex-1 rounded-lg border border-slate-200 px-3 py-2 text-xs text-slate-500 hover:bg-slate-50">取消</button>
+                            </div>
+                        </div>
                     </div>
                 )}
             </aside>
@@ -530,9 +600,16 @@ ${sample}
     /** 渲染单个素材项 */
     function renderItem(item: MaterialItem) {
         const isRenaming = renamingId === item.id;
+        const isChecked = selectedIds.has(item.id);
+        const toggleCheck = () => {
+            const next = new Set(selectedIds);
+            if (next.has(item.id)) next.delete(item.id); else next.add(item.id);
+            setSelectedIds(next);
+        };
         return (
             <div key={item.id} className="group flex items-center gap-0.5">
-                <GripVertical size={10} className="shrink-0 text-slate-200 group-hover:text-slate-400 cursor-grab" />
+                <input type="checkbox" checked={isChecked} onChange={toggleCheck}
+                    className="shrink-0 size-3 accent-amber-500 cursor-pointer" />
                 {isRenaming ? (
                     <div className="flex flex-1 items-center gap-1 rounded-lg px-2 py-1">
                         <input className="min-w-0 flex-1 rounded border border-amber-300 px-2 py-0.5 text-xs outline-none"

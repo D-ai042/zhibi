@@ -85,15 +85,32 @@ export function SettingsModal() {
       setKeys(apiConfig.provider_keys || {});
       setBaseUrls(apiConfig.provider_base_urls || {});
       // 从 provider_keys 中提取非预定义厂商作为自定义厂商
+      // 过滤掉 key 和 models 都为空的条目（已被软删除）
       const definedNames = new Set(PROVIDERS.map(p => p.name));
       const custom: CustomProviderEntry[] = [];
       for (const name of Object.keys(apiConfig.provider_keys || {})) {
         if (!definedNames.has(name) && name !== "custom") {
+          const key = apiConfig.provider_keys[name] || "";
+          const models = apiConfig.provider_models?.[name] || [];
+          if (!key && models.length === 0) continue; // 软删除：跳过无数据条目
           custom.push({
             name,
-            key: apiConfig.provider_keys[name] || "",
+            key,
             baseUrl: apiConfig.provider_base_urls[name] || "",
-            models: apiConfig.provider_models?.[name] || [],
+            models,
+          });
+        }
+      }
+      // 同时扫描 provider_models 中可能存在但 provider_keys 中没有的厂商
+      for (const name of Object.keys(apiConfig.provider_models || {})) {
+        if (!definedNames.has(name) && !custom.some(c => c.name === name)) {
+          const models = apiConfig.provider_models![name] || [];
+          if (models.length === 0) continue;
+          custom.push({
+            name,
+            key: apiConfig.provider_keys?.[name] || "",
+            baseUrl: apiConfig.provider_base_urls?.[name] || "",
+            models,
           });
         }
       }
@@ -136,6 +153,15 @@ export function SettingsModal() {
         await api.setApiConfig(url, apiConfig?.api_model || "deepseek-chat", k, p.name);
       }
       // 保存自定义厂商
+      const currentNames = new Set(customProviders.map(cp => cp.name.trim()).filter(Boolean));
+      const previousNames = new Set(
+        Object.keys(apiConfig?.provider_keys || {})
+          .filter(n => !PROVIDERS.map(p => p.name).includes(n) && n !== "custom")
+      );
+      // 同时检查 provider_models 中的厂商名
+      for (const n of Object.keys(apiConfig?.provider_models || {})) {
+        if (!PROVIDERS.map(p => p.name).includes(n)) previousNames.add(n);
+      }
       for (const cp of customProviders) {
         if (cp.name.trim()) {
           await api.setApiConfig(cp.baseUrl || "https://api.openai.com/v1", apiConfig?.api_model || "deepseek-chat", cp.key || "", cp.name.trim());
@@ -143,6 +169,13 @@ export function SettingsModal() {
         // 保存该厂商的模型列表
         if (cp.name.trim() && cp.models.length > 0) {
           await api.setProviderModels(cp.name.trim(), cp.models);
+        }
+      }
+      // 清理已移除的自定义厂商（清空 key / baseUrl / models）
+      for (const name of previousNames) {
+        if (!currentNames.has(name)) {
+          await api.setApiConfig("", "", "", name);
+          await api.setProviderModels(name, []);
         }
       }
       // 保存 STT 配置（多 provider）
