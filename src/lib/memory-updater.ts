@@ -14,7 +14,8 @@
 
 import { uuid } from "@/lib/uuid";
 import { api } from "./api";
-import { getJSONSync, setJSONSync, setJSON } from "./storage";
+import { getJSONSync, setJSONSync, setSync, setJSON } from "./storage";
+import { getAllProjectKeys } from "./backup";
 import { useAppStore } from "@/stores/app-store";
 import type {
     ChapterSummary, ChapterSnapshot,
@@ -634,26 +635,47 @@ ${nextBeat ? `#${nextBeat.number}「${nextBeat.title}」角色：${nextBeat.char
 
 // ===== 快照管理 =====
 
-interface ProjectSnapshot { id: string; label: string; timestamp: string; }
+interface ProjectSnapshot { id: string; label: string; timestamp: string; data?: Record<string, string>; }
 const SNAPSHOT_KEY = (pid: string) => `novel-snapshots-${pid}`;
 
 export function listSnapshots(projectId: string): { id: string; label: string; timestamp: string }[] {
-    try { return getJSONSync(SNAPSHOT_KEY(projectId), [] as ProjectSnapshot[]); } catch { return []; }
+    try {
+        const raw = getJSONSync(SNAPSHOT_KEY(projectId), [] as ProjectSnapshot[]);
+        // 返回不含 data 字段的摘要列表（节省 UI 渲染内存）
+        return raw.map(s => ({ id: s.id, label: s.label, timestamp: s.timestamp }));
+    } catch { return []; }
 }
 
 export function createSnapshot(projectId: string, label: string): void {
     try {
-        const snaps = listSnapshots(projectId);
-        snaps.push({ id: uuid(), label, timestamp: new Date().toISOString() });
+        const snaps = getJSONSync(SNAPSHOT_KEY(projectId), [] as ProjectSnapshot[]);
+        // 收集当前完整项目数据
+        const keys = getAllProjectKeys(projectId);
+        const data: Record<string, string> = {};
+        for (const key of keys) {
+            try {
+                const val = localStorage.getItem(key);
+                if (val !== null) data[key] = val;
+            } catch { /* skip unreadable */ }
+        }
+        snaps.push({ id: uuid(), label, timestamp: new Date().toISOString(), data });
         setJSONSync(SNAPSHOT_KEY(projectId), snaps);
     } catch { /* silent */ }
 }
 
 export function restoreSnapshot(projectId: string, snapId: string): boolean {
     try {
-        const snaps = listSnapshots(projectId);
+        const snaps = getJSONSync(SNAPSHOT_KEY(projectId), [] as ProjectSnapshot[]);
         const idx = snaps.findIndex(s => s.id === snapId);
         if (idx === -1) return false;
+        const snap = snaps[idx];
+        // 恢复快照中的项目数据
+        if (snap.data) {
+            for (const [key, value] of Object.entries(snap.data)) {
+                setSync(key, value);
+            }
+        }
+        // 截断快照列表
         setJSONSync(SNAPSHOT_KEY(projectId), snaps.slice(0, idx + 1));
         return true;
     } catch { return false; }

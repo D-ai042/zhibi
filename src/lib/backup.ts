@@ -9,17 +9,27 @@ const BACKUP_PREFIX = "novel-backup-";
 const MAX_BACKUPS = 5;
 
 /** 收集项目相关的所有 localStorage key */
-function getAllProjectKeys(projectId: string): string[] {
+export function getAllProjectKeys(projectId: string): string[] {
   const keys: string[] = [];
   const prefixes = [
     `novel-workbench-`, `plot-chapters-`, `plot-segments-`,
     `plot-edges-`, `worldview-edges-`, `worldview-groups-`,
     `chapter-index-`, `chapter-${projectId}-`,
     `draft-${projectId}-`, `novel-snapshots-`,
+    `char-groups-`, `ai-pending-chars-`, `ai-pending-world-terms-`,
+    `inspiration-cards-`, `material-`, `chapter-hash-`,
+  ];
+  // 全局 key（不含 projectId，但包含所有项目数据）
+  const globalExactKeys = [
+    "novel-workbench-mock",
   ];
   for (let i = 0; i < localStorage.length; i++) {
     const key = localStorage.key(i);
     if (!key) continue;
+    if (globalExactKeys.includes(key)) {
+      keys.push(key);
+      continue;
+    }
     if (prefixes.some(p => key === p || key.startsWith(p)) && key.includes(projectId)) {
       keys.push(key);
     }

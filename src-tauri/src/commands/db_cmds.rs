@@ -1473,7 +1473,16 @@ pub fn get_chapter_summaries(project_id: String, state: State<'_, DbState>) -> R
     let raw = get_setting(log_key, state)?;
     match raw {
         Some(s) if !s.is_empty() => {
-            serde_json::from_str(&s).map_err(|e| format!("解析 JSON 失败: {}", e))
+            let val: serde_json::Value = serde_json::from_str(&s).map_err(|e| format!("解析 JSON 失败: {}", e))?;
+            // 提取 summaries 数组（log store 是 {summaries:[...], characterStates:[...], ...} 结构）
+            if let Some(arr) = val.get("summaries").and_then(|v| v.as_array()) {
+                Ok(serde_json::Value::Array(arr.clone()))
+            } else if val.is_array() {
+                // 兼容旧格式（纯数组）
+                Ok(val)
+            } else {
+                Ok(serde_json::Value::Array(vec![]))
+            }
         }
         _ => Ok(serde_json::Value::Array(vec![])),
     }

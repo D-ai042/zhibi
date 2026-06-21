@@ -426,8 +426,12 @@ async function loadStoryBible(projectId: string): Promise<StoryBible | null> {
 async function loadRecentSummaries(projectId: string, currentChapter?: Chapter): Promise<ChapterSummary[]> {
     if (!currentChapter) return [];
     try {
-        const all = await api.getChapterSummaries(projectId);
-        const before = all.filter(s => s.chapter_number < currentChapter.number).sort((a, b) => b.chapter_number - a.chapter_number).slice(0, 5);
+        let all = await api.getChapterSummaries(projectId);
+        // 防御：EXE 模式可能返回整个 log store 对象，提取 summaries 字段
+        if (!Array.isArray(all)) {
+            all = (all as any)?.summaries || [];
+        }
+        const before = all.filter((s: any) => s.chapter_number < currentChapter.number).sort((a: any, b: any) => b.chapter_number - a.chapter_number).slice(0, 5);
         return before.reverse();
     } catch { return []; }
 }
