@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Plus, Trash2, Lightbulb } from "lucide-react";
 import { useAppStore } from "@/stores/app-store";
-import { getJSONSync, saveJSON } from "@/lib/storage";
 import { uuid } from "@/lib/uuid";
 
 // ===== 灵感卡片 =====
@@ -15,10 +14,10 @@ interface InspirationCard {
 // ===== localStorage =====
 function sk(pid: string) { return "inspiration-cards-" + pid; }
 function loadCards(pid: string): InspirationCard[] {
-    return getJSONSync(sk(pid), []);
+    try { return getJSONSync(sk(pid), [] as any[]); } catch { return []; }
 }
 function saveCards(pid: string, cards: InspirationCard[]) {
-    saveJSON(sk(pid), cards);
+    try { setJSONSync(sk(pid), cards); } catch { /* quota full */ }
 }
 
 export function InspirationPanel() {

@@ -1,6 +1,5 @@
 import { Globe2, GitBranch, Users, Layers, Lock } from "lucide-react";
 import { useAppStore } from "@/stores/app-store";
-import { getJSONSync, saveJSON } from "@/lib/storage";
 import { useState } from "react";
 import type { OutlineSection } from "@/types";
 import { OUTLINE_SECTION_LABEL } from "@/types";
@@ -18,17 +17,17 @@ function updateGroupName(gid: string, newName: string) {
   const pid = useAppStore.getState().currentProject?.id;
   if (!pid) return;
   const key = "worldview-groups-" + pid;
-  const saved = getJSONSync(key, []);
+  const saved = JSON.parse(localStorage.getItem(key) || "[]");
   const idx = saved.findIndex((g: any) => g.id === gid);
-  if (idx >= 0) { saved[idx].name = newName; saveJSON(key, saved); }
+  if (idx >= 0) { saved[idx].name = newName; localStorage.setItem(key, JSON.stringify(saved)); }
 }
 
 function removeGroup(gid: string) {
   const pid = useAppStore.getState().currentProject?.id;
   if (!pid) return;
   const key = "worldview-groups-" + pid;
-  const saved = getJSONSync(key, []);
-  saveJSON(key, saved.filter((g: any) => g.id !== gid));
+  const saved = getJSONSync(key, [] as any[]);
+  setJSONSync(key, saved.filter((g: any) => g.id !== gid));
 }
 
 export function OutlineModule() {

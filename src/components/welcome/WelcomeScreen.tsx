@@ -2,7 +2,6 @@ import { useState } from "react";
 import { BookOpen, FolderOpen, Plus, Settings, Trash2, Edit3, Check, X } from "lucide-react";
 import { api } from "@/lib/api";
 import { useAppStore } from "@/stores/app-store";
-import { saveJSON } from "@/lib/storage";
 import type { Project } from "@/types";
 
 interface Props {
@@ -61,16 +60,15 @@ export function WelcomeScreen({ onOpenProject }: Props) {
     const store = useAppStore.getState();
     const projName = store.projects.find(p => p.id === pid)?.name;
     await api.deleteProject(pid);
-    // 清理聊天记录（走存储层）
-    // T8 例外：遍历 localStorage 枚举 key 清理项目数据
+    // 清理 localStorage 中的聊天记录（遍历 key 是收口文件 backup/migrate 模式，保留）
     for (let i = localStorage.length - 1; i >= 0; i--) {
       const key = localStorage.key(i);
       if (key?.startsWith(`novel-workbench-chat-${pid}`)) {
-        saveJSON(key, null);
+        try { setJSONSync(key, null as any); localStorage.removeItem(key); } catch { }
       }
     }
     if (projName) {
-      saveJSON(`novel-workbench-chat-name:${projName}`, null);
+      try { localStorage.removeItem(`novel-workbench-chat-name:${projName}`); } catch { }
     }
     const list = await api.getProjects();
     setProjects(list);

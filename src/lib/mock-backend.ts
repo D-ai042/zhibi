@@ -19,7 +19,6 @@ import type {
   WorldTerm,
 } from "@/types";
 import { MODEL_TO_PROVIDER } from "./model-config";
-import { getSync, setJSONSync, getJSONSync } from "./storage";
 
 
 const STORAGE_KEY = "novel-workbench-mock";
@@ -72,7 +71,7 @@ let _mockStoreCache: MockStore | null = null;
 function load(): MockStore {
   if (_mockStoreCache) return _mockStoreCache;
 
-  const raw = getSync(STORAGE_KEY);
+  const raw = localStorage.getItem(STORAGE_KEY);
   if (raw) {
     const data = JSON.parse(raw) as MockStore;
     // 反混淆 API Key（每次 load 都需要）
@@ -131,7 +130,7 @@ function load(): MockStore {
             if (saveData.apiConfig.stt.providers[p].secret_key) saveData.apiConfig.stt.providers[p].secret_key = obfuscate(saveData.apiConfig.stt.providers[p].secret_key);
           }
         }
-        setJSONSync(STORAGE_KEY, saveData);
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(saveData));
       } catch { /* ignore */ }
     }
     _mockStoreCache = data;
@@ -182,7 +181,7 @@ function save(s: MockStore) {
     }
   }
   try {
-    setJSONSync(STORAGE_KEY, copy);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(copy));
   } catch (e) {
     console.error("[mock-backend] ⚠️ 存储空间不足，数据未能保存！请清理旧项目或导出数据后删除。", e);
     // 尝试清理缓存以释放读取路径
@@ -507,16 +506,15 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
       s.chapterContents = s.chapterContents.filter(cc => !delChapterIds.has(cc.chapter_id));
       s.worldTerms = s.worldTerms.filter(t => t.project_id !== pid);
       s.lockedFields = s.lockedFields.filter(l => !allDeletedEntityIds.has(l.entity_id));
-      // T8: mock 模式下清理聊天记录需遍历 localStorage
-      // T8 例外：遍历 localStorage 枚举 key（dev mock 数据同步）
+      // 清理 localStorage 中的聊天记录
       for (let i = localStorage.length - 1; i >= 0; i--) {
         const key = localStorage.key(i);
         if (key?.startsWith(`novel-workbench-chat-${pid}`)) {
-          setJSONSync(key, null);
+          localStorage.removeItem(key);
         }
       }
       if (projName) {
-        setJSONSync(`novel-workbench-chat-name:${projName}`, null);
+        localStorage.removeItem(`novel-workbench-chat-name:${projName}`);
       }
       save(s);
       return undefined as T;
@@ -551,7 +549,10 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
       s.apiConfig.api_model = (args?.model as string) || s.apiConfig.api_model;
       if (args?.apiKey !== undefined) s.apiConfig.api_key = args.apiKey as string;
       if (args?.providerName) {
-        s.apiConfig.provider_keys[args.providerName as string] = (args?.apiKey ?? "") as string;
+        // ★ 修复：只在明确传入 apiKey 时才写入 provider_keys（避免选模型时传 undefined 覆盖已有 Key）
+        if (args?.apiKey !== undefined) {
+          s.apiConfig.provider_keys[args.providerName as string] = (args.apiKey ?? "") as string;
+        }
       }
       if (args?.providerName && args?.baseUrl) {
         s.apiConfig.provider_base_urls[args.providerName as string] = args.baseUrl as string;
@@ -843,14 +844,15 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
     case "get_style_guide": {
       const pid = args?.projectId as string;
       try {
-        return getJSONSync(`novel-workbench-style-${pid}`, null) as T;
+        const raw = localStorage.getItem(`novel-workbench-style-${pid}`);
+        return raw ? JSON.parse(raw) : null as T;
       } catch { return null as T; }
     }
 
     case "save_style_guide": {
       const guide = args?.guide as Record<string, unknown>;
       if (guide?.project_id) {
-        setJSONSync(`novel-workbench-style-${guide.project_id}`, guide);
+        localStorage.setItem(`novel-workbench-style-${guide.project_id}`, JSON.stringify(guide));
       }
       return undefined as T;
     }
@@ -858,14 +860,15 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
     case "get_story_bible": {
       const pid = args?.projectId as string;
       try {
-        return getJSONSync(`novel-workbench-bible-${pid}`, null) as T;
+        const raw = localStorage.getItem(`novel-workbench-bible-${pid}`);
+        return raw ? JSON.parse(raw) : null as T;
       } catch { return null as T; }
     }
 
     case "save_story_bible": {
       const bible = args?.bible as Record<string, unknown>;
       if (bible?.project_id) {
-        setJSONSync(`novel-workbench-bible-${bible.project_id}`, bible);
+        localStorage.setItem(`novel-workbench-bible-${bible.project_id}`, JSON.stringify(bible));
       }
       return undefined as T;
     }
@@ -873,8 +876,9 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
     case "get_chapter_summaries": {
       const pid = args?.projectId as string;
       try {
-        const parsed = getJSONSync(`novel-workbench-log-${pid}`, null);
-        if (!parsed) return [] as T;
+        const raw = localStorage.getItem(`novel-workbench-log-${pid}`);
+        if (!raw) return [] as T;
+        const parsed = JSON.parse(raw);
         if (Array.isArray(parsed)) return parsed as T;
         return (parsed.summaries || []) as T;
       } catch { return [] as T; }
@@ -932,27 +936,23 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
 
       // 从 localStorage 读取剧情走向 + 卷章树 + 世界观画布数据
       const getLocal = (key: string): any[] => {
-        try { return getJSONSync(key, []) as any[]; } catch { return []; }
+        try { return JSON.parse(localStorage.getItem(key) || "[]"); } catch { return []; }
       };
       const getLocalObj = (key: string): Record<string, any> => {
-        try { return getJSONSync(key, {}) as Record<string, any>; } catch { return {}; }
+        try { return JSON.parse(localStorage.getItem(key) || "{}"); } catch { return {}; }
       };
       const plotSegments = getLocal(`plot-segments-${pid}`);
       const plotEdges = getLocal(`plot-edges-${pid}`);
-      // T3: 从逐章存储读取章节，不再使用 plot-chapters- 旧 key
+      const plotChapters = (() => { try { const ids: string[] = JSON.parse(localStorage.getItem(`chapter-index-${pid}`) || "[]"); return ids.map((id: string) => { try { return JSON.parse(localStorage.getItem(`chapter-${pid}-${id}`) || "null"); } catch { return null; } }).filter(Boolean); } catch { return []; } })();
       const chapterIndex = getLocal(`chapter-index-${pid}`);
       const worldviewEdges = getLocal(`worldview-edges-${pid}`);
       const worldviewGroups = getLocal(`worldview-groups-${pid}`);
       const charGroups = getLocal(`char-groups-${pid}`);
-      // 分片章节数据 + 重建 plotChapters
+      // 分片章节数据
       const chapterShards: Record<string, any> = {};
-      const plotChapters: any[] = [];
       for (const chId of chapterIndex) {
         const chData = getLocalObj(`chapter-${pid}-${chId}`);
-        if (chData && chData.id) {
-          chapterShards[chId] = chData;
-          plotChapters.push(chData);
-        }
+        if (chData && chData.id) chapterShards[chId] = chData;
       }
 
       // 章节正文：优先从 s.chapterContents，缺失的从 chapterShards 重建
@@ -973,15 +973,15 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
 
       return {
         project: proj as Record<string, unknown>,
-        worldTerms: (s.worldTerms || []).filter(t => t.project_id === pid).map(t => normalizeItem(t as unknown as Record<string, unknown>, "world_term")) as Record<string, unknown>[],
-        characters: (s.characters || []).filter(c => c.project_id === pid).map(c => normalizeItem(c as unknown as Record<string, unknown>, "character")) as Record<string, unknown>[],
-        relationships: (s.edges || []).filter(e => e.project_id === pid).map(e => normalizeItem(e as unknown as Record<string, unknown>, "edge")) as Record<string, unknown>[],
-        plotEvents: (s.plotEvents || []).filter(e => e.project_id === pid).map(e => normalizeItem(e as unknown as Record<string, unknown>, "plot_event")) as Record<string, unknown>[],
-        timelineNodes: (s.timelineNodes || []).filter(n => n.project_id === pid).map(n => normalizeItem(n as unknown as Record<string, unknown>, "timeline_node")) as Record<string, unknown>[],
-        volumes: (s.volumes || []).filter(v => v.project_id === pid).map(v => normalizeItem(v as unknown as Record<string, unknown>, "volume")) as Record<string, unknown>[],
-        chapters: chapters.map(c => normalizeItem(c as unknown as Record<string, unknown>, "chapter")) as Record<string, unknown>[],
-        beatCards: (s.beatCards || []).filter(b => chapterIds.has(b.chapter_id)).map(b => normalizeItem(b as unknown as Record<string, unknown>, "beat_card")) as Record<string, unknown>[],
-        chapterContents: mergedChapterContents.map(cc => normalizeItem(cc as unknown as Record<string, unknown>, "chapter_content")) as Record<string, unknown>[],
+        worldTerms: (s.worldTerms || []).filter(t => t.project_id === pid).map(t => normalizeItem(t as Record<string, unknown>, "world_term")) as Record<string, unknown>[],
+        characters: (s.characters || []).filter(c => c.project_id === pid).map(c => normalizeItem(c as Record<string, unknown>, "character")) as Record<string, unknown>[],
+        relationships: (s.edges || []).filter(e => e.project_id === pid).map(e => normalizeItem(e as Record<string, unknown>, "edge")) as Record<string, unknown>[],
+        plotEvents: (s.plotEvents || []).filter(e => e.project_id === pid).map(e => normalizeItem(e as Record<string, unknown>, "plot_event")) as Record<string, unknown>[],
+        timelineNodes: (s.timelineNodes || []).filter(n => n.project_id === pid).map(n => normalizeItem(n as Record<string, unknown>, "timeline_node")) as Record<string, unknown>[],
+        volumes: (s.volumes || []).filter(v => v.project_id === pid).map(v => normalizeItem(v as Record<string, unknown>, "volume")) as Record<string, unknown>[],
+        chapters: chapters.map(c => normalizeItem(c as Record<string, unknown>, "chapter")) as Record<string, unknown>[],
+        beatCards: (s.beatCards || []).filter(b => chapterIds.has(b.chapter_id)).map(b => normalizeItem(b as Record<string, unknown>, "beat_card")) as Record<string, unknown>[],
+        chapterContents: mergedChapterContents.map(cc => normalizeItem(cc as Record<string, unknown>, "chapter_content")) as Record<string, unknown>[],
         plotSegments,
         plotEdges,
         plotChapters,
@@ -1090,7 +1090,7 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
       // 浏览器模式：从 localStorage 收集匹配前缀的 key
       const prefixes = [
         "novel-workbench-style-", "novel-workbench-bible-", "novel-workbench-voices-",
-        "novel-workbench-log-", "novel-workbench-chat-",
+        "novel-workbench-log-", "novel-workbench-chat-", "plot-chapters-",
         "plot-segments-", "plot-edges-", "worldview-edges-", "worldview-groups-",
         "material-", "ai-pending-chars-", "ai-pending-world-terms-",
         "inspiration-cards-", "char-groups-", "writing-sidebar-width-",
@@ -1098,12 +1098,12 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
         "novel-workbench-mock", "novel-workbench-snapshots-",
       ];
       const result: { key: string; value: string }[] = [];
-      // T8: mock 模式下导出需遍历 localStorage 收集数据 key
-      // T8 例外：遍历 localStorage 枚举 key（mock 模式导出数据）
       for (let i = 0; i < localStorage.length; i++) {
         const key = localStorage.key(i);
-        if (key && prefixes.some(p => key.startsWith(p))) {
-          const value = getSync(key);
+        if (!key) continue;
+        const matched = prefixes.some((p) => key === p || key.startsWith(p));
+        if (matched) {
+          const value = localStorage.getItem(key);
           if (value) result.push({ key, value });
         }
       }

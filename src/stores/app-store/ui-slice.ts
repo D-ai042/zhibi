@@ -8,6 +8,9 @@ export interface UiSlice {
   outlineSection: OutlineSection; overviewSection: OverviewSection;
   manuscriptSection: ManuscriptSection;
   drawerOpen: boolean; drawerWidth: number; navCollapsed: boolean; settingsOpen: boolean;
+  /** 画布四象限勾选状态 */
+  worldviewZoneEnabled: Record<string, boolean>;
+  setWorldviewZoneEnabled: (z: Record<string, boolean>) => void;
   navigateTo: (t: NavTarget, extraId?: string) => void;
   setOutlineSection: (s: OutlineSection) => void;
   setOverviewSection: (s: OverviewSection) => void;
@@ -30,6 +33,7 @@ export const createUiSlice: StateCreator<AppStore, [], [], UiSlice> = (set, get)
   overviewSection: "stats",
   manuscriptSection: "inspirations",
   drawerOpen: true, drawerWidth: 420, navCollapsed: false, settingsOpen: false,
+  worldviewZoneEnabled: { core: true, locked: false, active: true, other: true },
   navigateTo: (target, extraId) => set({ activeModule: target, activeExtraId: extraId ?? null }),
   setOutlineSection: (outlineSection) => set({ outlineSection }),
   setOverviewSection: (overviewSection) => set({ overviewSection }),
@@ -38,6 +42,7 @@ export const createUiSlice: StateCreator<AppStore, [], [], UiSlice> = (set, get)
   setDrawerWidth: (drawerWidth) => set({ drawerWidth }),
   setNavCollapsed: (navCollapsed) => set({ navCollapsed }),
   setSettingsOpen: (settingsOpen) => set({ settingsOpen }),
+  setWorldviewZoneEnabled: (worldviewZoneEnabled) => set({ worldviewZoneEnabled }),
   customModules: [], navItems: [], dynamicPages: {},
   addCustomModule: (mod) => set((s) => ({ customModules: [...s.customModules, mod] })),
   removeCustomModule: (id) => set((s) => {

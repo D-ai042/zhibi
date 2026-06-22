@@ -7,7 +7,6 @@ import {
 import "@xyflow/react/dist/style.css";
 import { api } from "@/lib/api";
 import { useAppStore } from "@/stores/app-store";
-import { getJSONSync, saveJSON } from "@/lib/storage";
 import type { Character, RelationshipEdge } from "@/types";
 import CharacterNode from "./CharacterNode";
 import CustomEdge from "./CustomEdge";
@@ -97,7 +96,7 @@ export function CharactersModule() {
         if (data) {
           data.characters = snapshot.chars;
           data.edges = snapshot.rawEdges;
-          saveJSON(STORAGE_KEY, data);
+          setJSONSync(STORAGE_KEY, data);
         }
         saveGroups(currentProject.id, snapshot.groups as any[]);
       } catch { /* ignore */ }
@@ -450,19 +449,21 @@ export function CharactersModule() {
     window.addEventListener("keydown", h); return () => window.removeEventListener("keydown", h);
   }, [selIds, nodes]);
 
-  // Backspace 删除选中角色
+  // Backspace/Delete 删除选中角色（一次性快照 + 确认）
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
-      if (e.key === "Backspace" && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)) {
+      if ((e.key === "Backspace" || e.key === "Delete") && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)) {
         const toDelete = selIds.filter(id => nodes.find(n => n.id === id)?.type === "characterNode");
         if (toDelete.length > 0 && window.confirm(`确定删除选中的 ${toDelete.length} 个角色？`)) {
-          toDelete.forEach(id => handleDelete(id));
+          pushSnapshot();
+          toDelete.forEach(id => api.deleteCharacter(id));
+          const store = useAppStore.getState(); store.bumpCharacters();
           setSelIds([]);
         }
       }
     };
     window.addEventListener("keydown", h); return () => window.removeEventListener("keydown", h);
-  }, [selIds, nodes, handleDelete]);
+  }, [selIds, nodes, pushSnapshot]);
 
   // 创建编组（支持超级编组 = 编组 + 角色混合选择）
   const doGroup = useCallback(() => {
@@ -572,6 +573,7 @@ export function CharactersModule() {
 
   // ===== 拖拽 =====
   const onDragStop = useCallback(async (_: unknown, node: Node) => {
+    pushSnapshot();
     if (node.type === "group" && currentProject) {
       const gs = loadGroups(currentProject.id);
       const g = gs.find(x => x.id === node.id);
@@ -984,7 +986,7 @@ export function CharactersModule() {
           nodesDraggable elementsSelectable
           panOnDrag={[2]} selectionOnDrag
           selectionMode="partial"
-          deleteKeyCode="Delete" multiSelectionKeyCode="Shift"
+          multiSelectionKeyCode="Shift"
         >
           <Background color="#e2e8f0" gap={24} size={1} />
           <MiniMap className="!shadow-md !rounded-lg !border"

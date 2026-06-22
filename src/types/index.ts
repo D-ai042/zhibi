@@ -57,6 +57,8 @@ export interface WorldTerm {
   is_locked: boolean;
   layout_x: number;
   layout_y: number;
+  /** 画布四象限分区: core=核心规则 locked=锁定 active=当前创作 other=其他 */
+  zone?: "core" | "locked" | "active" | "other";
 }
 
 export interface TimelineNode {
@@ -334,35 +336,6 @@ export interface ChapterSnapshot {
   excerpts: { text: string; purpose: string }[];
 }
 
-/** T5 剧情段落数据（plot-segments localStorage 格式） */
-export interface PlotSegmentData {
-  id: string; project_id: string; type: "bright" | "dark";
-  title: string; characters: string; location: string; time: string;
-  chapters: string; event: string;
-  beats?: PlotBeatData[];
-  [key: string]: unknown;
-}
-
-/** T5 节拍数据（beat 子结构） */
-export interface PlotBeatData {
-  number: number; title: string; characters?: string; location?: string;
-  time?: string; event?: string; chapters?: string;
-}
-
-/** T5 日志库数据（novel-workbench-log localStorage 格式） */
-export interface LogStoreData {
-  summaries?: ChapterSummary[];
-  characterStates?: CharacterState[];
-  storylines?: StorylineProgress[];
-  foreshadows?: ForeshadowEntry[];
-  snapshots?: ChapterSnapshot[];
-  termActivity?: { termId: string; status: string; activeForChapter: number; reason: string }[];
-  nextChapterCharacters?: { forChapter: number; characterNames: string[]; updatedAt: string };
-  dependencies?: Record<string, unknown>[];
-  chapterVersions?: Record<string, number>;
-  [key: string]: unknown;
-}
-
 /** 风格指南 */
 export interface StyleGuide {
   project_id: string;
@@ -408,18 +381,6 @@ export interface ContextEngineOutput {
   characters: string[];
   worldTerms: string[];
   summaries: string[];
-}
-
-/** 上下文面板数据（T5 assembleContext panel 模式） */
-export interface ContextPanelData {
-  summaries: ChapterSummary[];
-  beatCards: BeatCard[];
-  characters: { name: string; status?: string }[];
-  prevContent: { number: number; title: string; content: string } | null;
-  worldRules: string[];
-  styleRedlines: string;
-  styleNarrative: string;
-  styleTone: string;
 }
 
 /** AI UI 操控动作 — 在 AI 回复中通过 JSON 解析 */

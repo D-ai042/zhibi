@@ -23,7 +23,6 @@ import type { NavItem, NavTarget, ProjectStage } from "@/types";
 import { MODULE_LABEL } from "@/types";
 
 import { RightDrawer } from "./RightDrawer";
-import { getJSONSync } from "@/lib/storage";
 import { getCurrentVersion, checkForUpdate, markDismissed, type VersionInfo } from "@/lib/version-check";
 
 const STAGE_LABEL: Record<ProjectStage, string> = {
@@ -76,36 +75,58 @@ const AI_MODELS: ModelOption[] = [
   { value: "mimo-v2-flash", label: "MiMo V2 Flash", provider: "小米", base: "https://api.xiaomimimo.com" },
 ];
 
-/** 按 provider 分组 + 合并自定义厂商模型 */
+/** 按 provider 分组 + 合并自定义厂商模型 + 读取用户配置覆盖内置模型 */
 function groupModels(
   providerModels?: Record<string, string[]>,
   providerBaseUrls?: Record<string, string>
 ): [string, ModelOption[]][] {
   const map = new Map<string, ModelOption[]>();
 
-  // 1. 内置模型
-  for (const m of AI_MODELS) {
-    const list = map.get(m.provider) || [];
-    list.push(m);
-    map.set(m.provider, list);
+  // 1. 内置厂商：如果用户配了 provider_models 就用用户的，否则用硬编码默认
+  if (providerModels) {
+    // 有 provider_models 定义的内置厂商 → 用用户配置的模型列表
+    for (const [provider, models] of Object.entries(providerModels)) {
+      const builtin = AI_MODELS.filter(m => m.provider === provider);
+      if (builtin.length === 0) continue; // 不是内置厂商，跳过（自定义厂商在后面处理）
+      const baseUrl = providerBaseUrls?.[provider] || builtin[0].base;
+      const list: ModelOption[] = [];
+      for (const modelName of models) {
+        // 如果有匹配的内置 ModelOption，保留其 label；否则用模型名作为 label
+        const match = builtin.find(b => b.value === modelName);
+        list.push(match || { value: modelName, label: modelName, provider, base: baseUrl });
+      }
+      if (list.length > 0) map.set(provider, list);
+    }
+    // 没有在 provider_models 中配置的内置厂商 → 用硬编码默认
+    const configuredProviders = new Set(Object.keys(providerModels));
+    for (const m of AI_MODELS) {
+      if (configuredProviders.has(m.provider)) continue; // 已由用户配置覆盖
+      const list = map.get(m.provider) || [];
+      list.push(m);
+      map.set(m.provider, list);
+    }
+  } else {
+    // 没有 provider_models → 全部用硬编码默认
+    for (const m of AI_MODELS) {
+      const list = map.get(m.provider) || [];
+      list.push(m);
+      map.set(m.provider, list);
+    }
   }
 
-  // 2. 自定义厂商模型（来自设置中配置的 provider_models）
+  // 2. 自定义厂商模型（不在 AI_MODELS 中的）
   if (providerModels) {
     const builtinProviders = new Set(AI_MODELS.map(m => m.provider));
     for (const [provider, models] of Object.entries(providerModels)) {
-      if (builtinProviders.has(provider)) continue; // 内置厂商已有，不重复
+      if (builtinProviders.has(provider)) continue;
       const baseUrl = providerBaseUrls?.[provider] || "";
       const list = map.get(provider) || [];
       for (const m of models) {
-        // 避免重复
         if (!list.some(x => x.value === m)) {
           list.push({ value: m, label: m, provider, base: baseUrl });
         }
       }
-      if (list.length > 0) {
-        map.set(provider, list);
-      }
+      if (list.length > 0) map.set(provider, list);
     }
   }
 
@@ -324,10 +345,10 @@ export function AppShell({ children }: AppShellProps) {
       if (!volMap.has(segId)) volMap.set(segId, { ids: [], title: "" });
       volMap.get(segId)!.ids.push(ch.id as string);
     }
-    // 尝试从 plot-segments 读取实际名称（使用统一存储入口）
-    if (projectId) {
+    // 尝试从 plot-segments 读取实际名称
+    if (projectId && typeof localStorage !== "undefined") {
       try {
-        const segs = getJSONSync(`plot-segments-${projectId}`, []);
+        const segs = getJSONSync(`plot-segments-${projectId}`, [] as any[]);
         for (const seg of segs) {
           const entry = volMap.get(seg.id);
           if (entry) entry.title = seg.title || "";

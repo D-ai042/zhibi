@@ -5,7 +5,7 @@ import { getJSONSync } from "@/lib/storage";
 import { loadAllChapters } from "@/lib/chapter-store";
 import { BookOpen, BarChart3, Users, Globe2, ListTree, Eye } from "lucide-react";
 
-/** 从 chapter-store 中读取含正文内容的章节列表 */
+/** 从写作台的 localStorage 中读取含正文内容的章节列表 */
 function loadPlotChapters(pid: string): { id: string; content: string }[] {
     return loadAllChapters(pid);
 }

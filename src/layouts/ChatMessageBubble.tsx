@@ -1,5 +1,5 @@
 ﻿// ChatMessageBubble.tsx — 聊天消息气泡组件（T7：从 AiChatPanel 提取）
-import { Copy, RotateCcw } from "lucide-react";
+import { Copy, Edit3, RotateCcw, Trash2, X } from "lucide-react";
 import { renderMarkdown } from "@/lib/markdown";
 import type { ChatMessage } from "@/types";
 
@@ -8,15 +8,16 @@ interface Props {
   isSystem: boolean;
   editingMsgId: string | null;
   editingContent: string;
-  onStartEdit: (msg: ChatMessage) => void;
+  onStartEdit: (id: string, content: string) => void;
   onCancelEdit: () => void;
   onEditingChange: (v: string) => void;
-  onCommitEdit: (msg: ChatMessage) => void;
+  onCommitEdit: (msgId: string) => void;
   onCopy: (content: string) => void;
-  onRetry: (msg: ChatMessage) => void;
+  onDelete: (id: string) => void;
+  onRegenerate: () => void;
 }
 
-export function ChatMessageBubble({ msg, isSystem, editingMsgId, editingContent, onStartEdit, onCancelEdit, onEditingChange, onCommitEdit, onCopy, onRetry }: Props) {
+export function ChatMessageBubble({ msg, isSystem, editingMsgId, editingContent, onStartEdit, onCancelEdit, onEditingChange, onCommitEdit, onCopy, onDelete, onRegenerate }: Props) {
   const isEditing = editingMsgId === msg.id;
   const html = renderMarkdown(msg.content || "");
 
@@ -29,40 +30,97 @@ export function ChatMessageBubble({ msg, isSystem, editingMsgId, editingContent,
     );
   }
 
-  return (
-    <div className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"} px-4 py-2`}>
-      <div className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${msg.role === "user" ? "bg-violet-600 text-white" : "bg-slate-100 text-slate-800"}`}>
-        <div className="flex items-center justify-between mb-1">
-          <span className="text-[11px] font-medium opacity-60">
-            {msg.role === "user" ? "你" : "AI 助手"}
-          </span>
-          <div className="flex items-center gap-1">
-            {msg.role === "assistant" && (
-              <>
-                <button onClick={() => onCopy(msg.content)} className="p-0.5 opacity-50 hover:opacity-100" title="复制"><Copy size={12} /></button>
-                <button onClick={() => onRetry(msg)} className="p-0.5 opacity-50 hover:opacity-100" title="重试"><RotateCcw size={12} /></button>
-              </>
-            )}
-            {msg.role === "user" && (
-              <button onClick={() => onStartEdit(msg)} className="p-0.5 opacity-50 hover:opacity-100" title="编辑">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
-              </button>
-            )}
-          </div>
-        </div>
-        {isEditing ? (
-          <div className="flex flex-col gap-2">
-            <textarea value={editingContent} onChange={e => onEditingChange(e.target.value)}
-              className="w-full rounded-lg border bg-white px-3 py-2 text-sm text-slate-800 outline-none" rows={4} autoFocus
-              onKeyDown={e => { if (e.key === "Escape") onCancelEdit(); if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) onCommitEdit(msg); }} />
-            <div className="flex justify-end gap-2">
-              <button onClick={onCancelEdit} className="rounded px-3 py-1 text-xs border hover:bg-slate-50">取消</button>
-              <button onClick={() => onCommitEdit(msg)} className="rounded px-3 py-1 text-xs bg-violet-600 text-white hover:bg-violet-700">发送</button>
+  if (msg.role === "user") {
+    return (
+      <div className="flex justify-end px-4 py-2">
+        <div className="group relative max-w-[85%]">
+          {isEditing ? (
+            <div className="rounded-2xl px-3 py-2 bg-violet-600">
+              <textarea
+                className="w-full resize rounded-lg border border-violet-400 bg-violet-700 px-2 py-1 text-sm text-white placeholder-violet-300 outline-none"
+                value={editingContent}
+                onChange={e => onEditingChange(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); onCommitEdit(msg.id); }
+                  if (e.key === "Escape") onCancelEdit();
+                }}
+                rows={Math.min(editingContent.split('\n').length + 1, 10)}
+                autoFocus
+              />
+              <div className="mt-1 flex items-center justify-end gap-1.5 text-[10px] text-violet-300">
+                <button type="button" onClick={onCancelEdit}
+                  className="rounded border border-violet-400/30 px-2 py-0.5 text-violet-300 hover:bg-violet-500 hover:text-white">取消</button>
+                <button type="button" onClick={() => onCommitEdit(msg.id)}
+                  className="rounded bg-violet-500 px-2 py-0.5 text-white hover:bg-violet-400">确认</button>
+                <span className="text-violet-400/60">Enter 发送</span>
+              </div>
             </div>
-          </div>
-        ) : (
-          <div dangerouslySetInnerHTML={{ __html: html }} className="prose prose-sm max-w-none [&_pre]:bg-slate-800 [&_pre]:text-slate-100 [&_pre]:rounded-lg [&_pre]:p-3 [&_code]:text-xs [&_table]:text-xs [&_th]:border [&_th]:px-2 [&_td]:border [&_td]:px-2" />
+          ) : (
+            <div className="rounded-2xl px-3 py-2 text-sm whitespace-pre-wrap bg-violet-600 text-white resize overflow-auto" style={{ minWidth: 120, minHeight: 36 }}>
+              {msg.content}
+            </div>
+          )}
+          {/* 操作按钮 */}
+          {!isEditing && (
+            <div className="mt-1 flex items-center gap-0.5 justify-end">
+              <button type="button" onClick={() => onCopy(msg.content)}
+                className="rounded p-0.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100" title="复制">
+                <Copy size={14} />
+              </button>
+              <button type="button" onClick={() => onStartEdit(msg.id, msg.content)}
+                className="rounded p-0.5 text-slate-400 hover:text-amber-600 hover:bg-amber-50" title="编辑消息">
+                <Edit3 size={14} />
+              </button>
+              <button type="button" onClick={() => onDelete(msg.id)}
+                className="rounded p-0.5 text-slate-400 hover:text-red-500 hover:bg-red-50" title="删除消息">
+                <X size={14} />
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // AI assistant message
+  return (
+    <div className="flex justify-start px-4 py-2">
+      <div className="group relative max-w-[85%]">
+        {msg.thinking && (
+          <details className="mb-1.5">
+            <summary className="flex cursor-pointer items-center gap-1.5 rounded-full bg-[#f0f0f0] hover:bg-[#e8e8e8] px-3 py-1 text-xs text-slate-500 select-none transition-colors [&::-webkit-details-marker]:hidden list-none">
+              <span className="inline-flex items-center gap-1">
+                <span className="h-1.5 w-1.5 rounded-full bg-slate-400" />
+                <span>已思考</span>
+              </span>
+              <span className="ml-auto text-[10px] text-slate-400 group-open:rotate-180 transition-transform">▾</span>
+            </summary>
+            <div className="mt-1.5 rounded-lg border border-slate-200/80 bg-[#f7f7f8] px-3 py-2.5 text-xs leading-relaxed text-slate-600 prose prose-slate max-w-none">
+              <div dangerouslySetInnerHTML={{ __html: renderMarkdown(msg.thinking) }} />
+            </div>
+          </details>
         )}
+        <div
+          className="rounded-2xl px-4 py-3 text-sm border border-slate-100 bg-white text-slate-800 shadow-sm prose prose-slate max-w-none"
+          dangerouslySetInnerHTML={{
+            __html: html,
+          }}
+        />
+        {/* 操作按钮栏 */}
+        <div className="mt-1 flex items-center gap-0.5">
+          <button type="button" onClick={() => onCopy(msg.content)}
+            className="rounded p-1 text-slate-400 hover:text-slate-600 hover:bg-slate-100" title="复制">
+            <Copy size={13} />
+          </button>
+          <button type="button" onClick={() => onDelete(msg.id)}
+            className="rounded p-1 text-slate-400 hover:text-red-500 hover:bg-red-50" title="删除">
+            <Trash2 size={13} />
+          </button>
+          <button type="button" onClick={onRegenerate}
+            className="rounded p-1 text-slate-400 hover:text-amber-600 hover:bg-amber-50" title="重新生成">
+            <RotateCcw size={13} />
+          </button>
+        </div>
       </div>
     </div>
   );

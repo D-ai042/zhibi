@@ -40,6 +40,9 @@ export interface AppStore {
     outlineSection: OutlineSection; overviewSection: OverviewSection;
     manuscriptSection: ManuscriptSection;
     drawerOpen: boolean; drawerWidth: number; navCollapsed: boolean; settingsOpen: boolean;
+    /** 画布四象限勾选状态 true=发送给AI */
+    worldviewZoneEnabled: Record<string, boolean>;
+    setWorldviewZoneEnabled: (z: Record<string, boolean>) => void;
     navigateTo: (t: NavTarget, extraId?: string) => void;
     setOutlineSection: (s: OutlineSection) => void; setOverviewSection: (s: OverviewSection) => void;
     setManuscriptSection: (s: ManuscriptSection) => void;

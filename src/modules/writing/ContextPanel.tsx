@@ -1,9 +1,4 @@
-/**
- * T6 拆分 — 上下文预览面板
- *
- * 展示 AI 写作时收到的上下文数据（P0-P4 分层），可折叠。
- * 数据由父组件通过 assembleContext("panel") 加载后传入。
- */
+// ContextPanel.tsx — 上下文预览面板（T6 拆分，JSX 原样提取）
 import type { ChapterSummary, BeatCard } from "@/types";
 
 const colLabel: Record<string, string> = {
@@ -36,7 +31,7 @@ export function ContextPanel({
                 className="flex w-6 shrink-0 items-center justify-center border-r bg-white text-xs text-slate-400 hover:text-slate-600 hover:bg-slate-50"
                 title="展开上下文面板"
             >
-                <span className="[writing-mode:vertical-lr] tracking-widest">📋上下文</span>
+                <span className="[writing-mode:vertical-lr] tracking-widest">��上下文</span>
             </button>
         );
     }
@@ -48,7 +43,7 @@ export function ContextPanel({
     return (
         <aside className="w-[280px] shrink-0 overflow-y-auto border-r bg-white p-3 text-xs">
             <div className="mb-2 flex items-center justify-between">
-                <h3 className="text-sm font-semibold text-slate-700">📋 上下文引擎</h3>
+                <h3 className="text-sm font-semibold text-slate-700">�� 上下文引擎</h3>
                 <button
                     onClick={() => onToggle(true)}
                     className="rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
@@ -58,7 +53,6 @@ export function ContextPanel({
                 </button>
             </div>
 
-            {/* P4 · 前一章正文 */}
             {prevContent && (
                 <div className="mb-3">
                     <p className="mb-1 text-[10px] font-bold uppercase tracking-wider text-emerald-600">P4 · 前一章正文</p>
@@ -72,7 +66,6 @@ export function ContextPanel({
                 </div>
             )}
 
-            {/* P0 · 世界铁则 */}
             {worldRules.length > 0 && (
                 <div className="mb-3">
                     <p className="mb-1 text-[10px] font-bold uppercase tracking-wider text-rose-600">P0 · 世界铁则</p>
@@ -84,7 +77,6 @@ export function ContextPanel({
                 </div>
             )}
 
-            {/* P3 · 角色池 */}
             {characters.length > 0 && (
                 <div className="mb-3">
                     <p className="mb-1 text-[10px] font-bold uppercase tracking-wider text-blue-600">P3 · 活跃角色</p>
@@ -98,7 +90,6 @@ export function ContextPanel({
                 </div>
             )}
 
-            {/* P2 · 风格指南 */}
             {(styleRedlines || styleNarrative || styleTone) && (
                 <div className="mb-3">
                     <p className="mb-1 text-[10px] font-bold uppercase tracking-wider text-slate-500">P2 · 风格指南</p>
@@ -110,7 +101,6 @@ export function ContextPanel({
                 </div>
             )}
 
-            {/* P1 · 细纲节拍 */}
             {beatCards.length > 0 && (
                 <div className="mb-3">
                     <p className="mb-1 text-[10px] font-bold uppercase tracking-wider text-violet-600">P1 · 细纲节拍</p>
@@ -124,7 +114,6 @@ export function ContextPanel({
                 </div>
             )}
 
-            {/* P1 · 前情摘要 */}
             {summaries.length > 0 && (
                 <div className="mb-3">
                     <p className="mb-1 text-[10px] font-bold uppercase tracking-wider text-amber-600">P1 · 前情摘要</p>

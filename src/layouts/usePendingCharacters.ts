@@ -1,48 +1,91 @@
-// usePendingCharacters.ts — pending 角色状态管理（T7：从 AiChatPanel.tsx 提取）
-import { useState, useCallback } from "react";
-import { loadJSON, saveJSON } from "@/lib/storage";
-import { loadAllChapters, saveChapter, type Chapter } from "@/lib/chapter-store";
-import type { ParsedCharacter, ParsedEdge } from "@/lib/character-parser";
+// usePendingCharacters.ts — 待确认角色/关系/词条/剧情/章节状态管理（T7 拆分）
+import { useEffect, useRef, useState, useCallback } from "react";
+import { getJSONSync } from "@/lib/storage";
+import type { WorldTerm } from "@/types";
 
-export function usePendingCharacters(pid: string) {
-    const [pendingChars, setPendingChars] = useState<ParsedCharacter[]>([]);
-    const [pendingEdges, setPendingEdges] = useState<ParsedEdge[]>([]);
-    const [pendingSnapshots, setPendingSnapshots] = useState<unknown[]>([]);
+export interface PendingState {
+    pendingTerms: WorldTerm[];
+    setPendingTerms: React.Dispatch<React.SetStateAction<WorldTerm[]>>;
+    pendingEdges: { sourceTitle: string; targetTitle: string }[];
+    setPendingEdges: React.Dispatch<React.SetStateAction<{ sourceTitle: string; targetTitle: string }[]>>;
+    pendingChars: { name: string; faction: string; gender?: string; age?: string; race?: string; appearance?: string; personality?: string; background?: string; ability?: string; style?: string; interests?: string }[];
+    setPendingChars: React.Dispatch<React.SetStateAction<{ name: string; faction: string; gender?: string; age?: string; race?: string; appearance?: string; personality?: string; background?: string; ability?: string; style?: string; interests?: string }[]>>;
+    pendingCharEdges: { sourceName: string; targetName: string; relation_type: string; strength: number }[];
+    setPendingCharEdges: React.Dispatch<React.SetStateAction<{ sourceName: string; targetName: string; relation_type: string; strength: number }[]>>;
+    pendingRemoveEdges: { sourceName: string; targetName: string }[];
+    setPendingRemoveEdges: React.Dispatch<React.SetStateAction<{ sourceName: string; targetName: string }[]>>;
+    pendingSnapshots: { name: string; changes: Record<string, string> }[];
+    setPendingSnapshots: React.Dispatch<React.SetStateAction<{ name: string; changes: Record<string, string> }[]>>;
+    pendingPlotSegments: { type: "bright" | "dark"; title: string; characters: string; location: string; time: string; chapters: string; event: string }[];
+    setPendingPlotSegments: React.Dispatch<React.SetStateAction<{ type: "bright" | "dark"; title: string; characters: string; location: string; time: string; chapters: string; event: string }[]>>;
+    pendingPlotEdges: { sourceTitle: string; targetTitle: string }[];
+    setPendingPlotEdges: React.Dispatch<React.SetStateAction<{ sourceTitle: string; targetTitle: string }[]>>;
+    pendingPlotBeats: { segmentTitle: string; beat: { title: string; characters: string; location: string; time: string; event: string; chapters: string } }[];
+    setPendingPlotBeats: React.Dispatch<React.SetStateAction<{ segmentTitle: string; beat: { title: string; characters: string; location: string; time: string; event: string; chapters: string } }[]>>;
+    pendingChapters: { volumeTitle: string; number: number; title: string }[];
+    setPendingChapters: React.Dispatch<React.SetStateAction<{ volumeTitle: string; number: number; title: string }[]>>;
+    loadedRef: React.MutableRefObject<boolean>;
+}
 
-    const loadPendingChars = useCallback(() => {
-        const stored = loadJSON(`ai-pending-chars-${pid}`, [] as ParsedCharacter[]);
-        setPendingChars(stored);
-    }, [pid]);
+export function usePendingCharacters(currentProjectId: string | undefined, pendingAiCharsBump: number): PendingState {
+    const [pendingTerms, setPendingTerms] = useState<WorldTerm[]>([]);
+    const [pendingEdges, setPendingEdges] = useState<{ sourceTitle: string; targetTitle: string }[]>([]);
+    const [pendingChars, setPendingChars] = useState<{ name: string; faction: string; gender?: string; age?: string; race?: string; appearance?: string; personality?: string; background?: string; ability?: string; style?: string; interests?: string }[]>([]);
+    const [pendingCharEdges, setPendingCharEdges] = useState<{ sourceName: string; targetName: string; relation_type: string; strength: number }[]>([]);
+    const [pendingRemoveEdges, setPendingRemoveEdges] = useState<{ sourceName: string; targetName: string }[]>([]);
+    const [pendingSnapshots, setPendingSnapshots] = useState<{ name: string; changes: Record<string, string> }[]>([]);
+    const [pendingPlotSegments, setPendingPlotSegments] = useState<{ type: "bright" | "dark"; title: string; characters: string; location: string; time: string; chapters: string; event: string }[]>([]);
+    const [pendingPlotEdges, setPendingPlotEdges] = useState<{ sourceTitle: string; targetTitle: string }[]>([]);
+    const [pendingPlotBeats, setPendingPlotBeats] = useState<{ segmentTitle: string; beat: { title: string; characters: string; location: string; time: string; event: string; chapters: string } }[]>([]);
+    const [pendingChapters, setPendingChapters] = useState<{ volumeTitle: string; number: number; title: string }[]>([]);
 
-    const applyAll = useCallback(async () => {
-        // 将 pending 角色写入项目数据
-        const storeKey = `novel-workbench-mock`;
-        const storeData = loadJSON(storeKey, {} as any);
-        const chars = storeData.characters || [];
-        for (const ch of pendingChars) {
-            const existingIdx = chars.findIndex((c: any) => c.name === ch.name && c.project_id === pid);
-            if (existingIdx >= 0) {
-                chars[existingIdx] = { ...chars[existingIdx], ...ch };
-            } else {
-                chars.push({ id: crypto.randomUUID?.() || `char-${Date.now()}`, project_id: pid, ...ch });
+    const loadedRef = useRef(false);
+
+    const loadPending = useCallback(() => {
+        if (!currentProjectId || loadedRef.current) return;
+        try {
+            const raw = getJSONSync(`ai-pending-chars-${currentProjectId}`, null) as string | null;
+            if (!raw) return;
+            const data = JSON.parse(raw);
+            if (data.chars?.length > 0) {
+                setPendingChars(prev => {
+                    const existingNames = new Set(prev.map(c => c.name));
+                    const newChars = (data.chars as any[]).filter((c: { name: string }) => !existingNames.has(c.name));
+                    return [...prev, ...newChars];
+                });
             }
-        }
-        storeData.characters = chars;
-        saveJSON(storeKey, storeData);
-        setPendingChars([]);
-        setPendingEdges([]);
-        setPendingSnapshots([]);
-    }, [pid, pendingChars, pendingEdges, pendingSnapshots]);
+            if (data.edges?.length > 0) {
+                setPendingCharEdges(prev => {
+                    const existingKeys = new Set(prev.map(e => `${e.sourceName}::${e.targetName}`));
+                    const newEdges = (data.edges as any[]).filter((e: { sourceName: string; targetName: string }) => !existingKeys.has(`${e.sourceName}::${e.targetName}`));
+                    return [...prev, ...newEdges];
+                });
+            }
+            loadedRef.current = true;
+        } catch { /* ignore */ }
+    }, [currentProjectId]);
 
-    const clearPending = useCallback(() => {
-        setPendingChars([]);
-        setPendingEdges([]);
-        setPendingSnapshots([]);
-    }, []);
+    // 挂载时检查
+    useEffect(() => { loadPending(); }, [loadPending]);
+
+    // bump 触发刷新
+    useEffect(() => {
+        if (!currentProjectId || pendingAiCharsBump <= 0) return;
+        loadedRef.current = false;
+        loadPending();
+    }, [pendingAiCharsBump, currentProjectId, loadPending]);
 
     return {
-        pendingChars, pendingEdges, pendingSnapshots,
-        loadPendingChars, applyAll, clearPending,
-        setPendingChars, setPendingEdges, setPendingSnapshots,
+        pendingTerms, setPendingTerms,
+        pendingEdges, setPendingEdges,
+        pendingChars, setPendingChars,
+        pendingCharEdges, setPendingCharEdges,
+        pendingRemoveEdges, setPendingRemoveEdges,
+        pendingSnapshots, setPendingSnapshots,
+        pendingPlotSegments, setPendingPlotSegments,
+        pendingPlotEdges, setPendingPlotEdges,
+        pendingPlotBeats, setPendingPlotBeats,
+        pendingChapters, setPendingChapters,
+        loadedRef,
     };
 }

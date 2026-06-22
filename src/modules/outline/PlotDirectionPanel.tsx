@@ -181,7 +181,7 @@ export function PlotDirectionPanel() {
   // 加载角色名和世界观地名
   useEffect(() => {
     if (!currentProject) return;
-    api.listCharacters(currentProject.id).then(chars => setCharacterNames(chars.map(c => c.name))).catch(() => {});
+    api.listCharacters(currentProject.id).then(chars => setCharacterNames(chars.map(c => c.name))).catch(() => { });
     api.listWorldTerms(currentProject.id).then(terms => {
       setPlaceNames(terms.filter(t => t.term_type === "place").map(t => t.title));
       setTermNames(terms.map(t => t.title));
@@ -425,8 +425,8 @@ export function PlotDirectionPanel() {
               <path d="M0,0 L10,5 L0,10 Z" fill="#94a3b8" />
             </marker>
           </defs>
-          {/* 轴线 - 无限延伸 */}
-          <line x1="-50000" y1="400" x2="50000" y2="400" stroke="#94a3b8" strokeWidth="2"
+          {/* 轴线 - 无限延伸（虚线） */}
+          <line x1="-50000" y1="400" x2="50000" y2="400" stroke="#94a3b8" strokeWidth="2" strokeDasharray="8,4"
             markerEnd="url(#arrow)" />
           {/* 比例尺 - 固定间距 = 框宽度的一半(120px) */}
           {(() => {

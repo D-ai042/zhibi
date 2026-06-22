@@ -2,26 +2,8 @@ import { useCallback, useEffect } from "react";
 import { api } from "@/lib/api";
 import { useAppStore } from "@/stores/app-store";
 import { migrateLocalStorageToSqlite } from "@/lib/migrate-data";
-import { getJSONSync, setJSONSync, loadJSON, saveJSON } from "@/lib/storage";
+import { prewarmFromSqlite, getJSONSync } from "@/lib/storage";
 import { loadAllChapters } from "@/lib/chapter-store";
-
-/** EXE 启动预暖：SQLite → localStorage（从 storage.ts 迁移至此） */
-async function prewarmFromSqlite(): Promise<void> {
-  try {
-    const { listAppSettings } = await import("@/lib/api");
-    const data = await listAppSettings();
-    let count = 0;
-    for (const { key, value } of data) {
-      if (loadJSON(key, null) === null) {
-        saveJSON(key, value);
-      }
-      count++;
-    }
-    console.log(`[use-project-data] 预暖完成: ${count} 条从 SQLite 载入`);
-  } catch (e) {
-    console.warn("[use-project-data] 预暖失败（首次启动无数据属于正常）:", e);
-  }
-}
 
 export function useProjectBootstrap() {
   const {

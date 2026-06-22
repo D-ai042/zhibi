@@ -1,232 +1,110 @@
-// useAiWriting.ts — AI 写作相关 hooks（T6：从 WritingModule.tsx 提取）
+// useAiWriting.ts — AI 写作 hooks（T6 拆分，从 WritingModule 完整提取）
 import { useCallback, useRef, useState } from "react";
 import { useAppStore } from "@/stores/app-store";
 import { api } from "@/lib/api";
-import { assembleContext } from "@/lib/context-engine";
+import { buildProjectContext } from "@/lib/context-engine";
+import { rebaseMemory } from "@/lib/memory-updater";
 import { getJSONSync } from "@/lib/storage";
-import { loadAllChapters, type Chapter } from "@/lib/chapter-store";
 import { uuid } from "@/lib/uuid";
-import type { ChapterSummary, BeatCard } from "@/types";
+import type { Chapter } from "@/types";
 
-const HUMANIZER_RULES = `你是一位文字编辑，请对以下小说段落进行"去 AI 味"处理：
-1. 删除多余的"了"字（如"走了过去"→"走去"）
-2. 删除多余的"的"字（如"轻轻的说道"→"轻轻说"）
-3. 拆分过长句子
-4. 添加适当的拟声词、感官描写
-5. 保持原文内容不变，只优化语言表达`;
+const POLISH_RULES = `你是资深文学编辑，专门给AI生成的小说去AI味。你的工作是做减法，不是做加法。你的任务：读完一章AI生成的小说，输出润色后的版本。只删不改——删冗余、简啰嗦、去模板化。`;
 
-export interface UseAiWritingReturn {
-    aiWriting: boolean;
-    humanizing: boolean;
-    polishing: boolean;
-    aiError: string;
-    rebaseRunning: boolean;
-    rebaseProgress: { current: number; total: number } | null;
-    staleInfo: { count: number; chapters: string; fromChapter: number } | null;
-    writeDlg: { wordCount: number; plotDirection: string } | null;
-    setWriteDlg: (v: { wordCount: number; plotDirection: string } | null) => void;
-    handleAiWriteChapter: (wordCount: number, plotDirection: string, refIds?: string[]) => Promise<void>;
-    handleHumanize: () => Promise<void>;
-    handlePolish: () => Promise<void>;
-    handleRebase: () => Promise<void>;
-    handleReadToAI: () => void;
-    setStaleInfo: (v: { count: number; chapters: string; fromChapter: number } | null) => void;
-}
+const HUMANIZER_RULES = `你是文字编辑，专门去除 AI 生成文本的痕迹，使文字听起来更自然、更有人味。核心原则：1. 删除填充短语 2. 打破公式结构 3. 变化节奏 4. 信任读者 5. 删除金句。直接输出改写后的完整文本。`;
 
 export function useAiWriting(
     pid: string | undefined,
     selectedChapter: Chapter | null | undefined,
     editingContent: string,
-    chapters: Chapter[],
+    pushUndo: () => void,
     setEditingContent: (v: string) => void,
     setChapters: (updater: (prev: Chapter[]) => Chapter[]) => void,
-    saveChapters: (chs: Chapter[]) => void,
-    pushUndo: () => void,
+    saveChapters: (pid: string, chs: Chapter[]) => void,
     syncEditorHTML: (content: string) => void,
-): UseAiWritingReturn {
+) {
     const [aiWriting, setAiWriting] = useState(false);
+    const [aiError, setAiError] = useState("");
     const [humanizing, setHumanizing] = useState(false);
     const [polishing, setPolishing] = useState(false);
-    const [aiError, setAiError] = useState("");
-    const [rebaseRunning, setRebaseRunning] = useState(false);
-    const [rebaseProgress, setRebaseProgress] = useState<{ current: number; total: number } | null>(null);
-    const [staleInfo, setStaleInfo] = useState<{ count: number; chapters: string; fromChapter: number } | null>(null);
     const [writeDlg, setWriteDlg] = useState<{ wordCount: number; plotDirection: string } | null>(null);
 
     const aiWritingRef = useRef(false);
+    const polishingRef = useRef(false);
     const humanizingRef = useRef(false);
+    const lastWriteParamsRef = useRef<{ wordCount: number; plotDirection: string } | null>(null);
     const _skipNextChapterEffect = useRef(false);
     const timeoutIdsRef = useRef<ReturnType<typeof setTimeout>[]>([]);
 
-    const handleAiWriteChapter = useCallback(async (wordCount: number, plotDirection: string, refIds?: string[]) => {
-        if (!pid) { useAppStore.getState().setAutosaveStatus("⚠ 未选择项目"); return; }
-        if (!selectedChapter) { useAppStore.getState().setAutosaveStatus("⚠ 未选择章节"); return; }
-        if (aiWritingRef.current) {
-            useAppStore.getState().setAutosaveStatus("⚠ AI 写作进行中，请等待完成");
-            return;
-        }
-        aiWritingRef.current = true;
-        setAiWriting(true);
-        setAiError("");
-        setWriteDlg(null);
-
-        const safetyTimer = setTimeout(() => {
-            if (aiWritingRef.current) {
-                aiWritingRef.current = false;
-                setAiWriting(false);
-                setAiError("AI 写作超时（5分钟），请重试");
-            }
-        }, 5 * 60 * 1000);
-        timeoutIdsRef.current.push(safetyTimer);
-
+    const handlePolish = useCallback(async () => {
+        if (!pid || !selectedChapter || !String(editingContent ?? '').trim() || polishingRef.current) return;
+        polishingRef.current = true; setPolishing(true);
+        useAppStore.getState().setAutosaveStatus("正在精修...");
         try {
-            const output = await assembleContext(pid, selectedChapter.id, "ai") as any;
-
-            let structureHint = "";
-            let inspContext = "";
-            if (refIds && refIds.length > 0) {
-                const inspIds = refIds.filter(r => r.startsWith("insp:")).map(r => r.slice(5));
-                if (inspIds.length > 0) {
-                    const allCards = getJSONSync(`inspiration-cards-${pid}`, [] as any[]);
-                    const selected = allCards.filter((c: any) => inspIds.includes(c.id));
-                    if (selected.length > 0) {
-                        inspContext = "\n【灵感参考】\n";
-                        for (const c of selected) {
-                            inspContext += `- ${c.title || "无标题"}：${(c.content || "").slice(0, 300)}\n`;
-                        }
-                    }
-                }
-            }
-
-            const maxChars = Math.round(wordCount * 1.1);
-            const minChars = Math.round(wordCount * 0.9);
-
-            let userMsg = "";
-            if (structureHint) userMsg += `\n\n${structureHint}`;
-            userMsg += `\n\n请写第${selectedChapter.number}章「${selectedChapter.title}」。`;
-            userMsg += `\n\n【字数要求】必须严格控制在 ${minChars}-${maxChars} 字之间（目标 ${wordCount} 字），不可超出此范围。`;
-            if (plotDirection) userMsg += `\n\n剧情方向：\n${plotDirection}`;
-            if (inspContext) userMsg += `\n\n${inspContext}`;
-            userMsg += `\n\n根据以上上下文，写出本章正文。`;
-
-            const res = await api.aiComplete({
-                action: "write_chapter",
-                entity_type: "chapter",
-                entity_id: selectedChapter.id,
-                extra: {
-                    system_hint: output.systemHint,
-                    user_message: userMsg,
-                    history: [],
-                },
-            });
-
-            if (res.error) {
-                setAiError(res.error);
-            } else {
-                if (editingContent) pushUndo();
+            const res = await api.aiComplete({ action: "chat", entity_type: "chapter", entity_id: selectedChapter.id, extra: { system_hint: POLISH_RULES, user_message: `请对以下文本做精修：\n\n${editingContent}`, history: [] } });
+            if (res.content && !res.error) {
                 const safeContent = String(res.content ?? '');
-                setEditingContent(safeContent);
-                const tid = setTimeout(() => syncEditorHTML(safeContent), 0);
-                timeoutIdsRef.current.push(tid);
+                pushUndo(); setEditingContent(safeContent);
+                setTimeout(() => syncEditorHTML(safeContent), 0);
                 _skipNextChapterEffect.current = true;
-                setChapters(prev => {
-                    const upd = prev.map(c => c.id === selectedChapter.id ? { ...c, content: safeContent } : c);
-                    saveChapters(upd);
-                    return upd;
-                });
+                setChapters(prev => { const upd = prev.map(c => c.id === selectedChapter.id ? { ...c, content: safeContent } : c); saveChapters(pid, upd); return upd; });
+                useAppStore.getState().setAutosaveStatus("✅ 精修完成");
             }
-        } catch (e) {
-            setAiError(String(e));
-        } finally {
-            clearTimeout(safetyTimer);
-            setAiWriting(false);
-            aiWritingRef.current = false;
-        }
+        } catch { } finally { polishingRef.current = false; setPolishing(false); }
     }, [pid, selectedChapter, editingContent, pushUndo, setEditingContent, setChapters, saveChapters, syncEditorHTML]);
 
     const handleHumanize = useCallback(async () => {
-        if (!pid || !selectedChapter || humanizingRef.current) return;
-        humanizingRef.current = true;
-        setHumanizing(true);
+        if (!pid || !selectedChapter || !String(editingContent ?? '').trim() || humanizingRef.current) return;
+        humanizingRef.current = true; setHumanizing(true);
+        useAppStore.getState().setAutosaveStatus("正在去 AI 味...");
         try {
-            const res = await api.aiComplete({
-                action: "chat",
-                entity_type: "chapter",
-                entity_id: selectedChapter.id,
-                extra: { system_hint: HUMANIZER_RULES, user_message: `请去除以下文本的 AI 写作痕迹：\n\n${editingContent}`, history: [] },
-            });
+            const res = await api.aiComplete({ action: "chat", entity_type: "chapter", entity_id: selectedChapter.id, extra: { system_hint: HUMANIZER_RULES, user_message: `请去除以下文本的 AI 写作痕迹：\n\n${editingContent}`, history: [] } });
             if (res.content && !res.error) {
                 const safeContent = String(res.content ?? '');
-                pushUndo();
-                setEditingContent(safeContent);
+                pushUndo(); setEditingContent(safeContent);
                 setTimeout(() => syncEditorHTML(safeContent), 0);
                 _skipNextChapterEffect.current = true;
-                setChapters(prev => {
-                    const upd = prev.map(c => c.id === selectedChapter.id ? { ...c, content: safeContent } : c);
-                    saveChapters(upd);
-                    return upd;
-                });
+                setChapters(prev => { const upd = prev.map(c => c.id === selectedChapter.id ? { ...c, content: safeContent } : c); saveChapters(pid, upd); return upd; });
+                useAppStore.getState().setAutosaveStatus("✅ 去 AI 味完成");
             }
-        } catch { /* ignore */ } finally {
-            humanizingRef.current = false;
-            setHumanizing(false);
+        } catch { } finally { humanizingRef.current = false; setHumanizing(false); }
+    }, [pid, selectedChapter, editingContent, pushUndo, setEditingContent, setChapters, saveChapters, syncEditorHTML]);
+
+    const handleAiWriteChapter = useCallback(async (wordCount: number, plotDirection: string, refIds?: string[]) => {
+        if (!pid || !selectedChapter || aiWritingRef.current) return;
+        aiWritingRef.current = true; setAiWriting(true); setAiError(""); setWriteDlg(null);
+        lastWriteParamsRef.current = { wordCount, plotDirection };
+        const safetyTimer = setTimeout(() => { if (aiWritingRef.current) { aiWritingRef.current = false; setAiWriting(false); setAiError("AI 写作超时（5分钟），请重试"); } }, 5 * 60 * 1000);
+        timeoutIdsRef.current.push(safetyTimer);
+        try {
+            const output = await buildProjectContext({ projectId: pid, chapterId: selectedChapter.id, userIntent: undefined });
+            let structureHint = ""; let inspContext = "";
+            if (refIds?.length) {
+                const inspIds = refIds.filter(r => r.startsWith("insp:")).map(r => r.slice(5));
+                if (inspIds.length) { const allCards = getJSONSync(`inspiration-cards-${pid}`, [] as any[]); const sel = allCards.filter((c: any) => inspIds.includes(c.id)); if (sel.length) { inspContext = "\n【灵感参考】\n"; for (const c of sel) inspContext += `- ${c.title || "无标题"}：${(c.content || "").slice(0, 300)}\n`; } }
+                const matIds = refIds.filter(r => r.startsWith("mat:")).map(r => r.slice(4));
+                if (matIds.length) { const allItems = getJSONSync(`material-items-${pid}`, [] as any[]); const sel = allItems.filter((i: any) => matIds.includes(i.id) && (i.type === "text" || i.content)); if (sel.length) { const analyzed = sel.filter((i: any) => i.structureAnalysis); const plain = sel.filter((i: any) => !i.structureAnalysis); if (analyzed.length) { structureHint = "\n\n【⚠️ 结构参考，必须严格遵循】\n"; for (const t of analyzed) structureHint += `\n── ${t.name || "未命名"} ──\n${t.structureAnalysis}\n\n`; } if (plain.length) { inspContext += "\n【素材参考】\n" + plain.map(t => `── ${t.name || "未命名"} ──\n${t.content}\n`).join("\n"); } } }
+            }
+            const maxChars = Math.round(wordCount * 1.1); const minChars = Math.round(wordCount * 0.9);
+            let um = structureHint ? `\n\n${structureHint}` : "";
+            um += `\n\n请写第${selectedChapter.number}章「${selectedChapter.title}」。\n【字数要求】${minChars}-${maxChars}字（目标${wordCount}字），不可超出。`;
+            if (plotDirection) um += `\n\n剧情方向：\n${plotDirection}`;
+            if (inspContext) um += `\n\n${inspContext}`;
+            um += `\n\n根据以上上下文，写出本章正文。`;
+            const res = await api.aiComplete({ action: "write_chapter", entity_type: "chapter", entity_id: selectedChapter.id, extra: { system_hint: output.systemHint, user_message: um, history: [] } });
+            if (res.error) setAiError(res.error);
+            else if (res.content) {
+                if (editingContent) pushUndo();
+                const sc = String(res.content ?? ''); setEditingContent(sc);
+                setTimeout(() => syncEditorHTML(sc), 0);
+                _skipNextChapterEffect.current = true;
+                setChapters(prev => { const upd = prev.map(c => c.id === selectedChapter.id ? { ...c, content: sc } : c); saveChapters(pid, upd); return upd; });
+            }
+        } catch (e) { setAiError(String(e)); }
+        finally {
+            for (let i = timeoutIdsRef.current.length - 1; i >= 0; i--) { if (timeoutIdsRef.current[i] === safetyTimer) { clearTimeout(timeoutIdsRef.current[i]); timeoutIdsRef.current.splice(i, 1); break; } }
+            setAiWriting(false); aiWritingRef.current = false;
         }
     }, [pid, selectedChapter, editingContent, pushUndo, setEditingContent, setChapters, saveChapters, syncEditorHTML]);
 
-    const handlePolish = useCallback(async () => {
-        if (!pid || !selectedChapter) return;
-        setPolishing(true);
-        try {
-            const res = await api.aiComplete({
-                action: "chat",
-                entity_type: "chapter",
-                entity_id: selectedChapter.id,
-                extra: { system_hint: "你是一位小说编辑，请精简冗余段落、优化句式结构，保持原文含义不变。", user_message: `请精简优化以下文本：\n\n${editingContent}`, history: [] },
-            });
-            if (res.content && !res.error) {
-                const safeContent = String(res.content ?? '');
-                pushUndo();
-                setEditingContent(safeContent);
-                setTimeout(() => syncEditorHTML(safeContent), 0);
-                _skipNextChapterEffect.current = true;
-                setChapters(prev => {
-                    const upd = prev.map(c => c.id === selectedChapter.id ? { ...c, content: safeContent } : c);
-                    saveChapters(upd);
-                    return upd;
-                });
-            }
-        } catch { /* ignore */ } finally {
-            setPolishing(false);
-        }
-    }, [pid, selectedChapter, editingContent, pushUndo, setEditingContent, setChapters, saveChapters, syncEditorHTML]);
-
-    const handleRebase = useCallback(async () => {
-        if (!pid) return;
-        setRebaseRunning(true);
-        setRebaseProgress(null);
-        try {
-            const { rebaseMemory } = await import("@/lib/memory-updater");
-            await rebaseMemory(pid, staleInfo?.fromChapter || 1, (current, total) => {
-                setRebaseProgress({ current, total });
-            });
-            setStaleInfo(null);
-            useAppStore.getState().setAutosaveStatus("✅ 级联重跑完成");
-        } catch (e) {
-            useAppStore.getState().setAutosaveStatus("⚠ 级联重跑失败");
-        } finally {
-            setRebaseRunning(false);
-            setRebaseProgress(null);
-        }
-    }, [pid, staleInfo]);
-
-    const handleReadToAI = useCallback(() => {
-        // 委托给 WritingModule 中处理（依赖 storeSelIds 等状态）
-    }, []);
-
-    return {
-        aiWriting, humanizing, polishing, aiError, rebaseRunning, rebaseProgress,
-        staleInfo, writeDlg, setWriteDlg,
-        handleAiWriteChapter, handleHumanize, handlePolish, handleRebase, handleReadToAI,
-        setStaleInfo,
-    };
+    return { aiWriting, aiError, humanizing, polishing, writeDlg, setWriteDlg, lastWriteParamsRef, handleAiWriteChapter, handleHumanize, handlePolish };
 }

@@ -165,7 +165,7 @@ function GroupNode({ data }: { data: any }) {
 }
 
 export function WorldviewPanel() {
-  const { currentProject, setSelectedEntity, worldTermBump, groupBump, worldviewGroups, setWorldviewGroups, focusGroupBump } = useAppStore();
+  const { currentProject, setSelectedEntity, worldTermBump, groupBump, worldviewGroups, setWorldviewGroups, focusGroupBump, worldviewZoneEnabled, setWorldviewZoneEnabled } = useAppStore();
   const rfRef = useRef<any>(null);
   const [terms, setTerms] = useState<WorldTerm[]>([]);
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
@@ -177,6 +177,24 @@ export function WorldviewPanel() {
   const [groupCtx, setGroupCtx] = useState<{ x: number; y: number; gid: string; name: string } | null>(null);
   const [renameDlg, setRenameDlg] = useState<{ gid: string; name: string } | null>(null);
   const loadRef = useRef<() => Promise<void>>(async () => { });
+  // 四象限十字线中心坐标（画布坐标系）
+  const CX = 600, CY = 400;
+  // 视口追踪（用于 SVG 覆盖层同步）
+  const [vp, setVp] = useState({ x: 0, y: 0, zoom: 1 });
+  // 根据坐标判断所在分区
+  const zoneFromPos = useCallback((x: number, y: number): "core" | "locked" | "active" | "other" => {
+    if (x < CX && y < CY) return "core";
+    if (x >= CX && y < CY) return "locked";
+    if (x < CX && y >= CY) return "active";
+    return "other";
+  }, []);
+  // 分区中文名 + 颜色
+  const ZONE_META: Record<string, { label: string; desc: string; color: string; pale: string }> = {
+    core: { label: "核心规则", desc: "上下文必定加载的词条", color: "#dc2626", pale: "rgba(220,38,38,0.06)" },
+    locked: { label: "词条锁定", desc: "写作台AI不可见（右侧AI聊天可见）", color: "#4b5563", pale: "rgba(75,85,99,0.06)" },
+    active: { label: "当前创作", desc: "当前所处剧情需要的词条", color: "#16a34a", pale: "rgba(22,163,74,0.06)" },
+    other: { label: "其他", desc: "出现频次低、影响小的词条", color: "#ea580c", pale: "rgba(234,88,12,0.06)" },
+  };
 
   // ==== callbacks ====
   const handleUpdate = useCallback(async (u: WorldTerm) => { await api.saveWorldTerm(u); setTerms(p => p.map(t => t.id === u.id ? u : t)); setNodes(nds => nds.map(n => n.id === u.id ? { ...n, data: { ...n.data, term: u } } : n)); }, [setNodes]);
@@ -372,6 +390,16 @@ export function WorldviewPanel() {
   const load = useCallback(async () => {
     if (!currentProject) return;
     const loaded = await api.listWorldTerms(currentProject.id);
+    // 为没有 zone 的词条根据坐标自动分配分区
+    let zoneDirty = false;
+    for (const t of loaded) {
+      if (!t.zone) {
+        t.zone = zoneFromPos(t.layout_x || 400, t.layout_y || 200);
+        api.saveWorldTerm(t).catch(() => { });
+        zoneDirty = true;
+      }
+    }
+    if (zoneDirty) { setTerms(loaded); }
     setTerms(loaded);
 
     const termNodes: Node[] = loaded.map((t) => {
@@ -478,7 +506,9 @@ export function WorldviewPanel() {
       const g = gs.find(x => x.id === node.id);
       if (g) {
         g.x = node.position.x; g.y = node.position.y; saveGroups(currentProject.id, gs);
-        // 用 ReactFlow 实时相对位置反算绝对坐标（不依赖可能已损坏的 DB 旧值）
+        // 编组整块分区检测：编组中心点压线则所有子词条继承新分区
+        const gCenter = { x: node.position.x + (g.w ?? 400) / 2, y: node.position.y + (g.h ?? 300) / 2 };
+        const newZone = zoneFromPos(gCenter.x, gCenter.y);
         const liveNodes: Node[] = rfRef.current?.getNodes() || nodes;
         for (const cid of g.childIds) {
           const childNode = liveNodes.find((n: Node) => n.id === cid);
@@ -495,8 +525,14 @@ export function WorldviewPanel() {
       return;
     }
     const t = terms.find(x => x.id === node.id);
-    if (t) { const u = { ...t, layout_x: node.position.x, layout_y: node.position.y }; setTerms(p => p.map(x => x.id === t.id ? u : x)); await api.saveNodeLayout("world_term", node.id, node.position.x, node.position.y); }
-  }, [terms, currentProject, setWorldviewGroups]);
+    if (t) {
+      const newZone = zoneFromPos(node.position.x + 50, node.position.y + 24);
+      const u = { ...t, layout_x: node.position.x, layout_y: node.position.y, zone: newZone };
+      setTerms(p => p.map(x => x.id === t.id ? u : x));
+      setNodes(nds => nds.map(n => n.id === u.id ? { ...n, data: { ...n.data, term: u } } : n));
+      await api.saveWorldTerm(u as WorldTerm);
+    }
+  }, [terms, currentProject, setWorldviewGroups, zoneFromPos, setNodes]);
 
   // ==== onNodesChange wrapper: 自动保存编组位置 ====
   const handleNodesChange = useCallback((changes: any[]) => {
@@ -543,18 +579,24 @@ export function WorldviewPanel() {
   // ==== connect + infect ====
   const onConnect = useCallback((conn: Connection) => {
     if (!currentProject || !conn.source || !conn.target || conn.source === conn.target) return;
-    const srcT = terms.find(t => t.id === conn.source);
-    const tgtT = terms.find(t => t.id === conn.target);
-    if (srcT && tgtT && tgtT.term_type !== srcT.term_type) {
-      const u = { ...tgtT, term_type: srcT.term_type };
-      api.saveWorldTerm(u); setTerms(p => p.map(t => t.id === u.id ? u : t));
-      setNodes(nds => nds.map(n => n.id === u.id ? { ...n, data: { ...n.data, term: u } } : n));
+    // 感染逻辑：仅右引线(→左接头) 或 下引线(→上接头) 时传染类型
+    const sh = conn.sourceHandle || "right";
+    const th = conn.targetHandle || "left";
+    const shouldInfect = (sh === "right" && th === "left") || (sh === "bottom" && th === "top");
+    if (shouldInfect) {
+      const srcT = terms.find(t => t.id === conn.source);
+      const tgtT = terms.find(t => t.id === conn.target);
+      if (srcT && tgtT && tgtT.term_type !== srcT.term_type) {
+        const u = { ...tgtT, term_type: srcT.term_type };
+        api.saveWorldTerm(u); setTerms(p => p.map(t => t.id === u.id ? u : t));
+        setNodes(nds => nds.map(n => n.id === u.id ? { ...n, data: { ...n.data, term: u } } : n));
+      }
     }
     // 推算方向：根据节点位置决定横/纵（仅当用户未指定手柄时）
     const srcNode = nodes.find(n => n.id === conn.source);
     const tgtNode = nodes.find(n => n.id === conn.target);
-    let sh = conn.sourceHandle || "";
-    let th = conn.targetHandle || "";
+    let sh2 = conn.sourceHandle || "";
+    let th2 = conn.targetHandle || "";
     // 根据方向选择手柄
     if ((!sh || !th) && srcNode && tgtNode) {
       const dx = Math.abs(tgtNode.position.x - srcNode.position.x);
@@ -1004,14 +1046,54 @@ export function WorldviewPanel() {
         </div>
       )}
 
-      <div className="relative flex-1" onClick={() => { setGroupCtx(null); }}>
+      <div className="relative flex-1 overflow-hidden" onClick={() => { setGroupCtx(null); }}>
+        {/* 四象限覆盖层（随画布缩放移动），利用父容器 overflow hidden 裁切 */}
+        <svg className="pointer-events-none absolute inset-0 z-[5]"
+          style={{
+            width: "100%", height: "100%", overflow: "visible",
+            transform: `translate(${vp.x}px, ${vp.y}px) scale(${vp.zoom})`,
+            transformOrigin: "0 0",
+          }}>
+          {/* 四个分区背景（画布坐标），跟随勾选状态联动 */}
+          <rect x={-50000} y={-50000} width={CX + 50000} height={CY + 50000} fill={worldviewZoneEnabled.core ? "rgba(220,38,38,0.09)" : "rgba(220,38,38,0.02)"} />
+          <rect x={CX} y={-50000} width={50000} height={CY + 50000} fill={worldviewZoneEnabled.locked ? "rgba(75,85,99,0.09)" : "rgba(75,85,99,0.02)"} />
+          <rect x={-50000} y={CY} width={CX + 50000} height={50000} fill={worldviewZoneEnabled.active ? "rgba(22,163,74,0.09)" : "rgba(22,163,74,0.02)"} />
+          <rect x={CX} y={CY} width={50000} height={50000} fill={worldviewZoneEnabled.other ? "rgba(234,88,12,0.09)" : "rgba(234,88,12,0.02)"} />
+          {/* 十字线 — 深色高对比度虚线 */}
+          <line x1={CX} y1={-50000} x2={CX} y2={50000} stroke="#475569" strokeWidth="2" strokeDasharray="10,6" opacity="0.7" />
+          <line x1={-50000} y1={CY} x2={50000} y2={CY} stroke="#475569" strokeWidth="2" strokeDasharray="10,6" opacity="0.7" />
+        </svg>
+
         <ReactFlow
-          onInit={(inst: any) => { rfRef.current = inst; }}
+          onInit={(inst: any) => { rfRef.current = inst; const v = inst.getViewport(); setVp(v); }}
           nodes={nodes} edges={edges}
           onNodesChange={handleNodesChange as any} onEdgesChange={onEdgesChange}
+          onNodeDrag={(_e: any, node: Node) => {
+            // 拖拽中实时更新 zone 预览（不保存到 DB）
+            if (node.type === "worldviewTerm") {
+              const newZone = zoneFromPos(node.position.x + 50, node.position.y + 24);
+              const t = terms.find(x => x.id === node.id);
+              if (t && t.zone !== newZone) {
+                const u = { ...t, zone: newZone };
+                setTerms(p => p.map(x => x.id === t.id ? u : x));
+                setNodes(nds => nds.map(n => n.id === u.id ? { ...n, data: { ...n.data, term: u } } : n));
+              }
+            } else if (node.type === "group") {
+              // 编组实时检测
+              const gCenterX = node.position.x + 200;
+              const gCenterY = node.position.y + 150;
+              const newZone = zoneFromPos(gCenterX, gCenterY);
+              const childTermIds = (node.data as any)?.childIds || [];
+              if (childTermIds.length > 0) {
+                setTerms(p => p.map(t => childTermIds.includes(t.id) ? { ...t, zone: newZone } : t));
+                setNodes(nds => nds.map(n => childTermIds.includes(n.id) ? { ...n, data: { ...n.data, term: { ...n.data?.term, zone: newZone } } } : n));
+              }
+            }
+          }}
           onNodeDragStop={onDragStop} onNodeDragStart={onNodeDragStart} onConnect={onConnect}
           onEdgeDoubleClick={onEdgeDbl} onSelectionChange={onSel}
           onNodeContextMenu={onNodeCtx as any}
+          onMove={(_e: any, v: any) => setVp(v)}
           onNodeDoubleClick={(_e: any, node: Node) => {
             if (node.type === "worldviewTerm") {
               const t = (node.data as any)?.term;
@@ -1030,7 +1112,7 @@ export function WorldviewPanel() {
           deleteKeyCode="Delete" multiSelectionKeyCode="Shift"
           className="worldview-flow"
         >
-          <Background color="#e2e8f0" gap={24} size={1} />
+          <Background className="!opacity-30" color="#e2e8f0" gap={24} size={1} />
           <Controls className="!shadow-md !rounded-lg !border" />
           <MiniMap className="!shadow-md !rounded-lg !border"
             nodeColor={(n: any) => {
@@ -1042,6 +1124,32 @@ export function WorldviewPanel() {
             maskColor="rgba(0,0,0,0.08)"
           />
         </ReactFlow>
+
+        {/* 分区勾选工具栏 */}
+        <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 rounded-xl border bg-white/90 px-3 py-2 text-xs shadow-lg backdrop-blur">
+          {["core", "locked", "active", "other"].map(zk => {
+            const zm = ZONE_META[zk];
+            const enabled = worldviewZoneEnabled[zk] ?? true;
+            return (
+              <div key={zk} className="group relative flex items-center gap-1">
+                <button
+                  onClick={() => setWorldviewZoneEnabled({ ...worldviewZoneEnabled, [zk]: !enabled })}
+                  className="rounded px-2 py-0.5 font-medium transition-colors"
+                  style={{
+                    backgroundColor: enabled ? zm.color : zm.pale,
+                    color: enabled ? "#fff" : zm.color,
+                  }}
+                >
+                  {enabled ? "☑" : "☐"} {zm.label}
+                </button>
+                {/* 悬浮注释 */}
+                <div className="absolute -top-8 left-1/2 -translate-x-1/2 hidden group-hover:block whitespace-nowrap rounded bg-slate-800 px-2 py-1 text-[10px] text-white shadow-lg z-50 pointer-events-none">
+                  {zm.desc}
+                </div>
+              </div>
+            );
+          })}
+        </div>
 
         {selIds.length >= 2 && (
           <div style={{ position: "absolute", top: 16, left: "50%", transform: "translateX(-50%)", zIndex: 50, borderRadius: 12, border: "1px solid #e2e8f0", background: "white", padding: "8px 12px", boxShadow: "0 4px 12px rgba(0,0,0,0.08)", display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
@@ -1061,7 +1169,7 @@ export function WorldviewPanel() {
             <button className="hover:bg-violet-50 rounded px-2 py-0.5 text-violet-700" onClick={() => { setPendSel([...selIds]); setGName("新编组"); setShowDlg(true); }} style={{ border: "none", background: "none", cursor: "pointer" }}>Ctrl+G</button>
             <button className="hover:bg-violet-50 rounded px-2 py-0.5 text-violet-500" onClick={() => doUngroup()} style={{ border: "none", background: "none", cursor: "pointer" }}>解散</button>
             <span style={{ width: 1, height: 16, background: "#e2e8f0" }} />
-            <button className="hover:bg-red-50 rounded px-2 py-0.5 text-red-600" onClick={() => { pushH(); for (const id of selIds) { const n = nodes.find(x => x.id === id); if (n?.type === "worldviewTerm") delRef.current(id); } setSelIds([]); }} style={{ border: "none", background: "none", cursor: "pointer" }}>X</button>
+            <button className="hover:bg-red-50 rounded px-2 py-0.5 text-red-600" onClick={() => { const targetIds = selIds.filter(id => nodes.find(x => x.id === id)?.type === "worldviewTerm"); if (targetIds.length === 0) return; if (window.confirm(`确定一次性删除选中的 ${targetIds.length} 个词条？此操作不可撤销。`)) { pushH(); const p = currentProject; for (const id of targetIds) { api.deleteWorldTerm(id); setTerms(p2 => p2.filter(t => t.id !== id)); if (p) { const gs = loadGroups(p.id); let dirty = false; for (const g of gs) { const idx = g.childIds.indexOf(id); if (idx >= 0) { g.childIds.splice(idx, 1); dirty = true; } } if (dirty) saveGroups(p.id, gs.filter(g => g.childIds.length > 0)); } } setEdges(eds => { const u = eds.filter(e => !targetIds.includes(e.source) && !targetIds.includes(e.target)); if (p) saveEdges(p.id, u); return u; }); setNodes(nds => nds.filter(n => !targetIds.includes(n.id))); setSelIds([]); } }} style={{ border: "none", background: "none", cursor: "pointer" }}>X</button>
           </div>
         )}
       </div>

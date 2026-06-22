@@ -1,41 +1,48 @@
-// ChapterTree.tsx — 章节树组件（T6：从 WritingModule.tsx 提取）
-import { useState } from "react";
+// ChapterTree.tsx — 章节树组件（T6 拆分，JSX 原样从 WritingModule 提取）
 import { Plus, FileText, Trash2 } from "lucide-react";
 
 interface ChapterTreeProps {
-    pid: string;
+    sidebarWidth: number;
+    selectMode: boolean;
+    storeSelIds: string[];
+    selIdSet: Set<string>;
     volumes: { id: string; title: string }[];
     chapters: { id: string; volumeSegmentId: string; number: number; title: string }[];
     selectedChapterId: string | null;
-    selectMode: boolean;
-    storeSelIds: string[];
-    sidebarWidth: number;
-    onChapterSelect: (id: string) => void;
-    onAddChapter: (volumeId: string, title: string) => void;
-    onDeleteChapter: (id: string) => void;
-    onRenameChapter: (id: string, title: string) => void;
-    onSelectToggle: (id: string) => void;
-    onSelectAllInVolume: (volumeId: string) => void;
-    onCancelSelect: () => void;
-    onReadToAI: () => void;
+    volCollapsed: Record<string, boolean>;
+    showAddDlg: string | null;
+    newChapterTitle: string;
+    renameText: string;
+    renamingId: string | null;
+    nextChapterNumber: number;
     onResizeStart: (e: React.MouseEvent) => void;
+    onReadToAI: () => void;
+    onCancelSelect: () => void;
+    onVolCollapseToggle: (colKey: string) => void;
+    onShowAddDlg: (volId: string | null) => void;
+    onNewChapterTitleChange: (v: string) => void;
+    onChapterSelect: (id: string) => void;
+    onSelectAllInVolume: (vid: string, allSel: boolean) => void;
+    onSelectToggle: (chId: string) => void;
+    onStartRename: (chId: string, title: string) => void;
+    onRenameTextChange: (v: string) => void;
+    onCommitRename: (chId: string) => void;
+    onCancelRename: () => void;
+    onDeleteChapter: (chId: string) => void;
+    onAddChapter: (volId: string) => void;
 }
 
-export function ChapterTree({
-    pid: _pid, volumes, chapters, selectedChapterId, selectMode, storeSelIds,
-    sidebarWidth, onChapterSelect, onAddChapter, onDeleteChapter, onRenameChapter,
-    onSelectToggle, onSelectAllInVolume, onCancelSelect, onReadToAI, onResizeStart,
-}: ChapterTreeProps) {
-    const [volCollapsed, setVolCollapsed] = useState<Record<string, boolean>>({});
-    const [showAddDlg, setShowAddDlg] = useState<string | null>(null);
-    const [newChapterTitle, setNewChapterTitle] = useState("");
-    const [renamingId, setRenamingId] = useState<string | null>(null);
-    const [renameText, setRenameText] = useState("");
-
-    const selIdSet = new Set(storeSelIds);
-
-    const nextChapterNumber =
-        chapters.length > 0 ? Math.max(...chapters.map(c => c.number)) + 1 : 1;
+export function ChapterTree(props: ChapterTreeProps) {
+    const {
+        sidebarWidth, selectMode, storeSelIds, selIdSet, volumes, chapters,
+        selectedChapterId, volCollapsed, showAddDlg, newChapterTitle,
+        renameText, renamingId, nextChapterNumber,
+        onResizeStart, onReadToAI, onCancelSelect, onVolCollapseToggle,
+        onShowAddDlg, onNewChapterTitleChange, onChapterSelect,
+        onSelectAllInVolume, onSelectToggle,
+        onStartRename, onRenameTextChange, onCommitRename, onCancelRename,
+        onDeleteChapter, onAddChapter,
+    } = props;
 
     return (
         <>
@@ -79,17 +86,17 @@ export function ChapterTree({
                                     {selectMode && (
                                         <input type="checkbox" checked={allSel}
                                             ref={el => { if (el) el.indeterminate = someSel && !allSel; }}
-                                            onChange={() => onSelectAllInVolume(vol.id)}
+                                            onChange={() => onSelectAllInVolume(vol.id, allSel)}
                                             className="shrink-0 accent-violet-600"
                                         />
                                     )}
-                                    <button onClick={() => setVolCollapsed(p => ({ ...p, [colKey]: !isCol }))}
+                                    <button onClick={() => onVolCollapseToggle(colKey)}
                                         className="text-xs text-slate-400 hover:text-slate-600 shrink-0 w-4">
                                         {isCol ? "▶" : "▼"}
                                     </button>
                                     <p className="text-base font-semibold text-slate-700 truncate">{vol.title}</p>
                                 </div>
-                                <button onClick={() => { setShowAddDlg(vol.id); setNewChapterTitle(""); }}
+                                <button onClick={() => onShowAddDlg(vol.id)}
                                     className="text-amber-600 hover:text-amber-700 shrink-0 ml-1" title="添加章节">
                                     <Plus size={18} />
                                 </button>
@@ -117,11 +124,11 @@ export function ChapterTree({
                                                     <input
                                                         className="ml-1 flex-1 min-w-0 rounded border border-amber-400 px-1 py-0 text-base outline-none"
                                                         value={renameText}
-                                                        onChange={e => setRenameText(e.target.value)}
-                                                        onBlur={() => { onRenameChapter(ch.id, renameText); setRenamingId(null); }}
+                                                        onChange={e => onRenameTextChange(e.target.value)}
+                                                        onBlur={() => onCommitRename(ch.id)}
                                                         onKeyDown={e => {
-                                                            if (e.key === 'Enter') { onRenameChapter(ch.id, renameText); setRenamingId(null); }
-                                                            if (e.key === 'Escape') setRenamingId(null);
+                                                            if (e.key === 'Enter') onCommitRename(ch.id);
+                                                            if (e.key === 'Escape') onCancelRename();
                                                         }}
                                                         autoFocus
                                                         onClick={e => e.stopPropagation()}
@@ -129,7 +136,7 @@ export function ChapterTree({
                                                 ) : (
                                                     <span
                                                         className="ml-1 flex-1 min-w-0 truncate rounded px-1 py-0.5 hover:bg-slate-100 cursor-text"
-                                                        onClick={e => { e.stopPropagation(); if (!selectMode) { onChapterSelect(ch.id); setRenameText(ch.title); setRenamingId(ch.id); } }}
+                                                        onClick={e => { e.stopPropagation(); if (!selectMode) { onChapterSelect(ch.id); onStartRename(ch.id, ch.title); } }}
                                                         title="点击修改章节名"
                                                     >
                                                         {ch.title || '未命名'}
@@ -151,27 +158,28 @@ export function ChapterTree({
                         </div>
                     );
                 })}
-            </aside>
 
-            {/* 加章弹窗 */}
-            {showAddDlg && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20"
-                    onClick={() => setShowAddDlg(null)}>
-                    <div className="rounded-xl border bg-white p-4 shadow-xl" onClick={e => e.stopPropagation()} style={{ minWidth: 280 }}>
-                        <h3 className="mb-3 text-sm font-semibold">新建章节</h3>
-                        <div className="mb-2 text-xs text-slate-400">将自动生成：第{nextChapterNumber}章</div>
-                        <input className="w-full rounded-lg border px-3 py-2 text-sm outline-none focus:border-amber-400"
-                            value={newChapterTitle} onChange={e => setNewChapterTitle(e.target.value)}
-                            placeholder="输入章节名称" autoFocus
-                            onKeyDown={e => { if (e.key === "Enter" && showAddDlg) onAddChapter(showAddDlg, newChapterTitle); if (e.key === "Escape") setShowAddDlg(null); }} />
-                        <div className="mt-3 flex justify-end gap-2">
-                            <button className="rounded-lg border px-4 py-1.5 text-sm hover:bg-slate-50" onClick={() => setShowAddDlg(null)}>取消</button>
-                            <button className="rounded-lg bg-amber-500 px-4 py-1.5 text-sm text-white hover:bg-amber-600"
-                                onClick={() => showAddDlg && onAddChapter(showAddDlg, newChapterTitle)}>创建</button>
+                {/* 加章弹窗 */}
+                {showAddDlg && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20"
+                        onClick={() => onShowAddDlg(null)}>
+                        <div className="rounded-xl border bg-white p-4 shadow-xl" onClick={e => e.stopPropagation()} style={{ minWidth: 280 }}>
+                            <h3 className="mb-3 text-sm font-semibold">新建章节</h3>
+                            <div className="mb-2 text-xs text-slate-400">
+                                将自动生成：第{nextChapterNumber}章
+                            </div>
+                            <input className="w-full rounded-lg border px-3 py-2 text-sm outline-none focus:border-amber-400"
+                                value={newChapterTitle} onChange={e => onNewChapterTitleChange(e.target.value)}
+                                placeholder="输入章节名称" autoFocus
+                                onKeyDown={e => { if (e.key === "Enter" && showAddDlg) onAddChapter(showAddDlg); if (e.key === "Escape") onShowAddDlg(null); }} />
+                            <div className="mt-3 flex justify-end gap-2">
+                                <button className="rounded-lg border px-4 py-1.5 text-sm hover:bg-slate-50" onClick={() => onShowAddDlg(null)}>取消</button>
+                                <button className="rounded-lg bg-amber-500 px-4 py-1.5 text-sm text-white hover:bg-amber-600" onClick={() => showAddDlg && onAddChapter(showAddDlg)}>创建</button>
+                            </div>
                         </div>
                     </div>
-                </div>
-            )}
+                )}
+            </aside>
         </>
     );
 }

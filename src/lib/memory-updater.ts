@@ -14,15 +14,13 @@
 
 import { uuid } from "@/lib/uuid";
 import { api } from "./api";
-import { getJSONSync, setJSONSync, setSync, saveJSON, getSync } from "./storage";
+import { getJSONSync, setJSONSync, setSync } from "./storage";
 import { loadAllChapters } from "./chapter-store";
 import { getAllProjectKeys } from "./backup";
-import { reportDiagnostic } from "./diagnostics";
 import { useAppStore } from "@/stores/app-store";
 import type {
     ChapterSummary, ChapterSnapshot,
     CharacterState, ForeshadowEntry, StorylineProgress,
-    LogStoreData, PlotSegmentData,
 } from "@/types";
 
 // ===== 接口 =====
@@ -159,8 +157,8 @@ async function analyzeChapterViaAI(
     } catch { /* ignore */ }
 
     try {
-        const segs = getJSONSync(`plot-segments-${projectId}`, [] as PlotSegmentData[]);
-        knownStorylines = segs.filter((s) => s.title).map((s) => s.title).join("、");
+        const segs = getJSONSync(`plot-segments-${projectId}`, [] as any[]);
+        knownStorylines = segs.filter((s: any) => s.title).map((s: any) => s.title).join("、");
     } catch { /* ignore */ }
 
     try {
@@ -286,9 +284,8 @@ export async function updateMemory(
                 // ★ 收集 AI 报告的变化字段
                 const changes: Record<string, string> = {};
                 const snapKeys = ["personality", "ability", "appearance", "background", "style", "interests", "desire", "fear", "flaw", "arc", "voice_style", "faction", "race", "gender"] as const;
-                const snapData = snap as Record<string, string>;
                 for (const key of snapKeys) {
-                    const val = snapData[key];
+                    const val = (snap as any)[key];
                     if (val && typeof val === "string" && val.trim().length > 3) {
                         changes[key] = val.trim();
                     }
@@ -300,7 +297,7 @@ export async function updateMemory(
                 // ★ 校验：与角色当前值对比，完全相同则跳过（AI 可能照抄原文）
                 let hasActualDiff = false;
                 for (const key of Object.keys(changes)) {
-                    const currentVal = (targetChar[key] || "").trim();
+                    const currentVal = ((targetChar as any)[key] || "").trim();
                     if (currentVal !== changes[key]) { hasActualDiff = true; break; }
                 }
                 if (!hasActualDiff) continue;
@@ -320,7 +317,7 @@ export async function updateMemory(
 
                 // ★ 通过 api.saveCharacter 保存，确保走完整的序列化路径
                 const updatedChar = { ...targetChar, snapshots: existingSnaps };
-                await api.saveCharacter(updatedChar);
+                await api.saveCharacter(updatedChar as any);
             }
             // 通知 UI 刷新角色列表
             useAppStore.getState().bumpCharacters();
@@ -587,8 +584,8 @@ export async function activateNextChapterCharacters(
     try {
         allCharacters = await api.listCharacters(projectId);
         summaries = await api.getChapterSummaries(projectId);
-        segs = getJSONSync(`plot-segments-${projectId}`, [] as PlotSegmentData[]);
-        chaps = loadAllChapters(projectId);
+        segs = getJSONSync(`plot-segments-${projectId}`, []) as any[];
+        chaps = loadAllChapters(projectId) as any[];
     } catch { return; }
 
     // 找到下一章所属的 beat
@@ -627,7 +624,7 @@ ${nextBeat ? `#${nextBeat.number}「${nextBeat.title}」角色：${nextBeat.char
 
         // 写入日志库
         const logKey = `novel-workbench-log-${projectId}`;
-        const logStore: LogStoreData = getJSONSync(logKey, {} as LogStoreData) || {};
+        const logStore = getJSONSync(logKey, {} as any) || {};
         logStore.nextChapterCharacters = {
             forChapter: nextChapter,
             characterNames: chars,
@@ -637,120 +634,129 @@ ${nextBeat ? `#${nextBeat.number}「${nextBeat.title}」角色：${nextBeat.char
     } catch { /* 角色预测失败不阻塞定稿 */ }
 }
 
-// ===== 快照管理 =====
+// ===== 快照管理（T4 分片存储） =====
 
-interface ProjectSnapshot { id: string; label: string; timestamp: string; data?: Record<string, string>; }
-const SNAPSHOT_KEY = (pid: string) => `novel-snapshots-${pid}`;
+interface SnapMeta { id: string; label: string; timestamp: string; }
+const SNAP_IDX_KEY = (pid: string) => `snapshot-index-${pid}`;
+const OLD_SNAPSHOT_KEY = (pid: string) => `novel-snapshots-${pid}`;
 
-// T4：分片存储 key 模式
-const SNAPSHOT_INDEX_KEY = (pid: string) => `snapshot-${pid}-index`;
-const SNAPSHOT_SHARD_KEY = (pid: string, snapId: string, shard: string) => `snapshot-${pid}-${snapId}-${shard}`;
-interface SnapshotMeta { id: string; label: string; timestamp: string; shards: string[] }
+// 分片 key 命名
+const shardKey = (pid: string, snapId: string, kind: string) => `snapshot-${pid}-${snapId}-${kind}`;
 
-/** 将 key 分类到分片 */
-const CHAR_KEY_PREFIXES = [
-    "characters-", "character-", "world-terms-", "relationship-",
-    "char-groups-", "ai-pending-chars-", "ai-pending-world-terms-",
-];
-
-function classifyKey(key: string, projectId: string): string {
-    if (key.startsWith(`chapter-${projectId}-`) || key.startsWith("chapter-index-") ||
-        key.startsWith("plot-chapters-") || key.startsWith("plot-segments-") || key.startsWith("plot-edges-")) {
-        // T3 兼容：plot-chapters- 为旧 key，仅快照兼容时使用
-        return "chapters";
+/** 收集项目数据并按类型分类 */
+function collectProjectData(projectId: string): { chapters: Record<string, string>; characters: Record<string, string>; misc: Record<string, string> } {
+    const chapters: Record<string, string> = {};
+    const characters: Record<string, string> = {};
+    const misc: Record<string, string> = {};
+    const allKeys = getAllProjectKeys(projectId);
+    for (const key of allKeys) {
+        try {
+            const val = getSync(key);
+            if (val === null) continue;
+            if (key.startsWith(`chapter-${projectId}-`) || key.startsWith(`chapter-index-`) || key.startsWith(`chapter-hash-`)) {
+                chapters[key] = val;
+            } else if (key.includes('character') || key.includes('char-') || key.startsWith('ai-pending-chars-') || key.includes('characters')) {
+                characters[key] = val;
+            } else {
+                misc[key] = val;
+            }
+        } catch { /* skip unreadable */ }
     }
-    if (CHAR_KEY_PREFIXES.some(p => key.startsWith(p))) {
-        return "characters";
-    }
-    return "misc";
+    return { chapters, characters, misc };
 }
 
-export function listSnapshots(projectId: string): { id: string; label: string; timestamp: string }[] {
+export function listSnapshots(projectId: string): SnapMeta[] {
+    // 优先读取新格式索引，回退旧格式
+    const idx = getJSONSync(SNAP_IDX_KEY(projectId), [] as SnapMeta[]);
+    if (idx.length > 0) return idx;
+    // 兼容旧格式：从 novel-snapshots-{pid} 读取摘要
     try {
-        // T4：优先从新索引读取
-        const newIndex = getJSONSync(SNAPSHOT_INDEX_KEY(projectId), [] as SnapshotMeta[]);
-        if (newIndex.length > 0) {
-            return newIndex.map(s => ({ id: s.id, label: s.label, timestamp: s.timestamp }));
-        }
-        // 兼容旧格式：从 novel-snapshots-{pid} 读取
-        const old = getJSONSync(SNAPSHOT_KEY(projectId), [] as ProjectSnapshot[]);
-        return old.map(s => ({ id: s.id, label: s.label, timestamp: s.timestamp }));
+        const old = getJSONSync(OLD_SNAPSHOT_KEY(projectId), [] as any[]);
+        return old.map((s: any) => ({ id: s.id, label: s.label, timestamp: s.timestamp }));
     } catch { return []; }
 }
 
-export async function createSnapshot(projectId: string, label: string): Promise<void> {
+export function createSnapshot(projectId: string, label: string): void {
     try {
         const snapId = uuid();
-        const keys = await getAllProjectKeys(projectId);
+        const data = collectProjectData(projectId);
 
-        // 按分片分类数据
-        const shardData: Record<string, Record<string, string>> = { chapters: {}, characters: {}, misc: {} };
-        for (const key of keys) {
-            const val = getSync(key);
-            if (val !== null) {
-                shardData[classifyKey(key, projectId)][key] = val;
-            }
+        // T4.2 写时复制：先写分片 → 再更新索引
+        if (Object.keys(data.chapters).length > 0) {
+            setJSONSync(shardKey(projectId, snapId, "chapters"), data.chapters);
+        }
+        if (Object.keys(data.characters).length > 0) {
+            setJSONSync(shardKey(projectId, snapId, "characters"), data.characters);
+        }
+        if (Object.keys(data.misc).length > 0) {
+            setJSONSync(shardKey(projectId, snapId, "misc"), data.misc);
         }
 
-        // 写时复制事务：1. 写新分片 key
-        const activeShards: string[] = [];
-        for (const [shardName, data] of Object.entries(shardData)) {
-            if (Object.keys(data).length > 0) {
-                const ok = saveJSON(SNAPSHOT_SHARD_KEY(projectId, snapId, shardName), data);
-                if (!ok) {
-                    // 写入失败，回滚已写入的分片
-                    for (const s of activeShards) {
-                        try { setJSONSync(SNAPSHOT_SHARD_KEY(projectId, snapId, s), null); } catch { /* ignore */ }
-                    }
-                    reportDiagnostic("error", `快照分片 ${shardName} 写入失败，已回滚`);
-                    return;
-                }
-                activeShards.push(shardName);
-            }
-        }
+        // 更新索引
+        const idx = getJSONSync(SNAP_IDX_KEY(projectId), [] as SnapMeta[]);
+        idx.push({ id: snapId, label, timestamp: new Date().toISOString() });
+        setJSONSync(SNAP_IDX_KEY(projectId), idx);
+    } catch { /* silent — 失败时旧数据不受影响（索引未更新） */ }
+}
 
-        // 2. 更新索引（所有分片写入成功后才更新索引）
-        const index = getJSONSync(SNAPSHOT_INDEX_KEY(projectId), [] as SnapshotMeta[]);
-        index.push({ id: snapId, label, timestamp: new Date().toISOString(), shards: activeShards });
-        if (!saveJSON(SNAPSHOT_INDEX_KEY(projectId), index)) {
-            // 索引写入失败，回滚分片
-            for (const s of activeShards) {
-                try { setJSONSync(SNAPSHOT_SHARD_KEY(projectId, snapId, s), null); } catch { /* ignore */ }
-            }
-            reportDiagnostic("error", "快照索引写入失败，已回滚");
+export function deleteSnapshot(projectId: string, snapId: string): boolean {
+    try {
+        const idx = getJSONSync(SNAP_IDX_KEY(projectId), [] as SnapMeta[]);
+        const filtered = idx.filter(s => s.id !== snapId);
+        if (filtered.length === idx.length) {
+            // 新索引没找到，尝试旧格式
+            const old = getJSONSync(OLD_SNAPSHOT_KEY(projectId), [] as any[]);
+            const oldFiltered = old.filter((s: any) => s.id !== snapId);
+            if (oldFiltered.length === old.length) return false;
+            setJSONSync(OLD_SNAPSHOT_KEY(projectId), oldFiltered);
+            return true;
         }
-    } catch { /* silent */ }
+        setJSONSync(SNAP_IDX_KEY(projectId), filtered);
+        // 清理分片数据
+        for (const kind of ["chapters", "characters", "misc"]) {
+            try { localStorage.removeItem(shardKey(projectId, snapId, kind)); } catch { }
+        }
+        return true;
+    } catch { return false; }
 }
 
 export function restoreSnapshot(projectId: string, snapId: string): boolean {
     try {
-        // T4：优先从分片恢复
-        const index = getJSONSync(SNAPSHOT_INDEX_KEY(projectId), [] as SnapshotMeta[]);
-        const meta = index.find(s => s.id === snapId);
+        const idx = getJSONSync(SNAP_IDX_KEY(projectId), [] as SnapMeta[]);
+        const meta = idx.find(s => s.id === snapId);
+
+        // 新格式：按分片读取
         if (meta) {
-            for (const shardName of meta.shards) {
-                const data = getJSONSync(SNAPSHOT_SHARD_KEY(projectId, snapId, shardName), null as Record<string, string> | null);
-                if (data) {
-                    for (const [key, value] of Object.entries(data)) {
+            let totalRestored = 0;
+            for (const kind of ["chapters", "characters", "misc"] as const) {
+                const shard = getJSONSync(shardKey(projectId, snapId, kind), {} as Record<string, string>);
+                for (const [key, value] of Object.entries(shard)) {
+                    try {
+                        const parsed = JSON.parse(value);
+                        saveJSON(key, parsed);
+                    } catch {
                         setSync(key, value);
                     }
+                    totalRestored++;
                 }
             }
-            const idx = index.findIndex(s => s.id === snapId);
-            setJSONSync(SNAPSHOT_INDEX_KEY(projectId), index.slice(0, idx + 1));
-            return true;
+            return totalRestored > 0;
         }
-        // 兼容旧格式：从 novel-snapshots-{pid} 恢复
-        const snaps = getJSONSync(SNAPSHOT_KEY(projectId), [] as ProjectSnapshot[]);
-        const idx = snaps.findIndex(s => s.id === snapId);
-        if (idx === -1) return false;
-        const snap = snaps[idx];
-        if (snap.data) {
-            for (const [key, value] of Object.entries(snap.data)) {
+
+        // T4.5 兼容旧格式（novel-snapshots-{pid} 单 key）
+        const old = getJSONSync(OLD_SNAPSHOT_KEY(projectId), [] as any[]);
+        const oldSnap = old.find((s: any) => s.id === snapId);
+        if (!oldSnap || !oldSnap.data) return false;
+        for (const [key, value] of Object.entries(oldSnap.data as Record<string, string>)) {
+            try {
+                const parsed = JSON.parse(value);
+                saveJSON(key, parsed);
+            } catch {
                 setSync(key, value);
             }
         }
-        setJSONSync(SNAPSHOT_KEY(projectId), snaps.slice(0, idx + 1));
+        // 提示用户重新创建快照
+        try { localStorage.setItem(`zhibi-old-snapshot-restored-${snapId}`, "1"); } catch { }
         return true;
     } catch { return false; }
 }
@@ -765,7 +771,7 @@ export async function rebaseMemory(
         .sort((a: any, b: any) => a.number - b.number);
     const total = chapters.length;
     for (let i = 0; i < total; i++) {
-        const ch = chapters[i];
+        const ch = chapters[i] as any;
         if (ch.content) {
             await updateMemory({ projectId, chapterNumber: ch.number, chapterTitle: ch.title || "", chapterContent: ch.content, characters: [] });
         }

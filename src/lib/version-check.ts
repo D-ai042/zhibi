@@ -12,8 +12,6 @@
  * }
  */
 
-import { loadJSON, saveJSON } from "./storage";
-
 const VERSION_CHECK_URL = "http://175.178.18.102:8000/api/v1/version.json";
 
 /** 检查结果缓存 key（存 localStorage，避免每次启动都弹） */
@@ -71,7 +69,7 @@ export function isNewerVersion(latest: string, current: string): boolean {
  */
 export function isDismissed(version: string): boolean {
     try {
-        return loadJSON(DISMISSED_KEY, "") === version;
+        return getJSONSync(DISMISSED_KEY, null) === version;
     } catch {
         return false;
     }
@@ -82,7 +80,7 @@ export function isDismissed(version: string): boolean {
  */
 export function markDismissed(version: string): void {
     try {
-        saveJSON(DISMISSED_KEY, version);
+        setJSONSync(DISMISSED_KEY, version);
     } catch { /* ignore */ }
 }
 
@@ -91,7 +89,7 @@ export function markDismissed(version: string): void {
  */
 export function clearDismissed(): void {
     try {
-        saveJSON(DISMISSED_KEY, null);
+        try { localStorage.removeItem(DISMISSED_KEY); } catch { }
     } catch { /* ignore */ }
 }
 

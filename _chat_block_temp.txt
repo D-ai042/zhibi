@@ -1,0 +1,258 @@
+messages.map((m) => (
+          <div
+            key={m.id}
+            className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}
+          >
+            {m.role === "user" ? (
+              <div className="group relative max-w-[92%]">
+                {editingMsgId === m.id ? (
+                  <div className="rounded-2xl px-3 py-2 bg-violet-600">
+                    <textarea
+                      className="w-full resize rounded-lg border border-violet-400 bg-violet-700 px-2 py-1 text-sm text-white placeholder-violet-300 outline-none"
+                      value={editingContent}
+                      onChange={e => setEditingContent(e.target.value)}
+                      onKeyDown={e => {
+                        if (e.key === "Enter" && !e.shiftKey) {
+                          e.preventDefault();
+                          handleConfirmEdit(m.id);
+                        }
+                        if (e.key === "Escape") {
+                          setEditingMsgId(null);
+                          setEditingContent("");
+                        }
+                      }}
+                      rows={Math.min(editingContent.split('\n').length + 1, 10)}
+                      autoFocus
+                    />
+                    <div className="mt-1 flex items-center justify-end gap-1.5 text-[10px] text-violet-300">
+                      <button type="button" onClick={() => { setEditingMsgId(null); setEditingContent(''); }}
+                        className="rounded border border-violet-400/30 px-2 py-0.5 text-violet-300 hover:bg-violet-500 hover:text-white">取消</button>
+                      <button type="button" onClick={() => handleConfirmEdit(m.id)}
+                        className="rounded bg-violet-500 px-2 py-0.5 text-white hover:bg-violet-400">确认</button>
+                      <span className="text-violet-400/60">Shift+Enter 换行</span>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="rounded-2xl px-3 py-2 text-sm whitespace-pre-wrap bg-violet-600 text-white resize overflow-auto" style={{ minWidth: 120, minHeight: 36, maxWidth: 500 }}>
+                    {m.content}
+                  </div>
+                )}
+                {/* 常驻操作按钮 */}
+                {editingMsgId !== m.id && (
+                  <div className="flex items-center gap-0.5 mt-1 justify-end">
+                    <button
+                      type="button"
+                      onClick={() => handleCopyMessage(m.content)}
+                      className="rounded p-0.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100"
+                      title="复制"
+                    >
+                      <Copy size={14} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleEditUserMessage(m.id, m.content)}
+                      className="rounded p-0.5 text-slate-400 hover:text-amber-600 hover:bg-amber-50"
+                      title="编辑消息"
+                    >
+                      <Edit3 size={14} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteMessage(m.id)}
+                      className="rounded p-0.5 text-slate-400 hover:text-red-500 hover:bg-red-50"
+                      title="删除消息"
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                )}
+              </div>
+            ) : m.role === "system" ? (
+              <div className="group relative max-w-[92%]">
+                <div className="rounded-2xl px-3 py-2 text-sm whitespace-pre-wrap border border-violet-200 bg-violet-50 text-violet-800">
+                  {m.content}
+                </div>
+                {/* 常驻删除按钮 */}
+                <div className="flex items-center gap-0.5 mt-1 justify-end">
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteMessage(m.id)}
+                    className="rounded p-0.5 text-slate-400 hover:text-red-600 hover:bg-red-50"
+                    title="删除消息"
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="group relative max-w-[92%]">
+                {m.thinking && (
+                  <details className="mb-1.5">
+                    <summary className="flex cursor-pointer items-center gap-1.5 rounded-full bg-[#f0f0f0] hover:bg-[#e8e8e8] px-3 py-1 text-xs text-slate-500 select-none transition-colors [&::-webkit-details-marker]:hidden list-none">
+                      <span className="inline-flex items-center gap-1">
+                        <span className="h-1.5 w-1.5 rounded-full bg-slate-400" />
+                        <span>已思考</span>
+                      </span>
+                      <span className="ml-auto text-[10px] text-slate-400 group-open:rotate-180 transition-transform">▾</span>
+                    </summary>
+                    <div className="mt-1.5 rounded-lg border border-slate-200/80 bg-[#f7f7f8] px-3 py-2.5 text-xs leading-relaxed text-slate-600 prose prose-slate max-w-none">
+                      <div dangerouslySetInnerHTML={{ __html: renderMarkdown(m.thinking!) }} />
+                    </div>
+                  </details>
+                )}
+                <div
+                  className="rounded-2xl px-4 py-3 text-sm border border-slate-100 bg-white text-slate-800 shadow-sm prose prose-slate max-w-none"
+                  dangerouslySetInnerHTML={{
+                    __html: renderMarkdown(m.content),
+                  }}
+                />
+                {/* 操作按钮栏 — 常驻显示 */}
+                <div className="mt-1 flex items-center gap-0.5">
+                  <button
+                    type="button"
+                    onClick={() => handleCopyMessage(m.content)}
+                    className="rounded p-1 text-slate-400 hover:text-slate-600 hover:bg-slate-100"
+                    title="复制"
+                  >
+                    <Copy size={13} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteMessage(m.id)}
+                    className="rounded p-1 text-slate-400 hover:text-red-500 hover:bg-red-50"
+                    title="删除"
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleRegenerate}
+                    className="rounded p-1 text-slate-400 hover:text-amber-600 hover:bg-amber-50"
+                    title="重新生成"
+                  >
+                    <RotateCcw size={13} />
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        ))}
+        {/* ========== DeepSeek 风格流式输出 ========== */}
+        {loading && (
+          <div className="flex justify-start">
+            <div className="max-w-[92%]">
+              {/* 思考过程 — 始终显示 */}
+              <details className="group mb-1.5" open>
+                <summary className="flex cursor-pointer items-center gap-1.5 select-none list-none [&::-webkit-details-marker]:hidden">
+                  {/* thinking 阶段: 跳动三点；content 阶段: 静态圆点 */}
+                  {streamingPhase === "thinking" ? (
+                    <div className="flex items-center gap-1">
+                      <span className="h-1.5 w-1.5 rounded-full bg-slate-400 animate-bounce" style={{ animationDelay: "0ms" }} />
+                      <span className="h-1.5 w-1.5 rounded-full bg-slate-400 animate-bounce" style={{ animationDelay: "150ms" }} />
+                      <span className="h-1.5 w-1.5 rounded-full bg-slate-400 animate-bounce" style={{ animationDelay: "300ms" }} />
+                    </div>
+                  ) : (
+                    <div className="flex items-center">
+                      <span className="h-1.5 w-1.5 rounded-full bg-slate-400" />
+                    </div>
+                  )}
+                  <span className="text-xs font-medium text-slate-500">
+                    {streamingPhase === "thinking" ? "思考过程" : `已思考 · ${thinkingDuration}s`}
+                  </span>
+                  {streamingPhase === "content" && (
+                    <span className="ml-auto text-[10px] text-slate-400 group-open:rotate-180 transition-transform">▾</span>
+                  )}
+                </summary>
+                {/* 思考内容 — 展开时才显示 */}
+                <div className="mt-1.5 rounded-lg border border-slate-200/80 bg-[#f7f7f8] px-3 py-2.5 text-xs leading-relaxed text-slate-600 prose prose-slate max-w-none">
+                  {streamingThinking ? (
+                    <div dangerouslySetInnerHTML={{ __html: renderMarkdown(streamingThinking) }} />
+                  ) : (
+                    <span className="text-slate-400 italic">正在分析你的请求...</span>
+                  )}
+                  {streamingPhase === "thinking" && (
+                    <span className="inline-block w-0.5 h-4 bg-slate-400 animate-pulse ml-0.5 align-text-bottom" />
+                  )}
+                </div>
+              </details>
+              {/* 正文 — content 阶段才显示 */}
+              {streamingPhase === "content" && (
+                <div>
+                  <div className="rounded-2xl px-4 py-3 text-sm border border-slate-100 bg-white text-slate-800 shadow-sm prose prose-slate max-w-none">
+                    <div dangerouslySetInnerHTML={{ __html: renderMarkdown(streamingContent) }} />
+                    <span className="inline-block w-0.5 h-4 bg-slate-700 animate-pulse ml-0.5 align-text-bottom" />
+                  </div>
+                </div>
+              )}
+              {/* 终止按钮 */}
+              <div className="flex justify-end mt-1.5">
+                <button
+                  type="button"
+                  onClick={handleStop}
+                  className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-xs text-slate-500 hover:bg-red-50 hover:border-red-200 hover:text-red-600 shadow-sm transition-colors"
+                >
+                  <Square size={12} fill="currentColor" /> 终止
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 待插入角色/快照预览 */}
+        {(pendingChars.length > 0 || pendingCharEdges.length > 0 || pendingSnapshots.length > 0) && (
+          <div className="space-y-2 px-1">
+            <div className="flex items-center justify-between">
+              <p className="text-[10px] font-medium text-blue-700">
+                👤 待插入星图（{pendingChars.length} 个角色{pendingCharEdges.length > 0 ? ` · ${pendingCharEdges.length} 条关系` : ""}{pendingSnapshots.length > 0 ? ` · ${pendingSnapshots.length} 个快照` : ""}）
+              </p>
+              <button className="text-[10px] text-slate-400 hover:text-red-500" onClick={() => { setPendingChars([]); setPendingCharEdges([]); setPendingRemoveEdges([]); setPendingSnapshots([]); }}>清空全部</button>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {pendingChars.map((c, i) => (
+                <div key={c.name} className="relative group rounded-lg border bg-white p-2 shadow-sm min-w-[120px]" style={{ borderColor: "#3b82f6", borderLeftWidth: 3 }}>
+                  <button className="absolute top-1 right-1 z-10 opacity-0 group-hover:opacity-100 text-slate-400 hover:text-red-500 text-xs leading-none"
+                    onClick={() => setPendingChars(prev => prev.filter((_, j) => j !== i))}>✕</button>
+                  <p className="text-xs font-semibold text-slate-800 pr-4">{c.name}</p>
+                  {c.faction && <p className="text-[10px] text-slate-400">{c.faction}</p>}
+                </div>
+              ))}
+              {pendingSnapshots.map((s, i) => (
+                <div key={'snap-' + i} className="relative group rounded-lg border bg-white p-2 shadow-sm min-w-[100px]" style={{ borderColor: "#8b5cf6", borderLeftWidth: 3 }}>
+                  <button className="absolute top-1 right-1 z-10 opacity-0 group-hover:opacity-100 text-slate-400 hover:text-red-500 text-xs leading-none"
+                    onClick={() => setPendingSnapshots(prev => prev.filter((_, j) => j !== i))}>✕</button>
+                  <p className="text-xs font-semibold text-slate-800 pr-4">{s.name}</p>
+                  <p className="text-[10px] text-violet-500">{s.changes.age || '?'}岁快照</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* 待插入词条预览 */}
+        {pendingTerms.length > 0 && (
+          <div className="space-y-2 px-1">
+            <div className="flex items-center justify-between">
+              <p className="text-[10px] font-medium text-amber-700">
+                📋 待插入画布（{pendingTerms.length} 个词条{pendingEdges.length > 0 ? ` · ${pendingEdges.length} 条连线` : ""}）
+              </p>
+              <button className="text-[10px] text-slate-400 hover:text-red-500 whitespace-nowrap ml-2" onClick={() => { setPendingTerms([]); setPendingEdges([]); }}>清空全部</button>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {pendingTerms.map((t) => {
+                const typeColors: Record<string, string> = { rule: "#3b82f6", faction: "#ec4899", place: "#10b981", item: "#8b5cf6", system: "#f97316", other: "#9ca3af" };
+                const typeLabels: Record<string, string> = { rule: "规则", faction: "势力", place: "地点", item: "道具", system: "制度", other: "其他" };
+                const c = typeColors[t.term_type] ?? "#9ca3af";
+                return (
+                  <div key={t.id} className="rounded-lg border bg-white p-2.5 shadow-sm min-w-[160px] max-w-[240px] relative group" style={{ borderColor: c, borderLeftWidth: 3 }}>
+                    <button className="absolute top-1 right-1 z-10 opacity-0 group-hover:opacity-100 text-slate-400 hover:text-red-500 text-xs leading-none" onClick={(e) => { e.stopPropagation(); setPendingTerms(prev => prev.filter(x => x.id !== t.id)); }}>✕</button>
+                    <span className="rounded px-1 py-0.5 text-[9px] font-bold text-white" style={{ backgroundColor: c }}>{typeLabels[t.term_type] ?? "其他"}</span>
+                    <p className="mt-1 text-xs font-semibold text-slate-800 truncate pr-4">{t.title}</p>
+                    <p className="text-[10px] text-slate-500 line-clamp-2">{t.one_liner}</p>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        

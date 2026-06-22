@@ -94,13 +94,24 @@ function WorldviewTermNode({ data }: NodeProps<WorldviewTermData>) {
                 className="flex items-center justify-between rounded-t-lg px-3 py-1.5"
                 style={{ backgroundColor: colors.bg }}
             >
-                {/* 左侧：类型标签 */}
-                <span
-                    className="shrink-0 rounded px-1 py-0.5 text-[9px] font-bold leading-none"
-                    style={{ backgroundColor: colors.border, color: "#fff" }}
-                >
-                    {typeLabel}
-                </span>
+                {/* 左侧：类型标签 + 分区标签 */}
+                <div className="flex items-center gap-1">
+                    <span
+                        className="shrink-0 rounded px-1 py-0.5 text-[9px] font-bold leading-none"
+                        style={{ backgroundColor: colors.border, color: "#fff" }}
+                    >
+                        {typeLabel}
+                    </span>
+                    {term.zone && (
+                        <span className="shrink-0 rounded px-1 py-0.5 text-[8px] font-medium leading-none"
+                            style={{
+                                backgroundColor: term.zone === "core" ? "#dc2626" : term.zone === "locked" ? "#4b5563" : term.zone === "active" ? "#16a34a" : "#ea580c",
+                                color: "#fff", opacity: 0.7
+                            }}>
+                            {term.zone === "core" ? "核心" : term.zone === "locked" ? "锁定" : term.zone === "active" ? "创作" : "其他"}
+                        </span>
+                    )}
+                </div>
 
                 {/* 中间：标题 - 居中 */}
                 {editingTitle ? (

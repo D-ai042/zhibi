@@ -7,7 +7,7 @@
 
 import { api } from "./api";
 import { getJSONSync } from "./storage";
-import type { StoryBible, StyleGuide } from "@/types";
+import type { ForeshadowEntry, StoryBible, StyleGuide } from "@/types";
 
 // ===== 接口 =====
 

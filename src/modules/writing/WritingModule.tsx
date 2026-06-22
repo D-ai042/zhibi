@@ -1,129 +1,221 @@
-﻿// WritingModule.tsx — 写作台主组件（T6 瘦身壳）
+// WritingModule.tsx — 写作台主组件（T6 拆分薄壳，逻辑全保留）
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Sparkles, AlignLeft } from "lucide-react";
 import { useAppStore } from "@/stores/app-store";
-import { assembleContext } from "@/lib/context-engine";
-import type { ContextPanelData } from "@/types";
-import { createSnapshot } from "@/lib/memory-updater";
+import { api } from "@/lib/api";
+import { updateMemory, activateNextChapterTerms, activateNextChapterCharacters, createSnapshot, rebaseMemory } from "@/lib/memory-updater";
 import { AiWritingDialog } from "@/components/editor/AiWritingDialog";
 import { AiWriteChapterDialog } from "@/components/editor/AiWriteChapterDialog";
-import { ContextPanel } from "./ContextPanel";
+import { renderMarkdown } from "@/lib/markdown";
+import { getJSONSync, setJSONSync } from "@/lib/storage";
+import { loadAllChapters } from "@/lib/chapter-store";
+import type { ChapterSummary, BeatCard } from "@/types";
+import { uuid } from "@/lib/uuid";
+import { createBackup } from "@/lib/backup";
+import { runQualityCheck } from "@/lib/quality-checker";
 import { ChapterTree } from "./ChapterTree";
 import { ChapterEditor } from "./ChapterEditor";
+import { ContextPanel } from "./ContextPanel";
 import { useAiWriting } from "./useAiWriting";
-import { finalizeChapter, type FinalizeResult } from "./finalizeChapter";
-import { renderMarkdown } from "@/lib/markdown";
-import { getJSONSync, setJSONSync, loadJSON } from "@/lib/storage";
-import { loadAllChapters, saveChapter, type Chapter } from "@/lib/chapter-store";
-import { uuid } from "@/lib/uuid";
+import { finalizeChapter } from "./finalizeChapter";
 
-type PlotChapter = Chapter;
+interface PlotChapter { id: string; volumeSegmentId: string; number: number; title: string; content: string; }
+interface PlotSegment { id: string; project_id: string; type: "bright" | "dark"; title: string; characters: string; location: string; time: string; event: string; }
 
-function loadSegments(pid: string) { return getJSONSync("plot-segments-" + pid, []); }
-function bumpSavedChapterVersion(pid: string, n: number) { try { const s = getJSONSync("novel-workbench-log-" + pid, {} as any); if (!s) return; s.chapterVersions = s.chapterVersions || {}; s.chapterVersions[String(n)] = (s.chapterVersions[String(n)] || 0) + 1; setJSONSync("novel-workbench-log-" + pid, s); } catch { /* ignore */ } }
+function loadChapters(pid: string): PlotChapter[] {
+    const ids: string[] = getJSONSync(`chapter-index-${pid}`, []);
+    if (ids.length === 0) { const old = loadAllChapters(pid); if (old && old.length > 0) { saveChapters(pid, old); return old; } return []; }
+    return ids.map(id => getJSONSync(`chapter-${pid}-${id}`, null as PlotChapter)).filter((ch): ch is PlotChapter => ch !== null);
+}
+function saveChapters(pid: string, chs: PlotChapter[]) { const ids: string[] = []; for (const ch of chs) { setJSONSync(`chapter-${pid}-${ch.id}`, ch); ids.push(ch.id); } setJSONSync(`chapter-index-${pid}`, ids); }
+function loadSegments(pid: string): PlotSegment[] { return getJSONSync(`plot-segments-${pid}`, []); }
+function loadEdges(pid: string): { source: string; target: string; sourceHandle?: string; targetHandle?: string }[] { return getJSONSync(`plot-edges-${pid}`, []); }
+function bumpSavedChapterVersion(projectId: string, chapterNumber: number) { try { const key = `novel-workbench-log-${projectId}`; const store = getJSONSync(key, {} as any); if (!store) return; store.chapterVersions = store.chapterVersions || {}; store.chapterVersions[String(chapterNumber)] = (store.chapterVersions[String(chapterNumber)] || 0) + 1; setJSONSync(key, store); } catch { } }
+const colLabel: Record<string, string> = { goal: "目标", conflict: "冲突", turn: "转折", hook: "钩子", reveal: "揭示" };
+
+function detectStaleAhead(projectId: string, currentChapterNumber: number): { count: number; chapters: string; fromChapter: number } {
+    try { const store = getJSONSync(`novel-workbench-log-${projectId}`, {} as any); const deps = store.dependencies || []; const stale = deps.filter((d: any) => { const dc = parseInt(d.dependsOnChapter); return dc <= currentChapterNumber && d.status === "stale"; }); if (stale.length === 0) return { count: 0, chapters: "", fromChapter: 0 }; const depsChs: number[] = []; const seen = new Set<number>(); for (const d of stale) { const n = parseInt(d.dependsOnChapter); if (!seen.has(n)) { seen.add(n); depsChs.push(n); } } depsChs.sort((a, b) => a - b); const first = depsChs[0]; const last = depsChs[depsChs.length - 1]; return { count: stale.length, chapters: first === last ? `第${first}章` : `第${first}-${last}章`, fromChapter: first }; } catch { return { count: 0, chapters: "", fromChapter: 0 }; }
+}
+
+const CN_NUMS = ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九', '十', '十一', '十二', '十三', '十四', '十五', '十六', '十七', '十八', '十九', '二十'];
+function migrateTitle(ch: PlotChapter): string { const ap = `第${ch.number}章`; if (ch.title.startsWith(ap)) return ch.title.slice(ap.length).replace(/^\s*/, ''); const cp = `第${CN_NUMS[ch.number] ?? ch.number}章`; if (ch.title.startsWith(cp)) return ch.title.slice(cp.length).replace(/^\s*/, ''); return ch.title; }
 
 export function WritingModule() {
-  const { currentProject, chapterSelectMode: selectMode, selectedChapterIds: storeSelIds, setChapterSelectMode, setSelectedChapterIds } = useAppStore();
-  const pid = currentProject?.id;
-  const [chapters, setChapters] = useState<PlotChapter[]>([]);
-  const [selectedChapterId, setSelectedChapterId] = useState<string | null>(null);
-  const [editingContent, setEditingContent] = useState("");
-  const [sidebarWidth, setSidebarWidth] = useState(loadJSON("writing-sidebar-width", 320));
-  const [ctxCollapsed, setCtxCollapsed] = useState(false);
-  const [fontSize, setFontSize] = useState<number>(getJSONSync("editor-font-size", 16));
-  const [isDirty, setIsDirty] = useState(false);
-  const savedContentRef = useRef(""); const editingContentRef = useRef(""); editingContentRef.current = editingContent;
-  const editorRef = useRef<HTMLDivElement>(null);
-  const timeoutIdsRef = useRef<ReturnType<typeof setTimeout>[]>([]);
-  useEffect(() => () => { timeoutIdsRef.current.forEach(clearTimeout); timeoutIdsRef.current = []; }, []);
-  // undo/redo
-  const undoStackRef = useRef<string[]>([]); const redoStackRef = useRef<string[]>([]);
-  const [canUndo, setCanUndo] = useState(false); const [canRedo, setCanRedo] = useState(false);
-  const pushUndo = useCallback(() => { const c = editingContentRef.current; if (undoStackRef.current[undoStackRef.current.length-1] === c) return; undoStackRef.current.push(c); if (undoStackRef.current.length > 50) undoStackRef.current.shift(); redoStackRef.current = []; setCanUndo(true); setCanRedo(false); }, []);
-  const handleUndo = useCallback(() => { if (undoStackRef.current.length === 0) return; const prev = undoStackRef.current.pop()!; redoStackRef.current.push(editingContentRef.current); setEditingContent(prev); const tid = setTimeout(() => { if (editorRef.current) editorRef.current.innerHTML = renderMarkdown(prev); }, 0); timeoutIdsRef.current.push(tid); setCanUndo(undoStackRef.current.length > 0); setCanRedo(true); }, []);
-  const handleRedo = useCallback(() => { if (redoStackRef.current.length === 0) return; const next = redoStackRef.current.pop()!; undoStackRef.current.push(editingContentRef.current); setEditingContent(next); const tid = setTimeout(() => { if (editorRef.current) editorRef.current.innerHTML = renderMarkdown(next); }, 0); timeoutIdsRef.current.push(tid); setCanRedo(redoStackRef.current.length > 0); setCanUndo(true); }, []);
-  useEffect(() => { const h = (e: KeyboardEvent) => { if ((e.ctrlKey||e.metaKey) && e.key === "z" && !e.shiftKey) { e.preventDefault(); handleUndo(); } if ((e.ctrlKey||e.metaKey) && (e.key === "y" || (e.key === "z" && e.shiftKey))) { e.preventDefault(); handleRedo(); } }; window.addEventListener("keydown", h); return () => window.removeEventListener("keydown", h); }, [handleUndo, handleRedo]);
-  // resize sidebar
-  const resizeRef = useRef(false);
-  const handleResizeStart = useCallback((e: React.MouseEvent) => { e.preventDefault(); resizeRef.current = true; const onMove = (ev: MouseEvent) => { if (!resizeRef.current) return; const w = Math.max(200, Math.min(500, ev.clientX)); setSidebarWidth(w); }; const onUp = () => { resizeRef.current = false; document.removeEventListener("mousemove", onMove); document.removeEventListener("mouseup", onUp); saveJSON("writing-sidebar-width", sidebarWidth); }; document.addEventListener("mousemove", onMove); document.addEventListener("mouseup", onUp); }, []);
+    const { currentProject, chapterSelectMode: selectMode, selectedChapterIds: storeSelIds, setChapterSelectMode, setSelectedChapterIds: storeSetSelIds, pendingInsertContent, insertTextBump } = useAppStore();
+    const [chapters, setChapters] = useState<PlotChapter[]>([]);
+    const [selectedChapterId, setSelectedChapterId] = useState<string | null>(null);
+    const [editingContent, setEditingContent] = useState("");
+    const [showAddDlg, setShowAddDlg] = useState<string | null>(null);
+    const [newChapterTitle, setNewChapterTitle] = useState("");
+    const [renamingId, setRenamingId] = useState<string | null>(null);
+    const [renameText, setRenameText] = useState("");
+    const nextChapterNumber = useMemo(() => chapters.reduce((m, c) => Math.max(m, c.number), 0) + 1, [chapters]);
+    const [aiDialog, setAiDialog] = useState<{ start: number; end: number; text: string; mouseX: number; mouseY: number } | null>(null);
+    const [staleInfo, setStaleInfo] = useState<{ count: number; chapters: string; fromChapter: number } | null>(null);
+    const [rebaseRunning, setRebaseRunning] = useState(false);
+    const [rebaseProgress, setRebaseProgress] = useState<{ current: number; total: number } | null>(null);
+    const selIdSet = new Set(storeSelIds);
+    const [volCollapsed, setVolCollapsed] = useState<Record<string, boolean>>({});
+    const editorRef = useRef<HTMLDivElement>(null);
+    const [fontSize, setFontSize] = useState<number>(getJSONSync("editor-font-size", 16));
+    const insertLockRef = useRef(false);
+    const _ignoreNextInput = useRef(false);
+    const editingContentRef = useRef(editingContent); editingContentRef.current = editingContent;
+    const timeoutIdsRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+    useEffect(() => () => { timeoutIdsRef.current.forEach(clearTimeout); timeoutIdsRef.current = []; }, []);
 
-  // load chapters
-  useEffect(() => { if (!pid) return; const chs = loadAllChapters(pid); setChapters(chs); if (!selectedChapterId && chs.length > 0) setSelectedChapterId(chs[0].id); }, [pid]);
-  const selectedChapter = useMemo(() => chapters.find(c => c.id === selectedChapterId), [chapters, selectedChapterId]);
-  const volumes = useMemo(() => { const segs = loadSegments(pid || ""); const volMap = new Map<string, { id: string; title: string }>(); for (const s of segs) { if (s.type === "bright") volMap.set(s.id, { id: s.id, title: s.title }); } return [...volMap.values()]; }, [pid]);
-  const volMap = useMemo(() => { const m = new Map<string, string>(); for (const v of volumes) m.set(v.id, v.title); return m; }, [volumes]);
-  const selectedVolume = useMemo(() => selectedChapter ? { title: volMap.get(selectedChapter.volumeSegmentId) || "" } : null, [selectedChapter, volMap]);
+    function syncEditorHTML(content: string) { if (editorRef.current) editorRef.current.innerHTML = renderMarkdown(content); }
+    const savedContentRef = useRef(""); const [isDirty, setIsDirty] = useState(false);
+    const [selectionRange, setSelectionRange] = useState<{ start: number; end: number } | null>(null);
+    const undoContentStackRef = useRef<string[]>([]); const redoContentStackRef = useRef<string[]>([]);
+    const [canUndo, setCanUndo] = useState(false); const [canRedo, setCanRedo] = useState(false);
 
-  // load chapter content
-  useEffect(() => { if (!selectedChapter) return; setEditingContent(selectedChapter.content || ""); savedContentRef.current = selectedChapter.content || ""; setIsDirty(false); const tid = setTimeout(() => { if (editorRef.current) editorRef.current.innerHTML = renderMarkdown(selectedChapter.content || ""); }, 0); timeoutIdsRef.current.push(tid); }, [selectedChapter?.id]);
+    function pushUndo() { const content = editingContentRef.current; const stack = undoContentStackRef.current; if (stack.length > 0 && stack[stack.length - 1] === content) return; stack.push(content); if (stack.length > 50) stack.shift(); redoContentStackRef.current = []; setCanUndo(true); setCanRedo(false); }
+    const handleUndo = useCallback(function () { const stack = undoContentStackRef.current; if (stack.length === 0) return; const prev = stack.pop()!; redoContentStackRef.current.push(editingContentRef.current); setEditingContent(prev); const tid = setTimeout(() => syncEditorHTML(prev), 0); timeoutIdsRef.current.push(tid); setCanUndo(stack.length > 0); setCanRedo(true); }, []);
+    const handleRedo = useCallback(function () { const stack = redoContentStackRef.current; if (stack.length === 0) return; const next = stack.pop()!; undoContentStackRef.current.push(editingContentRef.current); setEditingContent(next); const tid = setTimeout(() => syncEditorHTML(next), 0); timeoutIdsRef.current.push(tid); setCanRedo(stack.length > 0); setCanUndo(true); }, []);
+    useEffect(() => { const h = (e: KeyboardEvent) => { if ((e.ctrlKey || e.metaKey) && e.key === "z" && !e.shiftKey) { e.preventDefault(); handleUndo(); } if ((e.ctrlKey || e.metaKey) && (e.key === "y" || (e.key === "z" && e.shiftKey))) { e.preventDefault(); handleRedo(); } }; window.addEventListener("keydown", h); return () => window.removeEventListener("keydown", h); }, [handleUndo, handleRedo]);
 
-  // save
-  const saveContent = useCallback(() => { if (!pid || !selectedChapterId || !selectedChapter) return; pushUndo(); const c = { ...selectedChapter, content: editingContent }; const r = saveChapter(pid, c); if (!r.ok) { useAppStore.getState().setAutosaveStatus("⚠ 保存失败"); return; } setChapters(prev => prev.map(x => x.id === selectedChapterId ? c : x)); savedContentRef.current = editingContent; setIsDirty(false); bumpSavedChapterVersion(pid, selectedChapter.number); const tid = setTimeout(() => useAppStore.getState().setAutosaveStatus("已就绪"), 2000); timeoutIdsRef.current.push(tid); }, [pid, selectedChapterId, selectedChapter, editingContent, pushUndo]);
-  // autosave
-  useEffect(() => { if (!isDirty || !pid) return; const tid = setTimeout(saveContent, 30000); timeoutIdsRef.current.push(tid); return () => clearTimeout(tid); }, [isDirty, saveContent, pid]);
-  useEffect(() => { useAppStore.getState().setTriggerAutosave(saveContent); }, [saveContent]);
+    const [sidebarWidth, setSidebarWidth] = useState(() => { try { const projectId = currentProject?.id; if (projectId) { const saved = getJSONSync("writing-sidebar-width-" + projectId, null) as string | null; if (saved) return Math.max(200, Math.min(600, Number(saved))); } } catch { } return 320; });
+    const sidebarWidthRef = useRef(sidebarWidth); sidebarWidthRef.current = sidebarWidth; const resizingRef = useRef(false); const resizeStartRef = useRef({ startX: 0, startW: 0 });
+    const pid = currentProject?.id;
 
-  // AI writing hook
-  const { aiWriting, humanizing, polishing, aiError, rebaseRunning, rebaseProgress, staleInfo, writeDlg, setWriteDlg, handleAiWriteChapter, handleHumanize, handlePolish, handleRebase, handleReadToAI, setStaleInfo } = useAiWriting(pid, selectedChapter, editingContent, chapters, setEditingContent, setChapters, saveContent, pushUndo, (c) => { const tid = setTimeout(() => { if (editorRef.current) editorRef.current.innerHTML = renderMarkdown(c); }, 0); timeoutIdsRef.current.push(tid); });
-  // finalize
-  const [finalizeResult, setFinalizeResult] = useState<FinalizeResult | null>(null);
-  const handleFinalize = useCallback(async () => { if (!pid || !selectedChapter) return; await saveContent(); const res = await finalizeChapter(pid, selectedChapter); setFinalizeResult(res); }, [pid, selectedChapter, saveContent]);
+    const volumes = useMemo(() => {
+        if (!pid) return []; const segs = loadSegments(pid); const edges = loadEdges(pid); const bright = segs.filter(s => s.type === "bright"); const dark = segs.filter(s => s.type === "dark"); const brightMap = new Map(bright.map(b => [b.id, b])); const idMap = new Map(segs.map(s => [s.id, s])); const sortedIds = getSortedBrightIds(pid);
+        return sortedIds.map(id => { const b = brightMap.get(id)!; const connectedDarkIds = new Set<string>(); for (const e of edges) { const src = idMap.get(e.source); const tgt = idMap.get(e.target); if (src?.id === b.id && tgt?.type === "dark") connectedDarkIds.add(tgt.id); if (tgt?.id === b.id && src?.type === "dark") connectedDarkIds.add(src.id); } const darkSegs = dark.filter(d => connectedDarkIds.has(d.id)); const suffix = darkSegs.length > 0 ? "—" + darkSegs.map(d => d.title).join("、") : ""; return { id: b.id, title: b.title + suffix, brightTitle: b.title, darkTitles: darkSegs.map(d => d.title) }; });
+    }, [pid]);
 
-  // context panel
-  const [ctxData, setCtxData] = useState<ContextPanelData | null>(null);
-  useEffect(() => { if (!pid || !selectedChapterId) return; assembleContext(pid, selectedChapterId, "panel").then(d => setCtxData(d as ContextPanelData)); }, [pid, selectedChapterId]);
+    function getSortedBrightIds(projectId: string): string[] {
+        const segs = loadSegments(projectId); const edges = loadEdges(projectId); const bright = segs.filter(s => s.type === "bright"); if (!bright.length) return []; const bi = new Set(bright.map(b => b.id)); const idg = new Map<string, number>(); const adj = new Map<string, string[]>(); for (const b of bright) { idg.set(b.id, 0); adj.set(b.id, []); }
+        for (const e of edges) { if (bi.has(e.source) && bi.has(e.target)) { adj.get(e.source)?.push(e.target); idg.set(e.target, (idg.get(e.target) || 0) + 1); } }
+        const q: string[] = []; const sorted: string[] = []; for (const [id, deg] of idg) { if (deg === 0) q.push(id); }
+        while (q.length > 0) { q.sort((a, b) => bright.findIndex(x => x.id === a) - bright.findIndex(x => x.id === b)); const id = q.shift()!; sorted.push(id); for (const n of adj.get(id) || []) { const nd = (idg.get(n) || 1) - 1; idg.set(n, nd); if (nd === 0) q.push(n); } }
+        if (sorted.length < bright.length) { const ss = new Set(sorted); for (const b of bright) { if (!ss.has(b.id)) sorted.push(b.id); } }
+        return sorted;
+    }
 
-  // chapter operations
-  const handleAddChapter = useCallback((volId: string, title: string) => { if (!pid) return; const num = chapters.filter(c => c.volumeSegmentId === volId).length + 1; const ch: PlotChapter = { id: uuid(), volumeSegmentId: volId, number: num, title, content: "" }; saveChapter(pid, ch); setChapters(prev => [...prev, ch]); }, [pid, chapters]);
-  const handleDeleteChapter = useCallback((id: string) => { if (!pid) return; setChapters(prev => prev.filter(c => c.id !== id)); if (selectedChapterId === id) setSelectedChapterId(null); try { localStorage.removeItem("chapter-" + pid + "-" + id); } catch { /* ignore */ } }, [pid, selectedChapterId]);
+    useEffect(() => {
+        if (!pid) return; let loaded = loadChapters(pid); let changed = false;
+        const migrated = loaded.map(ch => { const n = migrateTitle(ch); if (n !== ch.title) { changed = true; return { ...ch, title: n }; } return ch; });
+        const segs = loadSegments(pid); const bright = segs.filter(s => s.type === "bright"); const vvi = new Set(bright.map(b => b.id));
+        const filtered = migrated.filter(ch => vvi.has(ch.volumeSegmentId)); if (filtered.length < migrated.length) changed = true;
+        const sortedBright = getSortedBrightIds(pid); const vo = new Map<string, number>(); sortedBright.forEach((id, i) => vo.set(id, i));
+        const sorted = [...filtered].sort((a, b) => { const oa = vo.get(a.volumeSegmentId) ?? 999; const ob = vo.get(b.volumeSegmentId) ?? 999; if (oa !== ob) return oa - ob; return a.number - b.number; });
+        const renumbered = sorted.map((ch, idx) => { const nn = idx + 1; if (ch.number !== nn) { changed = true; return { ...ch, number: nn }; } return ch; });
+        if (changed) saveChapters(pid, renumbered); setChapters(renumbered);
+    }, [pid]);
 
-  // autosave trigger register
-  useEffect(() => { useAppStore.getState().setTriggerAutosave(saveContent); }, [saveContent]);
+    const _skipNextChapterEffect = useRef(false);
+    useEffect(() => {
+        if (_skipNextChapterEffect.current) { _skipNextChapterEffect.current = false; return; }
+        if (selectedChapterId && pid) { const ch = chapters.find(c => c.id === selectedChapterId); if (ch) { const indent = "\u3000\u3000"; const raw = ch.content ?? ""; const content = raw.length === 0 ? indent : raw.startsWith(indent) ? raw : indent + raw; setEditingContent(content); savedContentRef.current = content; setIsDirty(false); setSelectionRange(null); const stale = detectStaleAhead(pid, ch.number); setStaleInfo(stale.count > 0 ? stale : null); setTimeout(() => syncEditorHTML(content), 0); loadCtx(pid, ch.number, selectedChapterId); } }
+    }, [selectedChapterId, chapters]);
 
-  if (!currentProject) return <div className="flex h-full items-center justify-center text-slate-400 text-sm">请先选择或创建项目</div>;
+    const [ctxSummaries, setCtxSummaries] = useState<ChapterSummary[]>([]);
+    const [ctxBeatCards, setCtxBeatCards] = useState<BeatCard[]>([]);
+    const [ctxCharacters, setCtxCharacters] = useState<{ name: string; status?: string }[]>([]);
+    const [ctxPrevContent, setCtxPrevContent] = useState<{ number: number; title: string; content: string } | null>(null);
+    const [ctxWorldRules, setCtxWorldRules] = useState<string[]>([]);
+    const [ctxStyleRedlines, setCtxStyleRedlines] = useState("");
+    const [ctxStyleNarrative, setCtxStyleNarrative] = useState("");
+    const [ctxStyleTone, setCtxStyleTone] = useState("");
+    const [ctxCollapsed, setCtxCollapsed] = useState(true);
+    let loadGen = 0;
+    async function loadCtx(projectId: string, chapterNumber: number, chapterId: string) {
+        const gen = ++loadGen;
+        try {
+            const [summaries, beatCards, styleGuide] = await Promise.all([api.getChapterSummaries(projectId).catch(() => [] as any[]), api.listBeatCards(chapterId).catch(() => [] as any[]), api.getStyleGuide(projectId).catch(() => null)]); if (gen !== loadGen) return; setCtxSummaries(summaries.filter((s: any) => s.chapter_number < chapterNumber && s.chapter_number >= chapterNumber - 5).sort((a: any, b: any) => a.chapter_number - b.chapter_number)); setCtxBeatCards(beatCards); if (styleGuide) { setCtxStyleRedlines((styleGuide as any).writing_rules || ""); setCtxStyleNarrative((styleGuide as any).narrative_style || ""); setCtxStyleTone((styleGuide as any).writing_tone || ""); } else { setCtxStyleRedlines(""); setCtxStyleNarrative(""); setCtxStyleTone(""); }
+            try { const store = getJSONSync(`novel-workbench-log-${projectId}`, {} as any); const states = store?.characterStates || []; if (gen === loadGen) setCtxCharacters(states.filter((s: any) => s.last_active_chapter >= chapterNumber - 10).map((s: any) => ({ name: s.character_name, status: s.current_status }))); } catch { }
+            try { if (gen === loadGen) { const allTerms = await api.listWorldTerms(projectId); const rules = allTerms.filter(t => t.term_type === "rule").map(t => `· ${t.title}：${t.one_liner || ""}`); setCtxWorldRules(rules.slice(0, 8)); } } catch { setCtxWorldRules([]); }
+            try { if (gen === loadGen) { const allChapters = loadAllChapters(projectId); const prev = allChapters.find((ch: any) => ch.number === chapterNumber - 1); if (prev?.content) { const clean = prev.content.replace(/<[^>]+>/g, '').trim(); if (clean) setCtxPrevContent({ number: prev.number, title: prev.title || "", content: clean.slice(-3000) }); else setCtxPrevContent(null); } else setCtxPrevContent(null); } } catch { setCtxPrevContent(null); }
+        } catch { }
+    }
 
-  return (
-    <div className="flex h-full">
-      <ChapterTree pid={pid!} volumes={volumes} chapters={chapters} selectedChapterId={selectedChapterId}
-        selectMode={selectMode} storeSelIds={storeSelIds} sidebarWidth={sidebarWidth}
-        onChapterSelect={setSelectedChapterId} onAddChapter={handleAddChapter} onDeleteChapter={handleDeleteChapter}
-        onRenameChapter={(id, t) => setChapters(prev => prev.map(c => c.id === id ? { ...c, title: t } : c))}
-        onSelectToggle={id => setSelectedChapterIds(storeSelIds.includes(id) ? storeSelIds.filter(x => x !== id) : [...storeSelIds, id])}
-        onSelectAllInVolume={vid => { const ids = chapters.filter(c => c.volumeSegmentId === vid).map(c => c.id); setSelectedChapterIds(ids); }}
-        onCancelSelect={() => { setChapterSelectMode(false); setSelectedChapterIds([]); }}
-        onReadToAI={handleReadToAI} onResizeStart={handleResizeStart} />
+    const prevBumpRef = useRef(0);
+    useEffect(() => { if (insertTextBump > prevBumpRef.current && pendingInsertContent && selectedChapterId) { const indent = "\u3000\u3000"; const lines = pendingInsertContent.split("\n").map((l: string) => l.trim() ? indent + l : l).join("\n"); setEditingContent(prev => { const inserted = prev ? prev + "\n\n" + lines : lines; setTimeout(() => syncEditorHTML(inserted), 0); return inserted; }); useAppStore.setState({ pendingInsertContent: "" }); } prevBumpRef.current = insertTextBump; }, [insertTextBump, selectedChapterId, pendingInsertContent]);
+    useEffect(() => { setIsDirty(editingContent !== savedContentRef.current); }, [editingContent]);
 
-      {selectedChapter && ctxData && (
-        <ContextPanel collapsed={ctxCollapsed} onToggle={setCtxCollapsed}
-          summaries={ctxData.summaries || []} beatCards={ctxData.beatCards || []} characters={ctxData.characters || []}
-          prevContent={ctxData.prevContent || ""} worldRules={ctxData.worldRules || ""}
-          styleRedlines={ctxData.styleRedlines || ""} styleNarrative={ctxData.styleNarrative || ""}
-          styleTone={ctxData.styleTone || ""} />
-      )}
+    const selectedChapter = chapters.find(c => c.id === selectedChapterId);
+    const selectedVolume = volumes.find(v => v.id === selectedChapter?.volumeSegmentId);
 
-      <ChapterEditor selectedChapter={selectedChapter} selectedVolume={selectedVolume}
-        editingContent={editingContent} isDirty={isDirty} aiWriting={aiWriting} humanizing={humanizing}
-        polishing={polishing} aiError={aiError} fontSize={fontSize}
-        staleInfo={staleInfo} rebaseRunning={rebaseRunning} rebaseProgress={rebaseProgress}
-        onContentChange={setEditingContent} onSave={saveContent} onUndo={handleUndo} onRedo={handleRedo}
-        onAiWrite={() => setWriteDlg({ wordCount: 2000, plotDirection: "" })}
-        onHumanize={handleHumanize} onPolish={handlePolish} onRebase={handleRebase} />
+    const saveContent = useCallback(() => { if (!pid || !selectedChapterId || !selectedChapter) return; pushUndo(); const nextChapters = chapters.map(c => c.id === selectedChapterId ? { ...c, content: editingContent } : c); try { _skipNextChapterEffect.current = true; saveChapters(pid, nextChapters); setChapters(nextChapters); savedContentRef.current = editingContent; setIsDirty(false); bumpSavedChapterVersion(pid, selectedChapter.number); useAppStore.getState().setAutosaveStatus("✅ 已保存"); const tid = setTimeout(() => useAppStore.getState().setAutosaveStatus("已就绪"), 2000); timeoutIdsRef.current.push(tid); } catch (e) { useAppStore.getState().setAutosaveStatus("⚠ 保存失败，请重试"); } }, [pid, selectedChapterId, selectedChapter, editingContent, chapters]);
+    const saveContentRef = useRef(saveContent); saveContentRef.current = saveContent;
+    useEffect(() => { useAppStore.getState().setTriggerAutosave(() => saveContentRef.current()); return () => useAppStore.getState().setTriggerAutosave(() => { }); }, []);
 
-      {writeDlg && <AiWriteChapterDialog wordCount={writeDlg.wordCount} plotDirection={writeDlg.plotDirection}
-        onConfirm={(wc, pd, refs) => { setWriteDlg(null); handleAiWriteChapter(wc, pd, refs); }}
-        onClose={() => setWriteDlg(null)} />}
+    const DRAFT_KEY = (p: string, c: string) => `draft-${p}-${c}`;
+    const [pendingDraft, setPendingDraft] = useState<{ content: string; savedAt: string } | null>(null);
+    useEffect(() => { if (!editingContent || !selectedChapterId || !pid) return; const t = setTimeout(() => { setJSONSync(DRAFT_KEY(pid, selectedChapterId), { content: editingContent, savedAt: new Date().toISOString() }); }, 2000); return () => clearTimeout(t); }, [editingContent, selectedChapterId, pid]);
+    useEffect(() => { if (selectedChapterId && pid) { const draft = getJSONSync(DRAFT_KEY(pid, selectedChapterId), null as { content: string; savedAt: string } | null); if (draft && draft.content !== savedContentRef.current) setPendingDraft(draft); else setPendingDraft(null); } }, [selectedChapterId, pid]);
 
-      {finalizeResult && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20" onClick={() => setFinalizeResult(null)}>
-          <div className="rounded-xl bg-white p-6 shadow-xl max-w-md" onClick={e => e.stopPropagation()}>
-            <h3 className="text-lg font-bold mb-3">{finalizeResult.ok ? "✅ 定稿完成" : "❌ 定稿失败"}</h3>
-            <div className="space-y-2 text-sm">
-              {finalizeResult.steps.map((s, i) => <div key={i} className="flex items-center gap-2">{s.ok ? "✅" : "❌"} {s.name}{s.error && <span className="text-xs text-red-500">: {s.error}</span>}</div>)}
-            </div>
-            <button onClick={() => setFinalizeResult(null)} className="mt-4 w-full rounded-lg bg-violet-600 py-2 text-sm text-white hover:bg-violet-700">关闭</button>
-          </div>
+    const addChapter = useCallback((volumeSegmentId: string) => { if (!pid) return; setChapters(prev => { const gm = prev.reduce((m, c) => Math.max(m, c.number), 0); const ch: PlotChapter = { id: uuid(), volumeSegmentId, number: gm + 1, title: newChapterTitle.trim(), content: "" }; const upd = [...prev, ch]; saveChapters(pid, upd); setShowAddDlg(null); setNewChapterTitle(""); setSelectedChapterId(ch.id); return upd; }); }, [pid, newChapterTitle]);
+    const deleteChapter = useCallback((chId: string) => { if (!pid) return; const ch = chapters.find(c => c.id === chId); if (!window.confirm(`确定删除「${ch?.title || chId}」？章节内容将永久丢失。`)) return; setChapters(prev => { const all = prev.filter(c => c.id !== chId); saveChapters(pid, all); return all; }); if (selectedChapterId === chId) { setSelectedChapterId(null); setEditingContent(""); } }, [pid, selectedChapterId, chapters]);
+    const renameChapter = useCallback((chId: string, newTitle: string) => { if (!pid) return; setChapters(prev => { const upd = prev.map(c => c.id === chId ? { ...c, title: newTitle } : c); saveChapters(pid, upd); return upd; }); }, [pid]);
+
+    // AI writing hook — all handlers extracted to useAiWriting.ts
+    const { aiWriting, aiError, humanizing, polishing, writeDlg, setWriteDlg, lastWriteParamsRef, handleAiWriteChapter, handleHumanize, handlePolish } = useAiWriting(pid, selectedChapter, editingContent, pushUndo, setEditingContent, (updater) => setChapters(prev => { const upd = updater(prev as any); saveChapters(pid!, upd as any); return upd as any; }), saveChapters, syncEditorHTML);
+
+    const handleRebase = useCallback(async () => { if (!pid) return; setRebaseRunning(true); setRebaseProgress(null); try { await rebaseMemory(pid, staleInfo?.fromChapter || 1, (c, t) => setRebaseProgress({ current: c, total: t })); setStaleInfo(null); useAppStore.getState().setAutosaveStatus("✅ 级联重跑完成"); if (selectedChapterId) { const ch = chapters.find(c => c.id === selectedChapterId); if (ch) loadCtx(pid, ch.number, selectedChapterId); } } catch { useAppStore.getState().setAutosaveStatus("⚠ 级联重跑失败"); } finally { setRebaseRunning(false); setRebaseProgress(null); } }, [pid, selectedChapterId, chapters, staleInfo]);
+
+    const handleReadToAI = useCallback(() => { if (!pid || storeSelIds.length === 0) return; const selSet = new Set(storeSelIds); const sel = chapters.filter(ch => selSet.has(ch.id)).sort((a, b) => a.number - b.number); const parts = sel.map(ch => { const body = (ch.content || '').replace(/<[^>]+>/g, '').trim(); return `【第${ch.number}章「${ch.title}」】\n${body ? body.slice(0, 3000) : "（暂无正文）"}`; }); useAppStore.getState().setEphemeralChapterContext(`===== 选取的章节正文 =====\n${parts.join("\n\n")}`); useAppStore.getState().setAutosaveStatus(`✅ 已读取 ${sel.length} 章到 AI 上下文`); }, [pid, chapters, storeSelIds]);
+
+    useEffect(() => { const h = (e: MouseEvent) => { if (!resizingRef.current) return; const dx = e.clientX - resizeStartRef.current.startX; setSidebarWidth(Math.max(200, Math.min(600, resizeStartRef.current.startW + dx))); }; const u = () => { if (!resizingRef.current) return; resizingRef.current = false; document.body.style.cursor = ''; document.body.style.userSelect = ''; if (pid) try { setJSONSync("writing-sidebar-width-" + pid, sidebarWidthRef.current); } catch { } }; document.addEventListener('mousemove', h); document.addEventListener('mouseup', u); return () => { document.removeEventListener('mousemove', h); document.removeEventListener('mouseup', u); }; }, [pid]);
+
+    if (!currentProject || !pid) return <div className="flex h-full items-center justify-center text-slate-400 text-sm">请先选择或创建项目</div>;
+
+    const handleFinalize = useCallback(async () => { if (!pid || !selectedChapter || !selectedChapterId) return; saveContent(); const result = await finalizeChapter(pid, selectedChapterId, selectedChapter.number, selectedChapter.title, editingContent); if (!result.ok) { const failedSteps = result.steps.filter(s => !s.ok); const msg = failedSteps.map(s => `· ${s.name}：${s.error || "失败"}`).join("\n"); useAppStore.getState().addChatMessage({ id: uuid(), role: "system", content: `⚠️ 定稿部分步骤失败：\n${msg}`, created_at: new Date().toISOString() }); } }, [pid, selectedChapter, selectedChapterId, editingContent, saveContent]);
+
+    return (
+        <div className="flex h-full">
+            <ChapterTree
+                sidebarWidth={sidebarWidth} selectMode={selectMode} storeSelIds={storeSelIds} selIdSet={selIdSet}
+                volumes={volumes} chapters={chapters} selectedChapterId={selectedChapterId}
+                volCollapsed={volCollapsed} showAddDlg={showAddDlg} newChapterTitle={newChapterTitle}
+                renameText={renameText} renamingId={renamingId} nextChapterNumber={nextChapterNumber}
+                onResizeStart={e => { e.preventDefault(); resizeStartRef.current = { startX: e.clientX, startW: sidebarWidth }; resizingRef.current = true; document.body.style.cursor = 'col-resize'; document.body.style.userSelect = 'none'; }}
+                onReadToAI={handleReadToAI} onCancelSelect={() => { setChapterSelectMode(false); storeSetSelIds([]); }}
+                onVolCollapseToggle={(colKey) => setVolCollapsed(p => ({ ...p, [colKey]: !(p[colKey]) }))}
+                onShowAddDlg={(volId) => { setShowAddDlg(volId); if (volId) setNewChapterTitle(""); }}
+                onNewChapterTitleChange={setNewChapterTitle} onChapterSelect={setSelectedChapterId}
+                onSelectAllInVolume={(vid, allSel) => { const vc = chapters.filter(c => c.volumeSegmentId === vid); const cur = new Set(storeSelIds); if (allSel) vc.forEach(c => cur.delete(c.id)); else vc.forEach(c => cur.add(c.id)); storeSetSelIds(Array.from(cur)); }}
+                onSelectToggle={(chId) => { const cur = new Set(storeSelIds); if (cur.has(chId)) cur.delete(chId); else cur.add(chId); storeSetSelIds(Array.from(cur)); }}
+                onStartRename={(chId, title) => { setRenameText(title); setRenamingId(chId); }} onRenameTextChange={setRenameText}
+                onCommitRename={(chId) => { renameChapter(chId, renameText); setRenamingId(null); }} onCancelRename={() => setRenamingId(null)}
+                onDeleteChapter={deleteChapter} onAddChapter={addChapter}
+            />
+            {selectedChapter && (
+                <ContextPanel collapsed={ctxCollapsed} onToggle={setCtxCollapsed}
+                    summaries={ctxSummaries} beatCards={ctxBeatCards} characters={ctxCharacters}
+                    prevContent={ctxPrevContent} worldRules={ctxWorldRules}
+                    styleRedlines={ctxStyleRedlines} styleNarrative={ctxStyleNarrative} styleTone={ctxStyleTone}
+                />
+            )}
+            <ChapterEditor
+                selectedChapter={selectedChapter} selectedVolume={selectedVolume}
+                editingContent={editingContent} isDirty={isDirty}
+                aiWriting={aiWriting} humanizing={humanizing} polishing={polishing} aiError={aiError}
+                fontSize={fontSize} staleInfo={staleInfo} rebaseRunning={rebaseRunning} rebaseProgress={rebaseProgress}
+                canUndo={canUndo} canRedo={canRedo} selectionRange={selectionRange}
+                lastWriteParams={lastWriteParamsRef.current} editorRef={editorRef}
+                onAiWrite={() => setWriteDlg({ wordCount: 2000, plotDirection: "" })}
+                onHumanize={handleHumanize} onPolish={handlePolish}
+                onUndo={handleUndo} onRedo={handleRedo} onSave={saveContent}
+                onFinalize={handleFinalize} onRebase={handleRebase}
+                onRetryWrite={() => { const p = lastWriteParamsRef.current!; setWriteDlg({ wordCount: p.wordCount, plotDirection: p.plotDirection }); }}
+                onAutoFormat={() => { const indent = "\u3000\u3000"; const lines = editingContent.split("\n"); const result: string[] = []; let prevBlank = false; for (const line of lines) { const t = line.trim(); if (!t) { if (!prevBlank) { result.push(""); prevBlank = true; } continue; } if (result.length > 0 && !prevBlank) result.push(""); prevBlank = false; if (/^[「『"“]/.test(t) || line.startsWith(indent)) result.push(line); else result.push(indent + t); } const formatted = result.join("\n"); setEditingContent(formatted); setTimeout(() => syncEditorHTML(formatted), 0); }}
+                onFontSizeChange={(n) => { setFontSize(n); setJSONSync("editor-font-size", n); }}
+                onEditorInput={e => { const text = (e.currentTarget as HTMLElement).innerText || ""; if (text !== editingContent) { if (!_ignoreNextInput.current) pushUndo(); _ignoreNextInput.current = false; setEditingContent(text); } }}
+                onEditorMouseUp={e => { if (insertLockRef.current) return; const sel = window.getSelection(); if (!sel || !sel.rangeCount) return; const st = sel.toString(); if (st) { const idx = editingContent.indexOf(st); if (idx >= 0) setAiDialog({ start: idx, end: idx + st.length, text: st, mouseX: e.clientX, mouseY: e.clientY }); } }}
+                onEditorKeyDown={e => { if ((e.ctrlKey || e.metaKey) && e.key === "z" && !e.shiftKey) { e.preventDefault(); handleUndo(); } if ((e.ctrlKey || e.metaKey) && (e.key === "y" || (e.key === "z" && e.shiftKey))) { e.preventDefault(); handleRedo(); } }}
+            />
+            {writeDlg && selectedChapter && (
+                <AiWriteChapterDialog chapterNumber={selectedChapter.number} chapterTitle={selectedChapter.title}
+                    onConfirm={(wordCount, plotDirection, refIds) => { handleAiWriteChapter(wordCount, plotDirection, refIds); }}
+                    onClose={() => setWriteDlg(null)} />
+            )}
+            {aiDialog && (
+                <AiWritingDialog selectedText={aiDialog.text} fullText={editingContent}
+                    selectionStart={aiDialog.start} selectionEnd={aiDialog.end}
+                    onClose={() => setAiDialog(null)}
+                    onReplace={(newText) => { undoContentStackRef.current.push(editingContent); setEditingContent(newText); setTimeout(() => syncEditorHTML(newText), 0); insertLockRef.current = true; setTimeout(() => { insertLockRef.current = false; }, 500); }} />
+            )}
         </div>
-      )}
-    </div>
-  );
+    );
 }
