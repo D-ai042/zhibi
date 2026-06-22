@@ -648,11 +648,19 @@ const SNAPSHOT_SHARD_KEY = (pid: string, snapId: string, shard: string) => `snap
 interface SnapshotMeta { id: string; label: string; timestamp: string; shards: string[] }
 
 /** 将 key 分类到分片 */
+const CHAR_KEY_PREFIXES = [
+    "characters-", "character-", "world-terms-", "relationship-",
+    "char-groups-", "ai-pending-chars-", "ai-pending-world-terms-",
+];
+
 function classifyKey(key: string, projectId: string): string {
     if (key.startsWith(`chapter-${projectId}-`) || key.startsWith("chapter-index-") ||
         key.startsWith("plot-chapters-") || key.startsWith("plot-segments-") || key.startsWith("plot-edges-")) {
         // T3 兼容：plot-chapters- 为旧 key，仅快照兼容时使用
         return "chapters";
+    }
+    if (CHAR_KEY_PREFIXES.some(p => key.startsWith(p))) {
+        return "characters";
     }
     return "misc";
 }
@@ -676,7 +684,7 @@ export async function createSnapshot(projectId: string, label: string): Promise<
         const keys = await getAllProjectKeys(projectId);
 
         // 按分片分类数据
-        const shardData: Record<string, Record<string, string>> = { chapters: {}, misc: {} };
+        const shardData: Record<string, Record<string, string>> = { chapters: {}, characters: {}, misc: {} };
         for (const key of keys) {
             const val = getSync(key);
             if (val !== null) {

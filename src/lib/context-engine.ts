@@ -409,7 +409,7 @@ export async function assembleContext(
     return buildProjectContext({ projectId, chapterId });
 }
 
-export async function buildProjectContext(input: ContextEngineInput): Promise<ContextEngineOutput> {
+async function buildProjectContext(input: ContextEngineInput): Promise<ContextEngineOutput> {
     const { projectId, chapterId } = input;
 
     // 直接从 plot-chapters（写作台卷章树）找当前章节，确保能找到

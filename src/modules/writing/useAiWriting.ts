@@ -2,7 +2,7 @@
 import { useCallback, useRef, useState } from "react";
 import { useAppStore } from "@/stores/app-store";
 import { api } from "@/lib/api";
-import { buildProjectContext } from "@/lib/context-engine";
+import { assembleContext } from "@/lib/context-engine";
 import { getJSONSync } from "@/lib/storage";
 import { loadAllChapters, type Chapter } from "@/lib/chapter-store";
 import { uuid } from "@/lib/uuid";
@@ -80,11 +80,7 @@ export function useAiWriting(
         timeoutIdsRef.current.push(safetyTimer);
 
         try {
-            const output = await buildProjectContext({
-                projectId: pid,
-                chapterId: selectedChapter.id,
-                userIntent: undefined,
-            });
+            const output = await assembleContext(pid, selectedChapter.id, "ai") as any;
 
             let structureHint = "";
             let inspContext = "";

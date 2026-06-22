@@ -514,8 +514,8 @@ function ContextEditor({ projectId }: { projectId: string }) {
         if (!selectedId) return;
         setLoading(true);
         try {
-            const { buildProjectContext } = await import("@/lib/context-engine");
-            const ctx = await buildProjectContext({ projectId, chapterId: selectedId });
+            const { assembleContext } = await import("@/lib/context-engine");
+            const ctx = await assembleContext(projectId, selectedId, "ai") as any;
             const ch = chapters.find(c => c.value === selectedId);
             // 加载用户自定义覆盖（如果有）
             const overrides = getJSONSync(`novel-workbench-bible-${projectId}`, null) as any;
