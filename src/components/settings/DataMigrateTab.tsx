@@ -24,6 +24,7 @@ export function DataMigrateTab() {
         setExporting(true); setMsg("");
         try {
             const collected = [];
+            // T8 例外：遍历 localStorage 枚举 key（loadJSON 需已知 key 名，无法替代）
             for (let i = 0; i < localStorage.length; i++) {
                 const key = localStorage.key(i);
                 if (!key) continue;

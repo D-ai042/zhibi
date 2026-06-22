@@ -55,6 +55,7 @@ export const createWritingStateSlice: StateCreator<AppStore, [], [], WritingStat
           if (msgs2 && projectIdMatches && (!bestData || msgs2.length > bestData.length)) bestData = msgs2;
         }
         const knownIds = new Set(projects.map(p => p.id));
+        // T8 例外：遍历 localStorage 枚举 key（加载聊天冷备份）
         for (let i = 0; i < localStorage.length; i++) {
           const key = localStorage.key(i);
           if (!key || !key.startsWith("novel-workbench-chat-") || key.startsWith("novel-workbench-chat-name:")) continue;

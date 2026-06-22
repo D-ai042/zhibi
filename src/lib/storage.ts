@@ -13,6 +13,10 @@
  *   - getJSONSync → loadJSON
  *   - setJSONSync → saveJSON（返回 void，内部自检失败并上报）
  *
+ * T1 偏差说明：导出函数共 6 个（标准≤5，偏差+1）。
+ *   getSync 被 backup/mock/migrate/memory 4 文件依赖用于读取原始字符串，
+ *   loadJSON（JSON.parse 后对象）无法替代，故保留 getSync 导出。
+ *
  * ★ EXE 模式下同步读写策略：
  *   - loadJSON / getSync：先读 localStorage，未命中则查内存缓存（启动时预暖自 SQLite）
  *   - saveJSON / setSync：同时写 localStorage + 异步 fire-and-forget 到 SQLite

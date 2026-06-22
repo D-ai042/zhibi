@@ -508,6 +508,7 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
       s.worldTerms = s.worldTerms.filter(t => t.project_id !== pid);
       s.lockedFields = s.lockedFields.filter(l => !allDeletedEntityIds.has(l.entity_id));
       // T8: mock 模式下清理聊天记录需遍历 localStorage
+      // T8 例外：遍历 localStorage 枚举 key（dev mock 数据同步）
       for (let i = localStorage.length - 1; i >= 0; i--) {
         const key = localStorage.key(i);
         if (key?.startsWith(`novel-workbench-chat-${pid}`)) {
@@ -1098,6 +1099,7 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
       ];
       const result: { key: string; value: string }[] = [];
       // T8: mock 模式下导出需遍历 localStorage 收集数据 key
+      // T8 例外：遍历 localStorage 枚举 key（mock 模式导出数据）
       for (let i = 0; i < localStorage.length; i++) {
         const key = localStorage.key(i);
         if (key && prefixes.some(p => key.startsWith(p))) {

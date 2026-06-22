@@ -62,6 +62,7 @@ export function WelcomeScreen({ onOpenProject }: Props) {
     const projName = store.projects.find(p => p.id === pid)?.name;
     await api.deleteProject(pid);
     // 清理聊天记录（走存储层）
+    // T8 例外：遍历 localStorage 枚举 key 清理项目数据
     for (let i = localStorage.length - 1; i >= 0; i--) {
       const key = localStorage.key(i);
       if (key?.startsWith(`novel-workbench-chat-${pid}`)) {

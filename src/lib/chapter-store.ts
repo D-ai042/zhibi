@@ -33,6 +33,7 @@ export function loadAllChapters(pid: string): Chapter[] {
         if (old && old.length > 0) {
             saveAllChapters(pid, old);
             // 迁移后删除旧聚合 key
+            // T3 兼容：迁移完成后删除旧 key；T8 例外：removeItem 为迁移专用
             try { localStorage.removeItem(`plot-chapters-${pid}`); } catch { /* ignore */ }
             return old;
         }

@@ -61,6 +61,7 @@ export async function migrateLocalStorageToSqlite(): Promise<void> {
     let count = 0;
 
     // T8: 数据迁移需遍历 localStorage 所有 key
+    // T8 例外：遍历 localStorage 枚举 key（数据迁移需枚举所有 key）
     for (let i = 0; i < localStorage.length; i++) {
         const key = localStorage.key(i);
         if (!key) continue;
