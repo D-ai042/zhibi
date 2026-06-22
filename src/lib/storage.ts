@@ -30,14 +30,14 @@ import { reportDiagnostic } from "./diagnostics";
 
 // ===== 清理无效 UTF-16 代理对（根源修复：存储层自动清洗） =====
 function cleanLoneSurrogates(value: unknown): unknown {
-  if (typeof value === 'string') return value.replace(/[\uD800-\uDFFF]/g, '�');
-  if (Array.isArray(value)) return value.map(cleanLoneSurrogates);
-  if (value && typeof value === 'object') {
-    const result: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(value)) result[k] = cleanLoneSurrogates(v);
-    return result;
-  }
-  return value;
+    if (typeof value === 'string') return value.replace(/[\uD800-\uDFFF]/g, '�');
+    if (Array.isArray(value)) return value.map(cleanLoneSurrogates);
+    if (value && typeof value === 'object') {
+        const result: Record<string, unknown> = {};
+        for (const [k, v] of Object.entries(value)) result[k] = cleanLoneSurrogates(v);
+        return result;
+    }
+    return value;
 }
 
 // ===== EXE 模式内存缓存（启动时从 SQLite 预暖） =====
