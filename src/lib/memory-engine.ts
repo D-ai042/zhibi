@@ -12,6 +12,7 @@ import type { ChatMessage, MemoryEntry, LongTermMemory } from "@/types";
 import { uuid } from "@/lib/uuid";
 import { api } from "./api";
 import { getJSONSync, setJSONSync } from "./storage";
+import { estimateTokens } from "./context-engine";
 
 // ===== 常量 =====
 
@@ -20,14 +21,6 @@ function longTermKey(pid: string) { return `novel-workbench-memory-long-${pid}`;
 function compressedIdxKey(pid: string) { return `novel-workbench-compressed-idx-${pid}`; }
 function loadJSONSync<T>(key: string, def: T): T { return getJSONSync(key, def); }
 function saveJSON(key: string, data: unknown) { setJSONSync(key, data); }
-function estimateTokens(text: string): number {
-    let t = 0;
-    for (const ch of text) {
-        if (/[\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]/.test(ch)) t += 2;
-        else t += 0.5;
-    }
-    return Math.ceil(t);
-}
 
 // ===== 关键词提取（仅用于检索匹配，不用硬编码分类表） =====
 

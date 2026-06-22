@@ -63,5 +63,8 @@ pub fn run() {
             commands::list_app_settings,
         ])
         .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .unwrap_or_else(|e| {
+            eprintln!("执笔启动失败: {}", e);
+            std::process::exit(1);
+        });
 }

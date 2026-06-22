@@ -2,61 +2,30 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Plus, Minus, Trash2, FileText, Sparkles, AlignLeft, Undo2, Redo2, CheckCircle } from "lucide-react";
 import { useAppStore } from "@/stores/app-store";
 import { api } from "@/lib/api";
-import { buildProjectContext } from "@/lib/context-engine";
+import { buildProjectContext, assembleContext } from "@/lib/context-engine";
+import type { ContextPanelData } from "@/types";
 import { updateMemory, activateNextChapterTerms, activateNextChapterCharacters } from "@/lib/memory-updater";
 import { createSnapshot, rebaseMemory } from "@/lib/memory-updater";
 import { AiWritingDialog } from "@/components/editor/AiWritingDialog";
 import { AiWriteChapterDialog } from "@/components/editor/AiWriteChapterDialog";
+import { ContextPanel } from "./ContextPanel";
+import { ChapterTree } from "./ChapterTree";
 import { renderMarkdown } from "@/lib/markdown";
-import { getJSONSync, setJSONSync } from "@/lib/storage";
-import type { ChapterSummary, BeatCard } from "@/types";
+import { getJSONSync, setJSONSync, loadJSON, saveJSON } from "@/lib/storage";
+import { loadAllChapters, saveChapter, type Chapter } from "@/lib/chapter-store";
+import type { ChapterSummary, BeatCard, RelationshipEdge } from "@/types";
 import { uuid } from "@/lib/uuid";
 import { createBackup } from "@/lib/backup";
 import { runQualityCheck } from "@/lib/quality-checker";
 
 // ===== 章节 =====
-interface PlotChapter {
-    id: string;
-    volumeSegmentId: string;
-    number: number;
-    title: string;
-    content: string;
-}
+type PlotChapter = Chapter;  // T3：统一使用 chapter-store 的 Chapter 类型
 
 interface PlotSegment {
     id: string; project_id: string; type: "bright" | "dark";
     title: string; characters: string; location: string; time: string; event: string;
 }
 
-function loadChapters(pid: string): PlotChapter[] {
-    // 从索引读取所有章节 ID，然后逐章加载（SYS-2：每章独立存储，避免单 key 全丢）
-    const ids: string[] = getJSONSync(`chapter-index-${pid}`, []);
-    if (ids.length === 0) {
-        // 兼容旧格式：尝试从单 key 读取，自动迁移
-        const old = getJSONSync(`plot-chapters-${pid}`, null as PlotChapter[] | null);
-        if (old && old.length > 0) {
-            saveChapters(pid, old); // 触发迁移到分片存储
-            return old;
-        }
-        return [];
-    }
-    const chapters: PlotChapter[] = [];
-    for (const id of ids) {
-        const ch = getJSONSync(`chapter-${pid}-${id}`, null as PlotChapter | null);
-        if (ch) chapters.push(ch);
-    }
-    return chapters;
-}
-function saveChapters(pid: string, chs: PlotChapter[]) {
-    // 每章独立存储 + 维护索引 + 同步聚合缓存供其他模块读取
-    const ids: string[] = [];
-    for (const ch of chs) {
-        setJSONSync(`chapter-${pid}-${ch.id}`, ch);
-        ids.push(ch.id);
-    }
-    setJSONSync(`chapter-index-${pid}`, ids);
-    setJSONSync(`plot-chapters-${pid}`, chs);
-}
 function loadSegments(pid: string): PlotSegment[] { return getJSONSync(`plot-segments-${pid}`, []); }
 function loadEdges(pid: string): { source: string; target: string; sourceHandle?: string; targetHandle?: string }[] { return getJSONSync(`plot-edges-${pid}`, []); }
 
@@ -64,7 +33,7 @@ function loadEdges(pid: string): { source: string; target: string; sourceHandle?
 function bumpSavedChapterVersion(projectId: string, chapterNumber: number) {
     try {
         const key = `novel-workbench-log-${projectId}`;
-        const store = getJSONSync(key, {} as any);
+        const store = getJSONSync(key, {} as Record<string, unknown>);
         if (!store) return;
         store.chapterVersions = store.chapterVersions || {};
         store.chapterVersions[String(chapterNumber)] = (store.chapterVersions[String(chapterNumber)] || 0) + 1;
@@ -72,15 +41,10 @@ function bumpSavedChapterVersion(projectId: string, chapterNumber: number) {
     } catch { /* ignore */ }
 }
 
-/** 节拍卡片列类型标签 */
-const colLabel: Record<string, string> = {
-    goal: "目标", conflict: "冲突", turn: "转折", hook: "钩子", reveal: "揭示",
-};
-
 /** 检测有哪些后续章节的摘要基于旧版本 */
 function detectStaleAhead(projectId: string, currentChapterNumber: number): { count: number; chapters: string; fromChapter: number } {
     try {
-        const store = getJSONSync(`novel-workbench-log-${projectId}`, {} as any);
+        const store = getJSONSync(`novel-workbench-log-${projectId}`, {} as Record<string, unknown>);
         const deps = store.dependencies || [];
         // 找所有依赖了当前章节及之前章节的 stale 记录
         const stale = deps.filter((d: any) => {
@@ -115,7 +79,7 @@ async function aiExtractNewCharacters(projectId: string, chapterNumber: number, 
         try {
             const [allChars, allEdges] = await Promise.all([
                 api.listCharacters(projectId),
-                api.listRelationshipEdges(projectId).catch(() => [] as any[]),
+                api.listRelationshipEdges(projectId).catch(() => [] as RelationshipEdge[]),
             ]);
             knownNames = allChars.map(c => c.name).join("、");
             if (allEdges.length > 0) {
@@ -346,7 +310,7 @@ export function WritingModule() {
         try {
             const projectId = currentProject?.id;
             if (projectId) {
-                const saved = localStorage.getItem("writing-sidebar-width-" + projectId); // UI prefs, small, keep in localStorage
+                const saved = loadJSON(`writing-sidebar-width-${projectId}`, 0); // UI prefs
                 if (saved) return Math.max(200, Math.min(600, Number(saved)));
             }
         } catch { /* ignore */ }
@@ -459,7 +423,7 @@ export function WritingModule() {
     // ===== 加载章节（含旧数据迁移） =====
     useEffect(() => {
         if (!pid) return;
-        let loaded = loadChapters(pid);
+        let loaded = loadAllChapters(pid);
         let changed = false;
 
         const migrated = loaded.map(ch => {
@@ -498,7 +462,7 @@ export function WritingModule() {
             return ch;
         });
 
-        if (changed) saveChapters(pid, renumbered);
+        if (changed) saveAllChapters(pid, renumbered);
         setChapters(renumbered);
     }, [pid]);
 
@@ -527,7 +491,7 @@ export function WritingModule() {
                 // 章节切换后同步渲染 HTML 到编辑器
                 setTimeout(() => syncEditorHTML(content), 0);
                 // 加载上下文面板数据
-                loadContextPanelData(pid, ch.number, selectedChapterId);
+                loadContextPanel(selectedChapterId);
             }
         }
     }, [selectedChapterId, chapters]);
@@ -544,54 +508,20 @@ export function WritingModule() {
     const [ctxCollapsed, setCtxCollapsed] = useState(true);
 
     let loadGen = 0;
-    async function loadContextPanelData(projectId: string, chapterNumber: number, chapterId: string) {
+    /** 加载上下文面板数据（直接调 assembleContext，无包装层） */
+    async function loadContextPanel(chapterId: string) {
         const gen = ++loadGen;
         try {
-            const [summaries, beatCards, styleGuide] = await Promise.all([
-                api.getChapterSummaries(projectId).catch(() => [] as ChapterSummary[]),
-                api.listBeatCards(chapterId).catch(() => [] as BeatCard[]),
-                api.getStyleGuide(projectId).catch(() => null as import('@/types').StyleGuide | null),
-            ]);
+            const data = await assembleContext(pid!, chapterId, "panel") as ContextPanelData;
             if (gen !== loadGen) return;
-            setCtxSummaries(summaries.filter(s => s.chapter_number < chapterNumber && s.chapter_number >= chapterNumber - 5).sort((a, b) => a.chapter_number - b.chapter_number));
-            setCtxBeatCards(beatCards);
-            if (styleGuide) {
-                setCtxStyleRedlines(styleGuide.writing_rules || "");
-                setCtxStyleNarrative(styleGuide.narrative_style || "");
-                setCtxStyleTone(styleGuide.writing_tone || "");
-            } else {
-                setCtxStyleRedlines(""); setCtxStyleNarrative(""); setCtxStyleTone("");
-            }
-            try {
-                const store = getJSONSync(`novel-workbench-log-${projectId}`, {} as any);
-                if (store) {
-                    const states = store.characterStates || [];
-                    const active = states.filter((s: any) => s.last_active_chapter >= chapterNumber - 10);
-                    if (gen !== loadGen) return;
-                    setCtxCharacters(active.map((s: any) => ({ name: s.character_name, status: s.current_status })));
-                }
-            } catch { /* ignore */ }
-            try {
-                const allTerms = await api.listWorldTerms(projectId);
-                if (gen !== loadGen) return;
-                const rules = allTerms.filter(t => t.term_type === "rule").map(t => `· ${t.title}：${t.one_liner || ""}`);
-                setCtxWorldRules(rules.slice(0, 8));
-            } catch { setCtxWorldRules([]); }
-            try {
-                if (gen !== loadGen) return;
-                const allChapters = getJSONSync(`plot-chapters-${projectId}`, [] as any[]);
-                const prev = allChapters.find((ch: any) => ch.number === chapterNumber - 1);
-                if (prev && prev.content) {
-                    const clean = prev.content.replace(/<[^>]+>/g, '').trim();
-                    if (clean) {
-                        setCtxPrevContent({ number: prev.number, title: prev.title || "", content: clean.slice(-3000) });
-                    } else {
-                        setCtxPrevContent(null);
-                    }
-                } else {
-                    setCtxPrevContent(null);
-                }
-            } catch { setCtxPrevContent(null); }
+            setCtxSummaries(data.summaries);
+            setCtxBeatCards(data.beatCards);
+            setCtxStyleRedlines(data.styleRedlines);
+            setCtxStyleNarrative(data.styleNarrative);
+            setCtxStyleTone(data.styleTone);
+            setCtxCharacters(data.characters);
+            setCtxWorldRules(data.worldRules);
+            setCtxPrevContent(data.prevContent);
         } catch { /* ignore */ }
     }
 
@@ -623,17 +553,23 @@ export function WritingModule() {
     const selectedChapter = chapters.find(c => c.id === selectedChapterId);
     const selectedVolume = volumes.find(v => v.id === selectedChapter?.volumeSegmentId);
 
-    // ===== 保存内容（先写存储，再更新 state — SYS-4 原子性修复） =====
+    // ===== 保存内容（先写存储，再更新 state — SYS-4 原子性修复 / T3 增量保存） =====
     const saveContent = useCallback(() => {
         if (!pid || !selectedChapterId || !selectedChapter) return;
         pushUndo();
-        const nextChapters = chapters.map(c =>
-            c.id === selectedChapterId ? { ...c, content: editingContent } : c
-        );
+        const updatedChapter = { ...selectedChapter, content: editingContent };
         try {
-            _skipNextChapterEffect.current = true; // 防止 setChapters 触发 effect 重置编辑器
-            saveChapters(pid, nextChapters);  // 先写存储
-            setChapters(nextChapters);         // 成功后更新 state
+            _skipNextChapterEffect.current = true;
+            const result = saveChapter(pid, updatedChapter);  // T3: 增量，只写当前章
+            if (!result.ok) {
+                useAppStore.getState().setAutosaveStatus("⚠ 保存失败");
+                console.error("saveContent failed:", result.error);
+                return;
+            }
+            const nextChapters = chapters.map(c =>
+                c.id === selectedChapterId ? updatedChapter : c
+            );
+            setChapters(nextChapters);
             savedContentRef.current = editingContent;
             setIsDirty(false);
             bumpSavedChapterVersion(pid, selectedChapter.number);
@@ -692,7 +628,7 @@ export function WritingModule() {
                 content: "",
             };
             const updated = [...prev, ch];
-            saveChapters(pid, updated);
+            saveAllChapters(pid, updated);
             setShowAddDlg(null);
             setNewChapterTitle("");
             setSelectedChapterId(ch.id);
@@ -707,7 +643,7 @@ export function WritingModule() {
         if (!window.confirm(`确定删除「${ch?.title || chId}」？章节内容将永久丢失。`)) return;
         setChapters(prev => {
             const all = prev.filter(c => c.id !== chId);
-            saveChapters(pid, all);
+            saveAllChapters(pid, all);
             return all;
         });
         if (selectedChapterId === chId) { setSelectedChapterId(null); setEditingContent(""); }
@@ -718,7 +654,7 @@ export function WritingModule() {
         if (!pid) return;
         setChapters(prev => {
             const upd = prev.map(c => c.id === chId ? { ...c, title: newTitle } : c);
-            saveChapters(pid, upd);
+            saveAllChapters(pid, upd);
             return upd;
         });
     }, [pid]);
@@ -812,7 +748,7 @@ export function WritingModule() {
                 _skipNextChapterEffect.current = true;
                 setChapters(prev => {
                     const upd = prev.map(c => c.id === selectedChapter.id ? { ...c, content: safeContent } : c);
-                    saveChapters(pid, upd);
+                    saveAllChapters(pid, upd);
                     return upd;
                 });
                 savedContentRef.current = safeContent;
@@ -858,7 +794,7 @@ export function WritingModule() {
                 _skipNextChapterEffect.current = true;
                 setChapters(prev => {
                     const upd = prev.map(c => c.id === selectedChapter.id ? { ...c, content: safeContent } : c);
-                    saveChapters(pid, upd);
+                    saveAllChapters(pid, upd);
                     return upd;
                 });
                 savedContentRef.current = safeContent;
@@ -916,7 +852,7 @@ export function WritingModule() {
                 // 灵感参考（放在 user_message）
                 const inspIds = refIds.filter(r => r.startsWith("insp:")).map(r => r.slice(5));
                 if (inspIds.length > 0) {
-                    const allCards = getJSONSync(`inspiration-cards-${pid}`, [] as any[]);
+                    const allCards = getJSONSync(`inspiration-cards-${pid}`, [] as { id: string; title: string; content: string }[]);
                     const selected = allCards.filter((c: any) => inspIds.includes(c.id));
                     if (selected.length > 0) {
                         inspContext = "\n【灵感参考】\n";
@@ -928,7 +864,7 @@ export function WritingModule() {
                 // 已结构分析的素材注入 system_hint（最高优先级）
                 const matIds = refIds.filter(r => r.startsWith("mat:")).map(r => r.slice(4));
                 if (matIds.length > 0) {
-                    const allItems = getJSONSync(`material-items-${pid}`, [] as any[]);
+                    const allItems = getJSONSync(`material-items-${pid}`, [] as { id: string; name: string; content: string; type: string; structureAnalysis?: string }[]);
                     const selected = allItems.filter((i: any) => matIds.includes(i.id) && (i.type === "text" || i.content));
                     if (selected.length > 0) {
                         const analyzed = selected.filter((i: any) => i.structureAnalysis);
@@ -997,7 +933,7 @@ export function WritingModule() {
                 _skipNextChapterEffect.current = true;
                 setChapters(prev => {
                     const upd = prev.map(c => c.id === selectedChapter.id ? { ...c, content: safeContent } : c);
-                    saveChapters(pid, upd);
+                    saveAllChapters(pid, upd);
                     return upd;
                 });
                 // 定稿动作（摘要/快照/新角色识别/词条激活/角色预测）由用户手动点击「定稿」按钮触发
@@ -1033,7 +969,7 @@ export function WritingModule() {
             // 重新加载上下文面板
             if (selectedChapterId) {
                 const ch = chapters.find(c => c.id === selectedChapterId);
-                if (ch) loadContextPanelData(pid, ch.number, selectedChapterId);
+                if (ch) loadContextPanel(selectedChapterId);
             }
         } catch (e) {
             console.error("rebaseMemory failed:", e);
@@ -1073,7 +1009,7 @@ export function WritingModule() {
             resizingRef.current = false;
             document.body.style.cursor = '';
             document.body.style.userSelect = '';
-            if (pid) try { localStorage.setItem("writing-sidebar-width-" + pid, String(sidebarWidthRef.current)); } catch { /* quota full */ }
+            if (pid) saveJSON(`writing-sidebar-width-${pid}`, sidebarWidthRef.current);
         };
         document.addEventListener('mousemove', handler);
         document.addEventListener('mouseup', up);
@@ -1231,121 +1167,20 @@ export function WritingModule() {
                 )}
             </aside>
 
-            {/* 中间：上下文预览面板（可折叠，类似右侧抽屉） */}
+            {/* 中间：上下文预览面板（T6 拆分 → ContextPanel） */}
             {selectedChapter && (
-                <>
-                    {/* 折叠状态的窄条 + 展开按钮 */}
-                    {ctxCollapsed ? (
-                        <button
-                            onClick={() => setCtxCollapsed(false)}
-                            className="flex w-6 shrink-0 items-center justify-center border-r bg-white text-xs text-slate-400 hover:text-slate-600 hover:bg-slate-50"
-                            title="展开上下文面板"
-                        >
-                            <span className="[writing-mode:vertical-lr] tracking-widest">📋上下文</span>
-                        </button>
-                    ) : (
-                        <aside className="w-[280px] shrink-0 overflow-y-auto border-r bg-white p-3 text-xs">
-                            <div className="mb-2 flex items-center justify-between">
-                                <h3 className="text-sm font-semibold text-slate-700">📋 上下文引擎</h3>
-                                <button
-                                    onClick={() => setCtxCollapsed(true)}
-                                    className="rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
-                                    title="折叠上下文面板"
-                                >
-                                    <span className="text-xs">✕</span>
-                                </button>
-                            </div>
-
-                            {/* ═══════ 开头（注意力峰值）═══════ */}
-                            {/* P4 · 前一章正文 */}
-                            {ctxPrevContent && (
-                                <div className="mb-3">
-                                    <p className="mb-1 text-[10px] font-bold uppercase tracking-wider text-emerald-600">P4 · 前一章正文</p>
-                                    <div className="rounded border border-emerald-200 bg-emerald-50/40 px-2 py-1.5 max-h-52 overflow-y-auto">
-                                        <p className="mb-1 text-[10px] font-semibold text-emerald-700">第{ctxPrevContent.number}章 {ctxPrevContent.title}</p>
-                                        <p className="text-[10px] leading-relaxed text-slate-600 whitespace-pre-wrap">{ctxPrevContent.content.slice(0, 2000)}</p>
-                                        {ctxPrevContent.content.length > 2000 && (
-                                            <p className="mt-1 text-[9px] text-slate-400 italic">...后段 {ctxPrevContent.content.length} 字，预览前 2000 字</p>
-                                        )}
-                                    </div>
-                                </div>
-                            )}
-
-                            {/* ═══════ 中间（约束区）═══════ */}
-                            {/* P0 · 世界铁则 */}
-                            {ctxWorldRules.length > 0 && (
-                                <div className="mb-3">
-                                    <p className="mb-1 text-[10px] font-bold uppercase tracking-wider text-rose-600">P0 · 世界铁则</p>
-                                    <div className="rounded border border-rose-100 bg-rose-50/30 px-2 py-1.5">
-                                        {ctxWorldRules.map((r, i) => (
-                                            <p key={i} className="text-[10px] leading-relaxed text-rose-700">{r}</p>
-                                        ))}
-                                    </div>
-                                </div>
-                            )}
-
-                            {/* P3 · 角色池 */}
-                            {ctxCharacters.length > 0 && (
-                                <div className="mb-3">
-                                    <p className="mb-1 text-[10px] font-bold uppercase tracking-wider text-blue-600">P3 · 活跃角色</p>
-                                    <div className="flex flex-wrap gap-1">
-                                        {ctxCharacters.slice(0, 12).map(c => (
-                                            <span key={c.name} className="rounded-full bg-blue-50 px-2 py-0.5 text-[10px] text-blue-700">
-                                                {c.name}{c.status ? `·${c.status}` : ""}
-                                            </span>
-                                        ))}
-                                    </div>
-                                </div>
-                            )}
-
-                            {/* P2 · 风格指南（最软，可裁）*/}
-                            {(ctxStyleRedlines || ctxStyleNarrative || ctxStyleTone) && (
-                                <div className="mb-3">
-                                    <p className="mb-1 text-[10px] font-bold uppercase tracking-wider text-slate-500">P2 · 风格指南</p>
-                                    <div className="rounded border border-slate-100 bg-slate-50 px-2 py-1.5 space-y-1">
-                                        {ctxStyleRedlines && <p className="text-[10px] text-slate-600"><span className="font-semibold text-red-500">红线</span> {ctxStyleRedlines.slice(0, 80)}</p>}
-                                        {ctxStyleNarrative && <p className="text-[10px] text-slate-500"><span className="font-semibold">叙述</span> {ctxStyleNarrative.slice(0, 80)}</p>}
-                                        {ctxStyleTone && <p className="text-[10px] text-slate-400"><span className="font-semibold">基调</span> {ctxStyleTone.slice(0, 80)}</p>}
-                                    </div>
-                                </div>
-                            )}
-
-                            {/* ═══════ 结尾（执行区）═══════ */}
-                            {/* P1 · 细纲节拍 */}
-                            {ctxBeatCards.length > 0 && (
-                                <div className="mb-3">
-                                    <p className="mb-1 text-[10px] font-bold uppercase tracking-wider text-violet-600">P1 · 细纲节拍</p>
-                                    <div className="space-y-1">
-                                        {ctxBeatCards.map(b => (
-                                            <div key={b.id} className="rounded border border-violet-100 bg-violet-50/50 px-2 py-1 text-[10px] text-slate-600">
-                                                <span className="font-medium text-violet-700">[{colLabel[b.column_type] || b.column_type}]</span> {b.content}
-                                            </div>
-                                        ))}
-                                    </div>
-                                </div>
-                            )}
-                            {/* P1 · 前情摘要 */}
-                            {ctxSummaries.length > 0 && (
-                                <div className="mb-3">
-                                    <p className="mb-1 text-[10px] font-bold uppercase tracking-wider text-amber-600">P1 · 前情摘要</p>
-                                    <div className="space-y-1.5">
-                                        {ctxSummaries.map(s => (
-                                            <div key={s.chapter_number} className="rounded border border-amber-100 bg-amber-50/30 px-2 py-1.5">
-                                                <p className="mb-0.5 text-[10px] font-semibold text-amber-800">第{s.chapter_number}章 {s.chapter_title}</p>
-                                                <p className="text-[10px] leading-relaxed text-slate-500">{s.summary?.slice(0, 80)}</p>
-                                            </div>
-                                        ))}
-                                    </div>
-                                </div>
-                            )}
-
-                            {/* 空状态 */}
-                            {ctxBeatCards.length === 0 && ctxSummaries.length === 0 && ctxCharacters.length === 0 && !ctxPrevContent && ctxWorldRules.length === 0 && (
-                                <p className="text-[10px] text-slate-400">暂无上下文数据，开始写作后自动生成</p>
-                            )}
-                        </aside>
-                    )}
-                </>
+                <ContextPanel
+                    collapsed={ctxCollapsed}
+                    onToggle={setCtxCollapsed}
+                    summaries={ctxSummaries}
+                    beatCards={ctxBeatCards}
+                    characters={ctxCharacters}
+                    prevContent={ctxPrevContent}
+                    worldRules={ctxWorldRules}
+                    styleRedlines={ctxStyleRedlines}
+                    styleNarrative={ctxStyleNarrative}
+                    styleTone={ctxStyleTone}
+                />
             )}
 
             {/* 右侧：正文编辑器 */}
@@ -1467,7 +1302,7 @@ export function WritingModule() {
                                         useAppStore.getState().setAutosaveStatus("正在分析词条...");
                                         const allWorldTerms = await api.listWorldTerms(pid);
                                         const segs = getJSONSync(`plot-segments-${pid}`, []);
-                                        const chaps = getJSONSync(`plot-chapters-${pid}`, []);
+                                        const chaps = loadAllChapters(pid);
                                         const logStore = getJSONSync(`novel-workbench-log-${pid}`, {});
                                         const recentSummaries = logStore.summaries || [];
                                         await activateNextChapterTerms(
@@ -1518,12 +1353,12 @@ export function WritingModule() {
                                     }
                                     // 创建备份（SYS-5）
                                     try {
-                                        createBackup(pid);
+                                        await createBackup(pid);
                                     } catch (e) {
                                         console.error("备份创建失败:", e);
                                     }
                                     // 创建快照标记定稿
-                                    createSnapshot(pid, `第${finalizeChapterNum}章「${finalizeChapterTitle}」定稿`);
+                                    await createSnapshot(pid, `第${finalizeChapterNum}章「${finalizeChapterTitle}」定稿`);
                                     // AI 识别新角色
                                     aiExtractNewCharacters(pid, finalizeChapterNum, finalizeContent);
                                     // 更新项目阶段
@@ -1537,7 +1372,7 @@ export function WritingModule() {
                                             }
                                             // 检查是否所有章节都已定稿（有内容）
                                             if (newStage === "writing") {
-                                                const allChs = loadChapters(pid);
+                                                const allChs = loadAllChapters(pid);
                                                 const allWritten = allChs.length > 0 && allChs.every(c => c.content?.trim());
                                                 if (allWritten) newStage = "completed";
                                             }
@@ -1601,7 +1436,7 @@ export function WritingModule() {
                         <div className="relative flex-1 min-h-0">
                             <>
                                 <div
-                                    ref={editorRef as any}
+                                    ref={editorRef as React.RefObject<HTMLDivElement>}
                                     className="absolute inset-0 overflow-y-auto bg-stone-50 p-6 font-serif font-medium leading-relaxed text-stone-800 outline-none cursor-text"
                                     style={{ fontSize }}
                                     contentEditable

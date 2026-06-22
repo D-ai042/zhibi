@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use tauri::State;
 use uuid::Uuid;
+use log;
 
 fn now() -> String {
     Utc::now().to_rfc3339()
@@ -15,6 +16,18 @@ fn now() -> String {
 
 fn new_id() -> String {
     Uuid::new_v4().to_string()
+}
+
+fn collect_rows_or_warn<I>(ctx: &str, rows: I) -> Vec<serde_json::Value>
+where I: Iterator<Item = rusqlite::Result<serde_json::Value>>
+{
+    let mut errs: Vec<String> = Vec::new();
+    let vals: Vec<_> = rows.enumerate().filter_map(|(i, r)| match r {
+        Ok(v) => Some(v),
+        Err(e) => { errs.push(format!("row {}: {}", i, e)); None }
+    }).collect();
+    if !errs.is_empty() { log::warn!("[{}] {} rows: {:?}", ctx, errs.len(), errs); }
+    vals
 }
 
 fn config_path() -> PathBuf {
@@ -35,22 +48,32 @@ fn parse_stt_config(v: &serde_json::Value) -> SttConfig {
 
 /// 将旧扁平 STT 格式迁移为新多 provider 格式
 fn migrate_old_stt(v: &serde_json::Value) -> SttConfig {
-    let provider = v["provider"].as_str()
+    let provider = v["provider"]
+        .as_str()
         .or(v["activeProvider"].as_str())
         .unwrap_or("openai");
     let api_key = v["api_key"].as_str().or(v["apiKey"].as_str()).unwrap_or("");
-    let secret_key = v["secret_key"].as_str().or(v["secretKey"].as_str()).unwrap_or("");
-    let base_url = v["base_url"].as_str().or(v["baseUrl"].as_str()).unwrap_or("");
+    let secret_key = v["secret_key"]
+        .as_str()
+        .or(v["secretKey"].as_str())
+        .unwrap_or("");
+    let base_url = v["base_url"]
+        .as_str()
+        .or(v["baseUrl"].as_str())
+        .unwrap_or("");
     let model = v["model"].as_str().unwrap_or("");
     let enabled = v["enabled"].as_bool().unwrap_or(false);
 
     let mut providers = HashMap::new();
-    providers.insert(provider.to_string(), ProviderSttConfig {
-        api_key: api_key.to_string(),
-        secret_key: secret_key.to_string(),
-        base_url: base_url.to_string(),
-        model: model.to_string(),
-    });
+    providers.insert(
+        provider.to_string(),
+        ProviderSttConfig {
+            api_key: api_key.to_string(),
+            secret_key: secret_key.to_string(),
+            base_url: base_url.to_string(),
+            model: model.to_string(),
+        },
+    );
 
     SttConfig {
         active_provider: provider.to_string(),
@@ -78,19 +101,39 @@ pub(crate) fn load_config() -> ApiConfig {
             // Try camelCase format
             if let Ok(val) = serde_json::from_str::<serde_json::Value>(&raw) {
                 return ApiConfig {
-                    api_base_url: val["apiBaseUrl"].as_str().unwrap_or("https://api.deepseek.com").to_string(),
-                    api_model: val["apiModel"].as_str().unwrap_or("deepseek-chat").to_string(),
-                    has_api_key: val.get("providerKeys").or(val.get("provider_keys")).map(|v| !v.as_object().map(|o| o.is_empty()).unwrap_or(true)).unwrap_or(false),
-                    provider_keys: val.get("providerKeys").or(val.get("provider_keys"))
-                        .and_then(|v| serde_json::from_value(v.clone()).ok())
+                    api_base_url: val["apiBaseUrl"]
+                        .as_str()
+                        .unwrap_or("https://api.deepseek.com")
+                        .to_string(),
+                    api_model: val["apiModel"]
+                        .as_str()
+                        .unwrap_or("deepseek-chat")
+                        .to_string(),
+                    has_api_key: val
+                        .get("providerKeys")
+                        .or(val.get("provider_keys"))
+                        .map(|v| !v.as_object().map(|o| o.is_empty()).unwrap_or(true))
+                        .unwrap_or(false),
+                    provider_keys: val
+                        .get("providerKeys")
+                        .or(val.get("provider_keys"))
+                        .and_then(|v| serde_json::from_value(v.clone())
+                            .map_err(|e| log::warn!("[config] provider_keys 反序列化失败: {}", e)).ok())
                         .unwrap_or_default(),
-                    provider_base_urls: val.get("providerBaseUrls").or(val.get("provider_base_urls"))
-                        .and_then(|v| serde_json::from_value(v.clone()).ok())
+                    provider_base_urls: val
+                        .get("providerBaseUrls")
+                        .or(val.get("provider_base_urls"))
+                        .and_then(|v| serde_json::from_value(v.clone())
+                            .map_err(|e| log::warn!("[config] provider_base_urls 反序列化失败: {}", e)).ok())
                         .unwrap_or_default(),
-                    provider_models: val.get("providerModels").or(val.get("provider_models"))
-                        .and_then(|v| serde_json::from_value(v.clone()).ok())
+                    provider_models: val
+                        .get("providerModels")
+                        .or(val.get("provider_models"))
+                        .and_then(|v| serde_json::from_value(v.clone())
+                            .map_err(|e| log::warn!("[config] provider_models 反序列化失败: {}", e)).ok())
                         .unwrap_or_default(),
-                    stt: val.get("stt")
+                    stt: val
+                        .get("stt")
                         .map(|v| parse_stt_config(v))
                         .unwrap_or_default(),
                 };
@@ -201,14 +244,16 @@ pub fn create_project(name: String, state: State<'_, DbState>) -> Result<Project
 
 #[tauri::command]
 pub fn open_project(project_id: String, state: State<'_, DbState>) -> Result<(), String> {
-    open_project_db(&project_id, &state).map(|_| ()).map_err(|e| e.to_string())
+    open_project_db(&project_id, &state)
+        .map(|_| ())
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn delete_project(project_id: String, state: State<'_, DbState>) -> Result<(), String> {
     // 关闭当前 DB 连接，释放 Windows 文件锁，否则删除会失败
     {
-        let mut guard = state.0.lock().unwrap();
+        let mut guard = state.0.lock().unwrap_or_else(|e| e.into_inner());
         *guard = None;
     }
     let dir = crate::db::projects_dir().join(&project_id);
@@ -231,7 +276,11 @@ pub fn delete_project(project_id: String, state: State<'_, DbState>) -> Result<(
 }
 
 #[tauri::command]
-pub fn rename_project(project_id: String, name: String, state: State<'_, DbState>) -> Result<Project, String> {
+pub fn rename_project(
+    project_id: String,
+    name: String,
+    state: State<'_, DbState>,
+) -> Result<Project, String> {
     let t = now();
     with_conn(&state, |conn| {
         conn.execute(
@@ -286,11 +335,17 @@ pub fn set_api_config(
     // 传空字符串 key 表示删除该厂商的密钥
     let has_key = api_key.as_ref().map(|s| !s.is_empty()).unwrap_or(false);
     if let Some(provider) = provider_name.filter(|s| !s.is_empty()) {
-        cfg.provider_base_urls.insert(provider.clone(), cfg.api_base_url.clone());
-        cfg.provider_base_urls.insert("__active_provider__".into(), provider.clone());
+        cfg.provider_base_urls
+            .insert(provider.clone(), cfg.api_base_url.clone());
+        cfg.provider_base_urls
+            .insert("__active_provider__".into(), provider.clone());
         match api_key {
-            Some(k) if !k.is_empty() => { cfg.provider_keys.insert(provider, k); }
-            Some(_) => { cfg.provider_keys.remove(&provider); } // 空 key = 删除该厂商密钥
+            Some(k) if !k.is_empty() => {
+                cfg.provider_keys.insert(provider, k);
+            }
+            Some(_) => {
+                cfg.provider_keys.remove(&provider);
+            } // 空 key = 删除该厂商密钥
             None => {} // 未传 key = 不修改
         }
     }
@@ -308,10 +363,8 @@ pub fn set_api_config(
     Ok(())
 }
 
-#[tauri::command]pub fn set_provider_models(
-    provider: String,
-    models: Vec<String>,
-) -> Result<(), String> {
+#[tauri::command]
+pub fn set_provider_models(provider: String, models: Vec<String>) -> Result<(), String> {
     let mut cfg = load_config();
     cfg.provider_models.insert(provider, models);
     cfg.has_api_key = !cfg.provider_keys.is_empty();
@@ -319,7 +372,8 @@ pub fn set_api_config(
     Ok(())
 }
 
-#[tauri::command]pub async fn test_api_connection() -> Result<serde_json::Value, String> {
+#[tauri::command]
+pub async fn test_api_connection() -> Result<serde_json::Value, String> {
     let cfg = load_config();
     if cfg.provider_keys.is_empty() {
         return Ok(serde_json::json!({"ok": false, "message": "请先填写 API Key"}));
@@ -328,7 +382,10 @@ pub fn set_api_config(
 }
 
 #[tauri::command]
-pub fn get_framework_progress(project_id: String, state: State<'_, DbState>) -> Result<FrameworkProgress, String> {
+pub fn get_framework_progress(
+    project_id: String,
+    state: State<'_, DbState>,
+) -> Result<FrameworkProgress, String> {
     let pid = project_id;
     with_conn(&state, |conn| {
         let nodes: i64 = conn.query_row("SELECT COUNT(*) FROM timeline_nodes WHERE project_id=?1", params![pid], |r| r.get(0))?;
@@ -377,7 +434,8 @@ pub fn lock_framework(project_id: String, state: State<'_, DbState>) -> Result<(
 #[tauri::command]
 pub fn list_volumes(project_id: String, state: State<'_, DbState>) -> Result<Value, String> {
     with_conn(&state, |conn| {
-        let mut stmt = conn.prepare("SELECT id, project_id, title, sort_order FROM volumes WHERE project_id=?1")?;
+        let mut stmt = conn
+            .prepare("SELECT id, project_id, title, sort_order FROM volumes WHERE project_id=?1")?;
         let rows = stmt.query_map(params![project_id], |row| {
             Ok(serde_json::json!({
                 "id": row.get::<_, String>(0)?,
@@ -412,7 +470,7 @@ pub fn list_chapters(project_id: String, state: State<'_, DbState>) -> Result<Va
                 "word_count": row.get::<_, i32>(5)?,
             }))
         })?;
-        Ok(Value::Array(rows.filter_map(|r| r.ok()).collect()))
+        Ok(Value::Array(collect_rows_or_warn("db_read", rows)))
     })
     .map_err(|e| e.to_string())
 }
@@ -441,7 +499,7 @@ pub fn list_timeline_nodes(project_id: String, state: State<'_, DbState>) -> Res
                 "linked_chapter_id": row.get::<_, Option<String>>(11)?,
             }))
         })?;
-        Ok(Value::Array(rows.filter_map(|r| r.ok()).collect()))
+        Ok(Value::Array(collect_rows_or_warn("db_read", rows)))
     })
     .map_err(|e| e.to_string())
 }
@@ -464,9 +522,13 @@ pub struct TimelineNodeIn {
 }
 
 #[tauri::command]
-pub fn save_timeline_node(node: TimelineNodeIn, state: State<'_, DbState>) -> Result<Value, String> {
-    let ma = serde_json::to_string(&node.must_achieve).unwrap();
-    let ch = serde_json::to_string(&node.character_ids).unwrap();
+pub fn save_timeline_node(
+    node: TimelineNodeIn,
+    state: State<'_, DbState>,
+) -> Result<Value, String> {
+    let ma = serde_json::to_string(&node.must_achieve).map_err(|e| format!("序列化失败: {}", e))?;
+    let ch =
+        serde_json::to_string(&node.character_ids).map_err(|e| format!("序列化失败: {}", e))?;
     with_conn(&state, |conn| {
         conn.execute(
             "INSERT OR REPLACE INTO timeline_nodes
@@ -491,7 +553,7 @@ pub fn save_timeline_node(node: TimelineNodeIn, state: State<'_, DbState>) -> Re
         Ok(())
     })
     .map_err(|e| e.to_string())?;
-    Ok(serde_json::to_value(&node).unwrap())
+    Ok(serde_json::to_value(&node).map_err(|e| e.to_string())?)
 }
 
 #[tauri::command]
@@ -527,7 +589,7 @@ pub fn list_plot_events(project_id: String, state: State<'_, DbState>) -> Result
                 "character_ids": serde_json::from_str::<Value>(&row.get::<_, String>(11)?).unwrap_or(Value::Array(vec![])),
             }))
         })?;
-        Ok(Value::Array(rows.filter_map(|r| r.ok()).collect()))
+        Ok(Value::Array(collect_rows_or_warn("db_read", rows)))
     })
     .map_err(|e| e.to_string())
 }
@@ -550,7 +612,8 @@ pub struct PlotEventIn {
 
 #[tauri::command]
 pub fn save_plot_event(event: PlotEventIn, state: State<'_, DbState>) -> Result<Value, String> {
-    let ch = serde_json::to_string(&event.character_ids).unwrap();
+    let ch =
+        serde_json::to_string(&event.character_ids).map_err(|e| format!("序列化失败: {}", e))?;
     with_conn(&state, |conn| {
         conn.execute(
             "INSERT OR REPLACE INTO plot_events VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
@@ -572,7 +635,7 @@ pub fn save_plot_event(event: PlotEventIn, state: State<'_, DbState>) -> Result<
         Ok(())
     })
     .map_err(|e| e.to_string())?;
-    Ok(serde_json::to_value(event).unwrap())
+    Ok(serde_json::to_value(event).map_err(|e| e.to_string())?)
 }
 
 #[tauri::command]
@@ -657,7 +720,7 @@ pub fn list_characters(project_id: String, state: State<'_, DbState>) -> Result<
                 "interests": row.get::<_, String>(24)?,
             }))
         })?;
-        Ok(Value::Array(rows.filter_map(|r| r.ok()).collect()))
+        Ok(Value::Array(collect_rows_or_warn("db_read", rows)))
     })
     .map_err(|e| e.to_string())
 }
@@ -702,7 +765,7 @@ pub fn save_character(character: CharacterIn, state: State<'_, DbState>) -> Resu
         Ok(())
     })
     .map_err(|e| e.to_string())?;
-    Ok(serde_json::to_value(character).unwrap())
+    Ok(serde_json::to_value(character).map_err(|e| e.to_string())?)
 }
 
 #[tauri::command]
@@ -735,7 +798,7 @@ pub fn list_world_terms(project_id: String, state: State<'_, DbState>) -> Result
                 "layout_y": row.get::<_, f64>(10)?,
             }))
         })?;
-        Ok(Value::Array(rows.filter_map(|r| r.ok()).collect()))
+        Ok(Value::Array(collect_rows_or_warn("db_read", rows)))
     })
     .map_err(|e| e.to_string())
 }
@@ -777,7 +840,7 @@ pub fn save_world_term(term: WorldTermIn, state: State<'_, DbState>) -> Result<V
         Ok(())
     })
     .map_err(|e| e.to_string())?;
-    Ok(serde_json::to_value(term).unwrap())
+    Ok(serde_json::to_value(term).map_err(|e| e.to_string())?)
 }
 
 #[tauri::command]
@@ -801,7 +864,10 @@ pub struct EdgeIn {
 }
 
 #[tauri::command]
-pub fn list_relationship_edges(project_id: String, state: State<'_, DbState>) -> Result<Value, String> {
+pub fn list_relationship_edges(
+    project_id: String,
+    state: State<'_, DbState>,
+) -> Result<Value, String> {
     with_conn(&state, |conn| {
         let mut stmt =
             conn.prepare("SELECT id, project_id, source_id, target_id, relation_type, strength, is_secret FROM relationship_edges WHERE project_id=?1")?;
@@ -816,7 +882,7 @@ pub fn list_relationship_edges(project_id: String, state: State<'_, DbState>) ->
                 "is_secret": row.get::<_, i32>(6)? != 0,
             }))
         })?;
-        Ok(Value::Array(rows.filter_map(|r| r.ok()).collect()))
+        Ok(Value::Array(collect_rows_or_warn("db_read", rows)))
     })
     .map_err(|e| e.to_string())
 }
@@ -839,7 +905,7 @@ pub fn save_relationship_edge(edge: EdgeIn, state: State<'_, DbState>) -> Result
         Ok(())
     })
     .map_err(|e| e.to_string())?;
-    Ok(serde_json::to_value(edge).unwrap())
+    Ok(serde_json::to_value(edge).map_err(|e| e.to_string())?)
 }
 
 #[tauri::command]
@@ -859,18 +925,16 @@ pub fn save_node_layout(
     y: f64,
     state: State<'_, DbState>,
 ) -> Result<(), String> {
-    with_conn(&state, |conn| {
-        match entity_type.as_str() {
-            "character" => conn.execute(
-                "UPDATE characters SET layout_x=?1, layout_y=?2 WHERE id=?3",
-                params![x, y, entity_id],
-            ),
-            "world_term" => conn.execute(
-                "UPDATE world_terms SET layout_x=?1, layout_y=?2 WHERE id=?3",
-                params![x, y, entity_id],
-            ),
-            _ => Ok(0),
-        }
+    with_conn(&state, |conn| match entity_type.as_str() {
+        "character" => conn.execute(
+            "UPDATE characters SET layout_x=?1, layout_y=?2 WHERE id=?3",
+            params![x, y, entity_id],
+        ),
+        "world_term" => conn.execute(
+            "UPDATE world_terms SET layout_x=?1, layout_y=?2 WHERE id=?3",
+            params![x, y, entity_id],
+        ),
+        _ => Ok(0),
     })
     .map_err(|e| e.to_string())?;
     Ok(())
@@ -899,7 +963,7 @@ pub fn list_beat_cards(chapter_id: String, state: State<'_, DbState>) -> Result<
                 "sort_order": row.get::<_, i32>(4)?,
             }))
         })?;
-        Ok(Value::Array(rows.filter_map(|r| r.ok()).collect()))
+        Ok(Value::Array(collect_rows_or_warn("db_read", rows)))
     })
     .map_err(|e| e.to_string())
 }
@@ -909,12 +973,18 @@ pub fn save_beat_card(card: BeatCardIn, state: State<'_, DbState>) -> Result<Val
     with_conn(&state, |conn| {
         conn.execute(
             "INSERT OR REPLACE INTO beat_cards VALUES (?1,?2,?3,?4,?5)",
-            params![card.id, card.chapter_id, card.column_type, card.content, card.sort_order],
+            params![
+                card.id,
+                card.chapter_id,
+                card.column_type,
+                card.content,
+                card.sort_order
+            ],
         )?;
         Ok(())
     })
     .map_err(|e| e.to_string())?;
-    Ok(serde_json::to_value(card).unwrap())
+    Ok(serde_json::to_value(card).map_err(|e| e.to_string())?)
 }
 
 #[tauri::command]
@@ -935,7 +1005,10 @@ pub struct ChapterContentIn {
 }
 
 #[tauri::command]
-pub fn get_chapter_content(chapter_id: String, state: State<'_, DbState>) -> Result<Option<Value>, String> {
+pub fn get_chapter_content(
+    chapter_id: String,
+    state: State<'_, DbState>,
+) -> Result<Option<Value>, String> {
     with_conn(&state, |conn| {
         let mut stmt = conn.prepare("SELECT chapter_id, body_json, body_html, updated_at FROM chapter_contents WHERE chapter_id=?1")?;
         let mut rows = stmt.query(params![chapter_id])?;
@@ -954,11 +1027,19 @@ pub fn get_chapter_content(chapter_id: String, state: State<'_, DbState>) -> Res
 }
 
 #[tauri::command]
-pub fn save_chapter_content(content: ChapterContentIn, state: State<'_, DbState>) -> Result<(), String> {
+pub fn save_chapter_content(
+    content: ChapterContentIn,
+    state: State<'_, DbState>,
+) -> Result<(), String> {
     with_conn(&state, |conn| {
         conn.execute(
             "INSERT OR REPLACE INTO chapter_contents VALUES (?1,?2,?3,?4)",
-            params![content.chapter_id, content.body_json, content.body_html, content.updated_at],
+            params![
+                content.chapter_id,
+                content.body_json,
+                content.body_html,
+                content.updated_at
+            ],
         )?;
         Ok(())
     })
@@ -984,7 +1065,7 @@ pub fn list_locked_fields(project_id: String, state: State<'_, DbState>) -> Resu
                 "field_name": row.get::<_, String>(3)?,
             }))
         })?;
-        Ok(Value::Array(rows.filter_map(|r| r.ok()).collect()))
+        Ok(Value::Array(collect_rows_or_warn("db_read", rows)))
     })
     .map_err(|e| e.to_string())
 }
@@ -1008,7 +1089,7 @@ pub fn export_project(project_id: String, state: State<'_, DbState>) -> Result<V
                     updated_at: row.get(5)?,
                 })
             },
-        ).ok();
+        ).ok().or_else(|| { log::warn!("[export] 项目 {} 查询失败", project_id); None });
 
         let world_terms = read_table(conn, "SELECT * FROM world_terms WHERE project_id=?1", params![project_id]).unwrap_or_default();
         let characters = read_table(conn, "SELECT * FROM characters WHERE project_id=?1", params![project_id]).unwrap_or_default();
@@ -1041,11 +1122,23 @@ pub fn export_project(project_id: String, state: State<'_, DbState>) -> Result<V
             settings_conn.query_row(
                 "SELECT value FROM app_settings WHERE key=?1", params![key],
                 |row| { let raw: String = row.get(0)?; Ok(raw) },
-            ).ok().and_then(|raw| serde_json::from_str(&raw).ok()).unwrap_or_default()
+            ).ok().or_else(|| { log::warn!("[export] 读取 setting key 失败"); None })
+                .and_then(|raw| serde_json::from_str(&raw)
+                    .map_err(|e| log::warn!("[export] JSON 解析 key 失败: {}", e)).ok()).unwrap_or_default()
         };
         let plot_segments: Vec<Value> = read_setting_array(&format!("plot-segments-{}", project_id));
         let plot_edges: Vec<Value> = read_setting_array(&format!("plot-edges-{}", project_id));
-        let plot_chapters: Vec<Value> = read_setting_array(&format!("plot-chapters-{}", project_id));
+        // T3: 从逐章存储读取，不再使用 plot-chapters- 旧 key
+        let plot_chapters: Vec<Value> = {
+            let ids: Vec<String> = read_setting_array(&format!("chapter-index-{}", project_id))
+                .iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect();
+            ids.iter().filter_map(|id| {
+                let key = format!("chapter-{}-{}", project_id, id);
+                read_setting_array(&key).into_iter().next()
+            }).collect()
+        };
         let chapter_index: Vec<Value> = read_setting_array(&format!("chapter-index-{}", project_id));
         let worldview_edges: Vec<Value> = read_setting_array(&format!("worldview-edges-{}", project_id));
         let worldview_groups: Vec<Value> = read_setting_array(&format!("worldview-groups-{}", project_id));
@@ -1058,7 +1151,7 @@ pub fn export_project(project_id: String, state: State<'_, DbState>) -> Result<V
                 params![format!("chapter-index-{}", project_id)],
                 |row| row.get::<_, String>(0),
             ).unwrap_or_default()
-        ).ok() {
+        ).map_err(|e| log::warn!("[export] 解析 chapter-index JSON 失败: {}", e)).ok() {
             for ch_id in ids {
                 let key = format!("chapter-{}-{}", project_id, ch_id);
                 if let Ok(raw) = settings_conn.query_row(
@@ -1117,7 +1210,9 @@ pub fn export_project(project_id: String, state: State<'_, DbState>) -> Result<V
 #[tauri::command]
 pub fn get_setting(key: String, _state: State<'_, DbState>) -> Result<Option<String>, String> {
     let conn = open_or_create_settings_db();
-    let mut stmt = conn.prepare("SELECT value FROM app_settings WHERE key=?1").map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare("SELECT value FROM app_settings WHERE key=?1")
+        .map_err(|e| e.to_string())?;
     let mut rows = stmt.query(params![key]).map_err(|e| e.to_string())?;
     if let Some(row) = rows.next().map_err(|e| e.to_string())? {
         Ok(Some(row.get::<_, String>(0).map_err(|e| e.to_string())?))
@@ -1132,42 +1227,55 @@ pub fn set_setting(key: String, value: String, _state: State<'_, DbState>) -> Re
     conn.execute(
         "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?1, ?2)",
         params![key, value],
-    ).map_err(|e| e.to_string())?;
+    )
+    .map_err(|e| e.to_string())?;
     Ok(())
 }
 
 #[tauri::command]
 pub fn list_app_settings(_state: State<'_, DbState>) -> Result<Vec<serde_json::Value>, String> {
     let conn = open_or_create_settings_db();
-    let mut stmt = conn.prepare("SELECT key, value FROM app_settings")
+    let mut stmt = conn
+        .prepare("SELECT key, value FROM app_settings")
         .map_err(|e| e.to_string())?;
-    let rows = stmt.query_map([], |row| {
-        Ok(serde_json::json!({
-            "key": row.get::<_, String>(0)?,
-            "value": row.get::<_, String>(1)?,
-        }))
-    }).map_err(|e| e.to_string())?;
-    let result: Vec<serde_json::Value> = rows.filter_map(|r| r.ok()).collect();
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(serde_json::json!({
+                "key": row.get::<_, String>(0)?,
+                "value": row.get::<_, String>(1)?,
+            }))
+        })
+        .map_err(|e| e.to_string())?;
+    let result: Vec<serde_json::Value> = collect_rows_or_warn("db_read", rows);
     Ok(result)
 }
 
 /// 备份 project.db（保留最近 5 个备份）
 fn backup_project_db(project_id: &str) -> std::io::Result<()> {
     let db_path = projects_dir().join(project_id).join("project.db");
-    if !db_path.exists() { return Ok(()); }
+    if !db_path.exists() {
+        return Ok(());
+    }
     let ts = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
-    let backup_path = projects_dir().join(project_id).join(format!("project_backup_{}.db", ts));
+    let backup_path = projects_dir()
+        .join(project_id)
+        .join(format!("project_backup_{}.db", ts));
     std::fs::copy(&db_path, &backup_path)?;
     // 清理旧备份：只保留最新 5 个
     let parent = projects_dir().join(project_id);
     let mut backups: Vec<_> = std::fs::read_dir(&parent)?
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_name().to_string_lossy().starts_with("project_backup_"))
+        .filter_map(|e| e.map_err(|e| log::warn!("[backup] 读取目录项失败: {}", e)).ok())
+        .filter(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .starts_with("project_backup_")
+        })
         .collect();
-    backups.sort_by_key(|e| e.metadata().and_then(|m| m.modified()).ok());
+    backups.sort_by_key(|e| e.metadata().and_then(|m| m.modified())
+        .map_err(|e| log::warn!("[backup] 获取文件时间失败: {}", e)).ok());
     while backups.len() > 5 {
         if let Some(oldest) = backups.first() {
-            std::fs::remove_file(oldest.path()).ok();
+            if let Err(e) = std::fs::remove_file(oldest.path()) { log::warn!("[backup] delete old: {}", e); }
             backups.remove(0);
         }
     }
@@ -1175,15 +1283,27 @@ fn backup_project_db(project_id: &str) -> std::io::Result<()> {
 }
 
 #[tauri::command]
-pub fn import_project(project_data: serde_json::Value, mode: String, state: State<'_, DbState>) -> Result<String, String> {
+pub fn import_project(
+    project_data: serde_json::Value,
+    mode: String,
+    state: State<'_, DbState>,
+) -> Result<String, String> {
     let project = project_data.get("project").ok_or("缺少 project 字段")?;
-    let project_name = project.get("name").and_then(|v| v.as_str()).unwrap_or("导入的项目").to_string();
+    let project_name = project
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("导入的项目")
+        .to_string();
 
     // ── "new" 模式：生成新 UUID，不覆盖任何现有项目 ──
     let (project_id, is_new) = if mode == "new" {
         (Uuid::new_v4().to_string(), true)
     } else {
-        let pid = project.get("id").and_then(|v| v.as_str()).ok_or("缺少 project.id")?.to_string();
+        let pid = project
+            .get("id")
+            .and_then(|v| v.as_str())
+            .ok_or("缺少 project.id")?
+            .to_string();
         // ── "overwrite" 模式：先备份 ──
         if mode == "overwrite" {
             backup_project_db(&pid).map_err(|e| format!("备份数据库失败: {}", e))?;
@@ -1195,17 +1315,23 @@ pub fn import_project(project_data: serde_json::Value, mode: String, state: Stat
     open_project_db(&project_id, &state).map_err(|e| format!("打开项目数据库失败: {}", e))?;
 
     with_conn(&state, |conn| {
-        // "overwrite" 模式：清理旧数据
+        // "overwrite" 模式：清理旧数据（失败不阻断流程，但记录日志）
         if mode == "overwrite" {
-            conn.execute("DELETE FROM beat_cards WHERE chapter_id IN (SELECT c.id FROM chapters c JOIN volumes v ON c.volume_id=v.id WHERE v.project_id=?1)", params![project_id]).ok();
-            conn.execute("DELETE FROM chapter_contents WHERE chapter_id IN (SELECT c.id FROM chapters c JOIN volumes v ON c.volume_id=v.id WHERE v.project_id=?1)", params![project_id]).ok();
-            conn.execute("DELETE FROM chapters WHERE volume_id IN (SELECT id FROM volumes WHERE project_id=?1)", params![project_id]).ok();
-            conn.execute("DELETE FROM volumes WHERE project_id=?1", params![project_id]).ok();
-            conn.execute("DELETE FROM plot_events WHERE project_id=?1", params![project_id]).ok();
-            conn.execute("DELETE FROM timeline_nodes WHERE project_id=?1", params![project_id]).ok();
-            conn.execute("DELETE FROM relationship_edges WHERE project_id=?1", params![project_id]).ok();
-            conn.execute("DELETE FROM characters WHERE project_id=?1", params![project_id]).ok();
-            conn.execute("DELETE FROM world_terms WHERE project_id=?1", params![project_id]).ok();
+            for (label, result) in [
+                ("beat_cards", conn.execute("DELETE FROM beat_cards WHERE chapter_id IN (SELECT c.id FROM chapters c JOIN volumes v ON c.volume_id=v.id WHERE v.project_id=?1)", params![project_id])),
+                ("chapter_contents", conn.execute("DELETE FROM chapter_contents WHERE chapter_id IN (SELECT c.id FROM chapters c JOIN volumes v ON c.volume_id=v.id WHERE v.project_id=?1)", params![project_id])),
+                ("chapters", conn.execute("DELETE FROM chapters WHERE volume_id IN (SELECT id FROM volumes WHERE project_id=?1)", params![project_id])),
+                ("volumes", conn.execute("DELETE FROM volumes WHERE project_id=?1", params![project_id])),
+                ("plot_events", conn.execute("DELETE FROM plot_events WHERE project_id=?1", params![project_id])),
+                ("timeline_nodes", conn.execute("DELETE FROM timeline_nodes WHERE project_id=?1", params![project_id])),
+                ("relationship_edges", conn.execute("DELETE FROM relationship_edges WHERE project_id=?1", params![project_id])),
+                ("characters", conn.execute("DELETE FROM characters WHERE project_id=?1", params![project_id])),
+                ("world_terms", conn.execute("DELETE FROM world_terms WHERE project_id=?1", params![project_id])),
+            ] {
+                if let Err(e) = result {
+                    eprintln!("[import] 清理旧数据 {} 失败: {}", label, e);
+                }
+            }
         }
         // "merge" / "new" 模式：不删除，直接 INSERT OR REPLACE
 
@@ -1243,7 +1369,8 @@ pub fn import_project(project_data: serde_json::Value, mode: String, state: Stat
         fn json_i64(val: &serde_json::Value, field: &str) -> i64 {
             val.get(field).and_then(|v| match v {
                 serde_json::Value::Bool(b) => Some(*b as i64),
-                serde_json::Value::String(s) => s.parse().ok(),
+                serde_json::Value::String(s) => s.parse()
+                    .map_err(|e| log::warn!("[import] 数字解析失败: {} → {}", s, e)).ok(),
                 _ => v.as_i64(),
             }).unwrap_or(0)
         }
@@ -1277,6 +1404,7 @@ pub fn import_project(project_data: serde_json::Value, mode: String, state: Stat
         }
 
         // 批量插入各表（列名需与 schema.sql 一致）
+        let mut import_errors: Vec<String> = Vec::new();
         if let Some(items) = project_data.get("worldTerms").and_then(|v| v.as_array()) {
             for item in items {
                 conn.execute(
@@ -1287,7 +1415,7 @@ pub fn import_project(project_data: serde_json::Value, mode: String, state: Stat
                         json_i64(item, "ring_level"), json_str_or_arr(item, "forbidden_json"),
                         json_i64(item, "is_locked"), json_str(item, "layout_x"), json_str(item, "layout_y"),
                     ],
-                ).ok();
+                ).map_err(|e| import_errors.push(format!("world_terms 导入失败: {}", e))).ok();
             }
         }
 
@@ -1307,7 +1435,7 @@ pub fn import_project(project_data: serde_json::Value, mode: String, state: Stat
                         json_str(item, "avatar_path"), json_str(item, "layout_x"), json_str(item, "layout_y"),
                         json_i64(item, "is_locked"), json_str_or_arr(item, "snapshots_json"),
                     ],
-                ).ok();
+                ).map_err(|e| import_errors.push(format!("characters 导入失败: {}", e))).ok();
             }
         }
 
@@ -1322,7 +1450,7 @@ pub fn import_project(project_data: serde_json::Value, mode: String, state: Stat
                         json_str(item, "relation_type"), json_i64(item, "strength"),
                         json_i64(item, "is_secret"),
                     ],
-                ).ok();
+                ).map_err(|e| import_errors.push(format!("relationship_edges 导入失败: {}", e))).ok();
             }
         }
 
@@ -1338,7 +1466,7 @@ pub fn import_project(project_data: serde_json::Value, mode: String, state: Stat
                         json_str(item, "plant_method"), json_i64(item, "convergence_chapter"),
                         json_i64(item, "is_locked"), json_str_or_arr(item, "character_ids_json"),
                     ],
-                ).ok();
+                ).map_err(|e| import_errors.push(format!("plot_events 导入失败: {}", e))).ok();
             }
         }
 
@@ -1354,7 +1482,7 @@ pub fn import_project(project_data: serde_json::Value, mode: String, state: Stat
                         json_str_or_arr(item, "must_achieve_json"), json_str_or_arr(item, "character_ids_json"),
                         json_str(item, "linked_chapter_id"),
                     ],
-                ).ok();
+                ).map_err(|e| import_errors.push(format!("timeline_nodes 导入失败: {}", e))).ok();
             }
         }
 
@@ -1367,7 +1495,7 @@ pub fn import_project(project_data: serde_json::Value, mode: String, state: Stat
                         json_str(item, "id"), pid_for_item(item, "project_id", is_new, &project_id),
                         json_str(item, "title"), json_i64(item, "sort_order"),
                     ],
-                ).ok();
+                ).map_err(|e| import_errors.push(format!("volumes 导入失败: {}", e))).ok();
             }
         }
 
@@ -1380,7 +1508,7 @@ pub fn import_project(project_data: serde_json::Value, mode: String, state: Stat
                         json_str(ch, "id"), json_str(ch, "volume_id"), json_i64(ch, "number"),
                         json_str(ch, "title"), json_str(ch, "status"), json_i64(ch, "word_count"),
                     ],
-                ).ok();
+                ).map_err(|e| import_errors.push(format!("chapters 导入失败: {}", e))).ok();
             }
         }
 
@@ -1394,7 +1522,7 @@ pub fn import_project(project_data: serde_json::Value, mode: String, state: Stat
                         json_str(card, "column_type"), json_str(card, "content"),
                         json_i64(card, "sort_order"),
                     ],
-                ).ok();
+                ).map_err(|e| import_errors.push(format!("beatCards 导入失败: {}", e))).ok();
             }
         }
 
@@ -1407,8 +1535,13 @@ pub fn import_project(project_data: serde_json::Value, mode: String, state: Stat
                         json_str(content, "chapter_id"), json_str(content, "body_json"),
                         json_str(content, "body_html"), json_str(content, "updated_at"),
                     ],
-                ).ok();
+                ).map_err(|e| import_errors.push(format!("chapterContents 导入失败: {}", e))).ok();
             }
+        }
+
+        // 导入完统一报告错误
+        if !import_errors.is_empty() {
+            log::warn!("[import] {} 条导入失败: {:?}", import_errors.len(), import_errors);
         }
 
         Ok(project_id)
@@ -1418,7 +1551,7 @@ pub fn import_project(project_data: serde_json::Value, mode: String, state: Stat
 
 fn open_or_create_settings_db() -> rusqlite::Connection {
     let dir = crate::db::data_dir();
-    std::fs::create_dir_all(&dir).ok();
+    if let Err(e) = std::fs::create_dir_all(&dir) { log::warn!("[import] mkdir: {}", e); }
     let path = dir.join("settings.db");
     let conn = rusqlite::Connection::open(&path).unwrap_or_else(|e| {
         // 降级：如果 settings.db 打不开，用内存数据库保证不崩溃
@@ -1426,54 +1559,75 @@ fn open_or_create_settings_db() -> rusqlite::Connection {
         rusqlite::Connection::open_in_memory().expect("内存数据库也失败")
     });
     conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);"
-    ).ok();
+        "CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+    )
+    .map_err(|e| log::warn!("[db] 创建 app_settings 表失败: {}", e))
+    .ok();  // T2: CREATE TABLE IF NOT EXISTS 失败不影响启动
     conn
 }
 
 // ===== v2.0: 风格指南/故事铁则/章节摘要 =====
 
-fn get_setting_json(key: String, state: State<'_, DbState>) -> Result<Option<serde_json::Value>, String> {
+fn get_setting_json(
+    key: String,
+    state: State<'_, DbState>,
+) -> Result<Option<serde_json::Value>, String> {
     let raw = get_setting(key, state)?;
     match raw {
-        Some(s) if !s.is_empty() => {
-            serde_json::from_str(&s)
-                .map(Some)
-                .map_err(|e| format!("解析 JSON 失败: {}", e))
-        }
+        Some(s) if !s.is_empty() => serde_json::from_str(&s)
+            .map(Some)
+            .map_err(|e| format!("解析 JSON 失败: {}", e)),
         _ => Ok(None),
     }
 }
 
 #[tauri::command]
-pub fn get_style_guide(project_id: String, state: State<'_, DbState>) -> Result<Option<serde_json::Value>, String> {
+pub fn get_style_guide(
+    project_id: String,
+    state: State<'_, DbState>,
+) -> Result<Option<serde_json::Value>, String> {
     get_setting_json(format!("novel-workbench-style-{}", project_id), state)
 }
 
 #[tauri::command]
 pub fn save_style_guide(guide: serde_json::Value, state: State<'_, DbState>) -> Result<(), String> {
     let pid = guide["project_id"].as_str().unwrap_or("");
-    set_setting(format!("novel-workbench-style-{}", pid), guide.to_string(), state)
+    set_setting(
+        format!("novel-workbench-style-{}", pid),
+        guide.to_string(),
+        state,
+    )
 }
 
 #[tauri::command]
-pub fn get_story_bible(project_id: String, state: State<'_, DbState>) -> Result<Option<serde_json::Value>, String> {
+pub fn get_story_bible(
+    project_id: String,
+    state: State<'_, DbState>,
+) -> Result<Option<serde_json::Value>, String> {
     get_setting_json(format!("novel-workbench-bible-{}", project_id), state)
 }
 
 #[tauri::command]
 pub fn save_story_bible(bible: serde_json::Value, state: State<'_, DbState>) -> Result<(), String> {
     let pid = bible["project_id"].as_str().unwrap_or("");
-    set_setting(format!("novel-workbench-bible-{}", pid), bible.to_string(), state)
+    set_setting(
+        format!("novel-workbench-bible-{}", pid),
+        bible.to_string(),
+        state,
+    )
 }
 
 #[tauri::command]
-pub fn get_chapter_summaries(project_id: String, state: State<'_, DbState>) -> Result<serde_json::Value, String> {
+pub fn get_chapter_summaries(
+    project_id: String,
+    state: State<'_, DbState>,
+) -> Result<serde_json::Value, String> {
     let log_key = format!("novel-workbench-log-{}", project_id);
     let raw = get_setting(log_key, state)?;
     match raw {
         Some(s) if !s.is_empty() => {
-            let val: serde_json::Value = serde_json::from_str(&s).map_err(|e| format!("解析 JSON 失败: {}", e))?;
+            let val: serde_json::Value =
+                serde_json::from_str(&s).map_err(|e| format!("解析 JSON 失败: {}", e))?;
             // 提取 summaries 数组（log store 是 {summaries:[...], characterStates:[...], ...} 结构）
             if let Some(arr) = val.get("summaries").and_then(|v| v.as_array()) {
                 Ok(serde_json::Value::Array(arr.clone()))
@@ -1488,30 +1642,41 @@ pub fn get_chapter_summaries(project_id: String, state: State<'_, DbState>) -> R
     }
 }
 
-fn read_table(conn: &rusqlite::Connection, sql: &str, params: impl rusqlite::Params) -> Result<Vec<Value>, rusqlite::Error> {
+fn read_table(
+    conn: &rusqlite::Connection,
+    sql: &str,
+    params: impl rusqlite::Params,
+) -> Result<Vec<Value>, rusqlite::Error> {
     use rusqlite::types::ValueRef;
     let mut stmt = conn.prepare(sql)?;
     let col_count = stmt.column_count();
     let col_names: Vec<String> = (0..col_count)
-        .filter_map(|i| stmt.column_name(i).ok().map(String::from))
+        .filter_map(|i| stmt.column_name(i)
+            .map_err(|e| log::warn!("[db] 获取列名失败 col {}: {}", i, e)).ok()
+            .map(String::from))
         .collect();
 
-    let rows = stmt.query_map(params, |row| {
-        let mut map = serde_json::Map::new();
-        for i in 0..col_count {
-            let name = &col_names[i];
-            let val = match row.get_ref(i) {
-                Ok(ValueRef::Null) => Value::Null,
-                Ok(ValueRef::Integer(n)) => Value::Number(serde_json::Number::from(n)),
-                Ok(ValueRef::Real(f)) => serde_json::Number::from_f64(f).map(Value::Number).unwrap_or(Value::Null),
-                Ok(ValueRef::Text(s)) => Value::String(String::from_utf8_lossy(s).to_string()),
-                Ok(ValueRef::Blob(b)) => Value::String(format!("[blob {} bytes]", b.len())),
-                Err(_) => Value::Null,
-            };
-            map.insert(name.clone(), val);
-        }
-        Ok(Value::Object(map))
-    })?.filter_map(|r| r.ok()).collect();
+    let rows = stmt
+        .query_map(params, |row| {
+            let mut map = serde_json::Map::new();
+            for i in 0..col_count {
+                let name = &col_names[i];
+                let val = match row.get_ref(i) {
+                    Ok(ValueRef::Null) => Value::Null,
+                    Ok(ValueRef::Integer(n)) => Value::Number(serde_json::Number::from(n)),
+                    Ok(ValueRef::Real(f)) => serde_json::Number::from_f64(f)
+                        .map(Value::Number)
+                        .unwrap_or(Value::Null),
+                    Ok(ValueRef::Text(s)) => Value::String(String::from_utf8_lossy(s).to_string()),
+                    Ok(ValueRef::Blob(b)) => Value::String(format!("[blob {} bytes]", b.len())),
+                    Err(_) => Value::Null,
+                };
+                map.insert(name.clone(), val);
+            }
+            Ok(Value::Object(map))
+        })?
+        .filter_map(|r| r.ok())
+        .collect();
 
     Ok(rows)
 }

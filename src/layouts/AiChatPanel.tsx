@@ -14,6 +14,9 @@ import type { ChatMessage, Character, MemoryEntry, WorldTerm } from "@/types";
 import { MODULE_LABEL, OUTLINE_SECTION_LABEL } from "@/types";
 import { uuid } from "@/lib/uuid";
 import { getJSONSync, setJSONSync } from "@/lib/storage";
+import { loadAllChapters, saveAllChapters, type Chapter } from "@/lib/chapter-store";
+import { parseCharacterBatch, type ParsedCharacter, type ParsedEdge } from "@/lib/character-parser";
+import { CharacterApplyButton } from "./CharacterApplyButton";
 
 /** 上传的文本文件 */
 interface UploadedFile {
@@ -528,20 +531,20 @@ export function AiChatPanel() {
   const loadPending = useCallback(() => {
     if (!currentProject?.id || loadedRef.current) return;
     try {
-      const raw = localStorage.getItem(`ai-pending-chars-${currentProject.id}`);
+      const raw = getJSONSync(`ai-pending-chars-${currentProject.id}`, null);
       if (!raw) return;
-      const data = JSON.parse(raw);
+      const data = raw as { chars?: ParsedCharacter[]; edges?: ParsedEdge[]; snapshots?: unknown[] };
       if (data.chars?.length > 0) {
         setPendingChars(prev => {
           const existingNames = new Set(prev.map(c => c.name));
-          const newChars = (data.chars as any[]).filter(c => !existingNames.has(c.name));
+          const newChars = data.chars.filter(c => !existingNames.has(c.name));
           return [...prev, ...newChars];
         });
       }
       if (data.edges?.length > 0) {
         setPendingCharEdges(prev => {
           const existingKeys = new Set(prev.map(e => `${e.sourceName}::${e.targetName}`));
-          const newEdges = (data.edges as any[]).filter(e => !existingKeys.has(`${e.sourceName}::${e.targetName}`));
+          const newEdges = data.edges.filter(e => !existingKeys.has(`${e.sourceName}::${e.targetName}`));
           return [...prev, ...newEdges];
         });
       }
@@ -686,7 +689,7 @@ export function AiChatPanel() {
           });
         }
       }
-      try { localStorage.setItem(edgeKey, JSON.stringify(existing)); } catch { /* quota full */ }
+      try { setJSONSync(edgeKey, existing); } catch { /* quota full */ }
     }
 
     store.bumpWorldTerms();
@@ -827,20 +830,19 @@ export function AiChatPanel() {
       // 同时通过 API + localStorage 双重写入确保持久化
       await api.saveCharacter({ ...targetChar, snapshots: existingSnaps });
       const MOCK_KEY = "novel-workbench-mock";
-      const storeRaw = localStorage.getItem(MOCK_KEY);
-      if (storeRaw) {
-        const storeData = JSON.parse(storeRaw);
+      const storeData = getJSONSync(MOCK_KEY, null as Record<string, any> | null);
+      if (storeData) {
         const scIdx = storeData.characters?.findIndex((c: any) => c.id === targetChar.id);
         if (scIdx >= 0) {
           storeData.characters[scIdx] = { ...storeData.characters[scIdx], snapshots: existingSnaps };
-          try { localStorage.setItem(MOCK_KEY, JSON.stringify(storeData)); } catch { /* quota full */ }
+          try { setJSONSync(MOCK_KEY, storeData); } catch { /* quota full */ }
         }
       }
     }
     setPendingSnapshots([]);
 
-    // 清理 localStorage 和 loadedRef，防止下次挂载时重复读取
-    localStorage.removeItem(`ai-pending-chars-${curProject.id}`);
+    // 清理 pending 数据和 loadedRef，防止下次挂载时重复读取
+    setJSONSync(`ai-pending-chars-${curProject.id}`, null);
     loadedRef.current = false;
 
     // 自动导航到人物关系星图
@@ -888,7 +890,7 @@ export function AiChatPanel() {
         }
       }
     }
-    try { localStorage.setItem("plot-segments-" + pid, JSON.stringify(existing)); } catch { /* quota full */ }
+    setJSONSync("plot-segments-" + pid, existing);
 
     // 3. 连线
     const existingEdges = getJSONSync("plot-edges-" + pid, []);
@@ -903,7 +905,7 @@ export function AiChatPanel() {
         });
       }
     }
-    try { localStorage.setItem("plot-edges-" + pid, JSON.stringify(existingEdges)); } catch { /* quota full */ }
+    setJSONSync("plot-edges-" + pid, existingEdges);
 
     // 触发刷新
     const store = useAppStore.getState();
@@ -930,7 +932,7 @@ export function AiChatPanel() {
     if (!currentProject || pendingChapters.length === 0) return;
     const pid = currentProject.id;
     const segs = getJSONSync("plot-segments-" + pid, []);
-    const existing = getJSONSync("plot-chapters-" + pid, []);
+    const existing: Chapter[] = loadAllChapters(pid);
     let created = 0;
     for (const pc of pendingChapters) {
       const seg = segs.find((s: any) => s.title === pc.volumeTitle && s.type === "bright");
@@ -944,7 +946,7 @@ export function AiChatPanel() {
       });
       created++;
     }
-    try { localStorage.setItem("plot-chapters-" + pid, JSON.stringify(existing)); } catch { /* quota full */ }
+    saveAllChapters(pid, existing as Chapter[]);
     setPendingChapters([]);
     const store = useAppStore.getState();
     store.bumpPlot();
@@ -1193,7 +1195,7 @@ export function AiChatPanel() {
       let segmentsContext = "";
       if (currentProject && (activeModule === "outline" || activeModule === "writing")) {
         try {
-          const segs = getJSONSync("plot-segments-" + currentProject.id, [] as any[]);
+          const segs = getJSONSync<{ title: string; type: string; chapters?: string; beats?: unknown[] }[]>("plot-segments-" + currentProject.id, []);
           if (segs.length > 0) {
             const segList = segs.map((s: any) =>
               `「${s.title}」(${s.type === "bright" ? "明线" : "暗线"},` +
@@ -1627,7 +1629,7 @@ export function AiChatPanel() {
                 pendingWorldTerms.push({
                   id: uuid(),
                   project_id: currentProject.id,
-                  term_type: (u.fields.term_type as any) || "other",
+                  term_type: (u.fields.term_type as string) || "other",
                   title: u.title,
                   one_liner: u.fields.one_liner || "",
                   detail: u.fields.detail || "",
@@ -1706,7 +1708,7 @@ export function AiChatPanel() {
               const updated = { ...target };
               for (const key of fields) {
                 if (cu.fields[key] !== undefined) {
-                  (updated as any)[key] = cu.fields[key];
+                  (updated as Record<string, unknown>)[key] = cu.fields[key];
                 }
               }
               await api.saveCharacter(updated);
@@ -1751,7 +1753,7 @@ export function AiChatPanel() {
         // ====== 细纲更新/删除：立即执行（无需待确认） ======
         if (plotBatch.updateBeats.length > 0 || plotBatch.deleteBeats.length > 0) {
           const pid = currentProject!.id;
-          const segs = getJSONSync("plot-segments-" + pid, [] as any[]);
+          const segs = getJSONSync<{ title: string; type: string; chapters?: string; beats?: unknown[] }[]>("plot-segments-" + pid, []);
           let updatedInfo: string[] = [];
 
           for (const ub of plotBatch.updateBeats) {
@@ -1777,7 +1779,7 @@ export function AiChatPanel() {
           }
 
           if (updatedInfo.length > 0) {
-            try { localStorage.setItem("plot-segments-" + pid, JSON.stringify(segs)); } catch { /* quota full */ }
+            setJSONSync("plot-segments-" + pid, segs);
             useAppStore.getState().bumpPlot();
             displayContent = displayContent
               .replace(/---PLOT_SEGMENTS---[\s\S]*?---END_PLOT_SEGMENTS---/g, "")

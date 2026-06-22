@@ -2,7 +2,26 @@ import { useCallback, useEffect } from "react";
 import { api } from "@/lib/api";
 import { useAppStore } from "@/stores/app-store";
 import { migrateLocalStorageToSqlite } from "@/lib/migrate-data";
-import { prewarmFromSqlite, getJSONSync } from "@/lib/storage";
+import { getJSONSync, setJSONSync, loadJSON, saveJSON } from "@/lib/storage";
+import { loadAllChapters } from "@/lib/chapter-store";
+
+/** EXE 启动预暖：SQLite → localStorage（从 storage.ts 迁移至此） */
+async function prewarmFromSqlite(): Promise<void> {
+  try {
+    const { listAppSettings } = await import("@/lib/api");
+    const data = await listAppSettings();
+    let count = 0;
+    for (const { key, value } of data) {
+      if (loadJSON(key, null) === null) {
+        saveJSON(key, value);
+      }
+      count++;
+    }
+    console.log(`[use-project-data] 预暖完成: ${count} 条从 SQLite 载入`);
+  } catch (e) {
+    console.warn("[use-project-data] 预暖失败（首次启动无数据属于正常）:", e);
+  }
+}
 
 export function useProjectBootstrap() {
   const {
@@ -29,7 +48,7 @@ export function useProjectBootstrap() {
       const terms = getJSONSync("novel-workbench-mock", {} as any).worldTerms?.filter((t: any) => t.project_id === pid)?.length || 0;
       const chars = getJSONSync("novel-workbench-mock", {} as any).characters?.filter((c: any) => c.project_id === pid)?.length || 0;
       const segs = getJSONSync(`plot-segments-${pid}`, [] as any[]);
-      const chaps = getJSONSync(`plot-chapters-${pid}`, [] as any[]);
+      const chaps = loadAllChapters(pid);
       const beatCards = getJSONSync("novel-workbench-mock", {} as any).beatCards;
       const chapIds = new Set(chaps.map((c: any) => c.id));
       const beats = (beatCards || []).filter((b: any) => chapIds.has(b.chapter_id)).length;

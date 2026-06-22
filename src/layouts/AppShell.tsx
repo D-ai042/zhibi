@@ -23,6 +23,7 @@ import type { NavItem, NavTarget, ProjectStage } from "@/types";
 import { MODULE_LABEL } from "@/types";
 
 import { RightDrawer } from "./RightDrawer";
+import { getJSONSync } from "@/lib/storage";
 import { getCurrentVersion, checkForUpdate, markDismissed, type VersionInfo } from "@/lib/version-check";
 
 const STAGE_LABEL: Record<ProjectStage, string> = {
@@ -323,10 +324,10 @@ export function AppShell({ children }: AppShellProps) {
       if (!volMap.has(segId)) volMap.set(segId, { ids: [], title: "" });
       volMap.get(segId)!.ids.push(ch.id as string);
     }
-    // 尝试从 plot-segments 读取实际名称
-    if (projectId && typeof localStorage !== "undefined") {
+    // 尝试从 plot-segments 读取实际名称（使用统一存储入口）
+    if (projectId) {
       try {
-        const segs = JSON.parse(localStorage.getItem(`plot-segments-${projectId}`) || "[]");
+        const segs = getJSONSync(`plot-segments-${projectId}`, []);
         for (const seg of segs) {
           const entry = volMap.get(seg.id);
           if (entry) entry.title = seg.title || "";

@@ -156,10 +156,12 @@ pub async fn stt_transcribe(audio_base64: String) -> Result<serde_json::Value, S
         if api_key.is_empty() || secret_key.is_empty() {
             return Ok(json!({"text": "（百度语音：请填写 API Key 和 Secret Key）"}));
         }
-        // Get access token
+        // Get access token (B5 修复：密钥改用 POST body，不再暴露在 URL query string)
         let client = reqwest::Client::new();
         let token_resp = client
-            .post(&format!("https://aip.baidubce.com/oauth/2.0/token?grant_type=client_credentials&client_id={}&client_secret={}", api_key, secret_key))
+            .post("https://aip.baidubce.com/oauth/2.0/token")
+            .query(&[("grant_type", "client_credentials")])
+            .form(&[("client_id", api_key), ("client_secret", secret_key)])
             .send().await.map_err(|e| format!("百度 token 请求失败: {}", e))?;
         let token_data: serde_json::Value = token_resp.json().await.map_err(|e| e.to_string())?;
         let token = token_data["access_token"].as_str().ok_or("百度 token 获取失败")?;

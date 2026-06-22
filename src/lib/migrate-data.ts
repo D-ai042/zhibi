@@ -10,6 +10,7 @@
  */
 
 import { api, isTauri } from "./api";
+import { getSync } from "./storage";
 
 /** 迁移标记 key */
 const MIGRATION_FLAG_KEY = "migration_done_v1";
@@ -26,7 +27,9 @@ const MIGRATABLE_PREFIXES = [
     "novel-workbench-compressed-idx-",
     "novel-workbench-mock",
     "novel-workbench-snapshots-",
-    "plot-chapters-",
+    // T3: plot-chapters- 已迁移到逐章存储，不再处理
+    "chapter-index-",
+    "chapter-",
     "plot-segments-",
     "plot-edges-",
     "worldview-edges-",
@@ -57,7 +60,7 @@ export async function migrateLocalStorageToSqlite(): Promise<void> {
     console.log("[migrate] 开始从 localStorage 迁移数据到 SQLite...");
     let count = 0;
 
-    // 遍历所有 localStorage key
+    // T8: 数据迁移需遍历 localStorage 所有 key
     for (let i = 0; i < localStorage.length; i++) {
         const key = localStorage.key(i);
         if (!key) continue;
@@ -69,7 +72,7 @@ export async function migrateLocalStorageToSqlite(): Promise<void> {
 
         if (!shouldMigrate) continue;
 
-        const value = localStorage.getItem(key);
+        const value = getSync(key);
         if (!value || value === "[]" || value === "{}") continue;
 
         try {

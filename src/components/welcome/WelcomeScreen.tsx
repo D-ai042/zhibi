@@ -2,6 +2,7 @@ import { useState } from "react";
 import { BookOpen, FolderOpen, Plus, Settings, Trash2, Edit3, Check, X } from "lucide-react";
 import { api } from "@/lib/api";
 import { useAppStore } from "@/stores/app-store";
+import { saveJSON } from "@/lib/storage";
 import type { Project } from "@/types";
 
 interface Props {
@@ -60,15 +61,15 @@ export function WelcomeScreen({ onOpenProject }: Props) {
     const store = useAppStore.getState();
     const projName = store.projects.find(p => p.id === pid)?.name;
     await api.deleteProject(pid);
-    // 清理 localStorage 中的聊天记录
+    // 清理聊天记录（走存储层）
     for (let i = localStorage.length - 1; i >= 0; i--) {
       const key = localStorage.key(i);
       if (key?.startsWith(`novel-workbench-chat-${pid}`)) {
-        localStorage.removeItem(key);
+        saveJSON(key, null);
       }
     }
     if (projName) {
-      localStorage.removeItem(`novel-workbench-chat-name:${projName}`);
+      saveJSON(`novel-workbench-chat-name:${projName}`, null);
     }
     const list = await api.getProjects();
     setProjects(list);

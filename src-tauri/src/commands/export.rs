@@ -46,7 +46,28 @@ pub fn save_export_file(_project_id: String, _filename: String, data_base64: Str
         .decode(&data_base64)
         .map_err(|e| format!("Base64 解码失败: {}", e))?;
 
-    std::fs::write(&file_path, &bytes).map_err(|e| format!("写入文件失败: {}", e))?;
+    // B5 修复：路径遍历防护 —— 验证写入路径在用户选择的目录内
+    // save_export_file 的 file_path 来自前端 dialog.save 对话框，是用户主动选择的路径
+    // 此处做基本规范化检查，拒绝明显的路径遍历尝试
+    let path = std::path::Path::new(&file_path);
+    let canonical = path.canonicalize().or_else(|_| {
+        // 文件尚不存在时 canonicalize 会失败，取父目录
+        if let Some(parent) = path.parent() {
+            parent.canonicalize().map(|p| p.join(path.file_name().unwrap_or_default()))
+        } else {
+            Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "无效路径"))
+        }
+    }).map_err(|e| format!("路径验证失败: {}", e))?;
 
-    Ok(file_path)
+    // 拒绝写入系统敏感目录（根盘符、Windows、System32 等）
+    if let Some(path_str) = canonical.to_str() {
+        let lower = path_str.to_lowercase();
+        if lower.ends_with("\\windows") || lower.ends_with("\\windows\\system32") || lower.ends_with("\\windows\\system") {
+            return Err("禁止写入系统目录".into());
+        }
+    }
+
+    std::fs::write(&canonical, &bytes).map_err(|e| format!("写入文件失败: {}", e))?;
+
+    Ok(canonical.to_string_lossy().to_string())
 }

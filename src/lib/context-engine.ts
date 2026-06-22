@@ -16,13 +16,18 @@
 
 import { api } from "./api";
 import { getJSONSync } from "./storage";
+import { loadAllChapters } from "./chapter-store";
+import { reportDiagnostic } from "./diagnostics";
 import type {
+    BeatCard,
     Chapter,
     ChapterSummary,
     Character,
     CharacterState,
     ContextEngineOutput,
+    ContextPanelData,
     ForeshadowEntry,
+    PlotSegmentData,
     RelationshipEdge,
     StoryBible,
     StorylineProgress,
@@ -53,15 +58,18 @@ const MAX_TOKENS = 40_000;
 /** 安全缓冲：实际使用上限设为 MAX_TOKENS - 2K，防止溢出 */
 const EFFECTIVE_MAX_TOKENS = MAX_TOKENS - 2_000;
 
+/** 世界观词条类型标签（T5 去重：原 3 处内联定义合并） */
+const TYPE_LABEL: Record<string, string> = { rule: "规则", faction: "势力", place: "地点", item: "道具", system: "制度", other: "其他" };
+
 /** 从 novel-workbench-mock 中读取项目世界观词条 */
 function loadWorldTerms(projectId: string): any[] {
     try {
-        const mock = getJSONSync('novel-workbench-mock', {});
+        const mock = getJSONSync('novel-workbench-mock', {} as Record<string, any>);
         return (mock.worldTerms || []).filter((t: any) => t.project_id === projectId);
     } catch { return []; }
 }
 
-function estimateTokens(text: string): number {
+export function estimateTokens(text: string): number {
     let t = 0;
     for (const ch of text) {
         if (/[\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]/.test(ch)) {
@@ -92,7 +100,7 @@ export async function buildModuleContext(input: ChatContextInput): Promise<strin
     const [allCharacters, allWorldTerms, allEdges, styleGuide, storyBible] = await Promise.all([
         api.listCharacters(projectId),
         api.listWorldTerms(projectId),
-        api.listRelationshipEdges(projectId).catch(() => [] as any[]),
+        api.listRelationshipEdges(projectId).catch(() => [] as RelationshipEdge[]),
         loadStyleGuide(projectId),
         loadStoryBible(projectId),
     ]);
@@ -108,9 +116,8 @@ export async function buildModuleContext(input: ChatContextInput): Promise<strin
         // 世界观：强调词条，弱化角色
         if (allWorldTerms.length > 0) {
             parts.push("\n===== 🌍 全部世界观词条 =====");
-            const typeLabel: Record<string, string> = { rule: "规则", faction: "势力", place: "地点", item: "道具", system: "制度", other: "其他" };
             for (const t of allWorldTerms) {
-                parts.push(`· [${typeLabel[t.term_type] || t.term_type}] ${t.title}：${t.one_liner || ""}`);
+                parts.push(`· [${TYPE_LABEL[t.term_type] || t.term_type}] ${t.title}：${t.one_liner || ""}`);
                 if (t.detail) parts.push(`  ${t.detail.slice(0, 120)}`);
             }
         }
@@ -176,8 +183,8 @@ export async function buildModuleContext(input: ChatContextInput): Promise<strin
     } else if (mod === "plot-direction") {
         // 剧情走向：明暗线 + 连线 + 时间轴
         try {
-            const segs = getJSONSync(`plot-segments-${projectId}`, [] as any[]);
-            const savedEdges = getJSONSync(`plot-edges-${projectId}`, [] as any[]);
+            const segs = getJSONSync(`plot-segments-${projectId}`, [] as PlotSegmentData[]);
+            const savedEdges = getJSONSync(`plot-edges-${projectId}`, [] as PlotSegmentData[]);
             const bright = segs.filter((s: any) => s.type === "bright");
             const dark = segs.filter((s: any) => s.type === "dark");
 
@@ -263,9 +270,8 @@ export async function buildModuleContext(input: ChatContextInput): Promise<strin
         }
         if (allWorldTerms.length > 0) {
             parts.push("\n===== 世界观设定一览 =====");
-            const typeLabel: Record<string, string> = { rule: "规则", faction: "势力", place: "地点", item: "道具", system: "制度", other: "其他" };
             for (const t of allWorldTerms.slice(0, 30)) {
-                parts.push(`· [${typeLabel[t.term_type] || t.term_type}] ${t.title}：${t.one_liner || "（待补充）"}`);
+                parts.push(`· [${TYPE_LABEL[t.term_type] || t.term_type}] ${t.title}：${t.one_liner || "（待补充）"}`);
             }
             if (allWorldTerms.length > 30) parts.push(`...还有 ${allWorldTerms.length - 30} 个词条`);
         }
@@ -285,10 +291,10 @@ export async function buildChapterContext(projectId: string, chapterRange: strin
     if (rm) { startCh = parseInt(rm[1]); endCh = parseInt(rm[2]); }
     else if (sm) { startCh = endCh = parseInt(sm[1]); }
 
-    // ====== 唯一数据源: plot-chapters-{pid}（写作台卷章树）=======
+    // ====== 唯一数据源: chapter-store（写作台卷章树，逐章存储）=======
     let plotChapters: any[] = [];
     try {
-        plotChapters = getJSONSync(`plot-chapters-${projectId}`, [] as any[]);
+        plotChapters = loadAllChapters(projectId);
     } catch { /* ignore */ }
 
     // 按范围过滤
@@ -324,8 +330,8 @@ export async function buildChatContext(projectId: string): Promise<string> {
 /** 从 plot-chapters（写作台卷章树）读取章节，这是章节数据的唯一真实来源 */
 function findChapterFromPlotChapters(projectId: string, chapterId: string): { id: string; number: number; title: string; volumeName: string } | null {
     try {
-        const chapters = getJSONSync(`plot-chapters-${projectId}`, null as any[] | null);
-        if (!chapters) return null;
+        const chapters = loadAllChapters(projectId);
+        if (!chapters || chapters.length === 0) return null;
         const ch = chapters.find((c: any) => c.id === chapterId);
         if (!ch) return null;
         // 从剧情走向中找卷名
@@ -339,6 +345,68 @@ function findChapterFromPlotChapters(projectId: string, chapterId: string): { id
     } catch {
         return null;
     }
+}
+
+/** T5 统一上下文组装入口 —— 替代 buildProjectContext + loadContextPanelData */
+export async function assembleContext(
+    projectId: string,
+    chapterId: string,
+    mode: "panel" | "ai",
+): Promise<ContextEngineOutput | ContextPanelData> {
+    const plotChapter = findChapterFromPlotChapters(projectId, chapterId);
+    const chapterNumber = plotChapter?.number || 1;
+
+    if (mode === "panel") {
+        const [summaries, beatCards, styleGuide] = await Promise.all([
+            api.getChapterSummaries(projectId).catch(() => [] as ChapterSummary[]),
+            api.listBeatCards(chapterId).catch(() => [] as BeatCard[]),
+            api.getStyleGuide(projectId).catch(() => null as StyleGuide | null),
+        ]);
+
+        const panelData: ContextPanelData = {
+            summaries: summaries.filter(s => s.chapter_number < chapterNumber && s.chapter_number >= chapterNumber - 5)
+                .sort((a, b) => a.chapter_number - b.chapter_number),
+            beatCards,
+            characters: [],
+            prevContent: null,
+            worldRules: [],
+            styleRedlines: styleGuide?.writing_rules || "",
+            styleNarrative: styleGuide?.narrative_style || "",
+            styleTone: styleGuide?.writing_tone || "",
+        };
+
+        // 加载活跃角色状态
+        try {
+            const logStore = getLogStoreV2(projectId);
+            const states = logStore.characterStates || [];
+            const active = states.filter(s => s.last_active_chapter >= chapterNumber - 10);
+            panelData.characters = active.map(s => ({ name: s.character_name, status: s.current_status }));
+        } catch { /* ignore */ }
+
+        // 加载世界观规则词条
+        try {
+            const allTerms = await api.listWorldTerms(projectId);
+            const rules = allTerms.filter(t => t.term_type === "rule").map(t => `· ${t.title}：${t.one_liner || ""}`);
+            panelData.worldRules = rules.slice(0, 8);
+        } catch { /* ignore */ }
+
+        // 加载前一章内容后 3000 字
+        try {
+            const allChapters = loadAllChapters(projectId);
+            const prev = allChapters.find((ch: any) => ch.number === chapterNumber - 1);
+            if (prev?.content) {
+                const clean = prev.content.replace(/<[^>]+>/g, "").trim();
+                if (clean) {
+                    panelData.prevContent = { number: prev.number, title: prev.title || "", content: clean.slice(-3000) };
+                }
+            }
+        } catch { /* ignore */ }
+
+        return panelData;
+    }
+
+    // mode === "ai" → 调用原有 buildProjectContext
+    return buildProjectContext({ projectId, chapterId });
 }
 
 export async function buildProjectContext(input: ContextEngineInput): Promise<ContextEngineOutput> {
@@ -429,7 +497,7 @@ async function loadRecentSummaries(projectId: string, currentChapter?: Chapter):
         let all = await api.getChapterSummaries(projectId);
         // 防御：EXE 模式可能返回整个 log store 对象，提取 summaries 字段
         if (!Array.isArray(all)) {
-            all = (all as any)?.summaries || [];
+            all = Array.isArray(all) ? all : (all as Record<string, unknown>)?.summaries as ChapterSummary[] || [];
         }
         const before = all.filter((s: any) => s.chapter_number < currentChapter.number).sort((a: any, b: any) => b.chapter_number - a.chapter_number).slice(0, 5);
         return before.reverse();
@@ -464,11 +532,11 @@ function assembleP0(projectId: string, _styleGuide: StyleGuide | null, storyBibl
             } else {
                 // 无 termActivity（第一章或尚未评估）：用 beat 直接引用的词条兜底
                 try {
-                    const chaps = getJSONSync(`plot-chapters-${projectId}`, [] as any[]);
-                    const segs = getJSONSync(`plot-segments-${projectId}`, [] as any[]);
+                    const chaps = loadAllChapters(projectId);
+                    const segs = getJSONSync(`plot-segments-${projectId}`, [] as PlotSegmentData[]);
                     const currentChap = chaps.find((c: any) => c.number === currentChapterNumber);
                     if (currentChap) {
-                        const vol = segs.find((s: any) => s.id === currentChap.volumeSegmentId && s.type === "bright");
+                        const vol = segs.find((s) => s.id === currentChap.volumeSegmentId && s.type === "bright");
                         if (vol) {
                             const volChaps = chaps.filter((c: any) => c.volumeSegmentId === vol.id).sort((a: any, b: any) => a.number - b.number);
                             const idxInVol = volChaps.findIndex((c: any) => c.id === currentChap.id);
@@ -490,7 +558,6 @@ function assembleP0(projectId: string, _styleGuide: StyleGuide | null, storyBibl
         const filtered = terms.filter(t => activeTermIds.has(t.id));
         const MAX_TERMS = 20;
         const MAX_CHARS = 600;
-        const typeLabel: Record<string, string> = { rule: "规则", faction: "势力", place: "地点", item: "道具", system: "制度", other: "其他" };
 
         if (filtered.length > 0) {
             // 优先级：rule 无条件最高优，其余按原筛选
@@ -503,7 +570,7 @@ function assembleP0(projectId: string, _styleGuide: StyleGuide | null, storyBibl
             let charCount = 0;
             let shown = 0;
             for (const t of prioritized) {
-                const line = `· [${typeLabel[t.term_type] || t.term_type}] ${t.title}：${(t.one_liner || "").slice(0, 30)}`;
+                const line = `· [${TYPE_LABEL[t.term_type] || t.term_type}] ${t.title}：${(t.one_liner || "").slice(0, 30)}`;
                 if (charCount + line.length > MAX_CHARS) {
                     parts.push(`...（还有 ${prioritized.length - shown} 条，已省略）`);
                     break;
@@ -523,7 +590,7 @@ function assembleP0(projectId: string, _styleGuide: StyleGuide | null, storyBibl
             let charCount = 0;
             let shown = 0;
             for (const t of prioritized) {
-                const line = `· [${typeLabel[t.term_type] || t.term_type}] ${t.title}：${(t.one_liner || "").slice(0, 30)}`;
+                const line = `· [${TYPE_LABEL[t.term_type] || t.term_type}] ${t.title}：${(t.one_liner || "").slice(0, 30)}`;
                 if (charCount + line.length > MAX_CHARS) {
                     parts.push(`...（还有 ${prioritized.length - shown} 条，已省略）`);
                     break;
@@ -553,7 +620,7 @@ function assembleP0(projectId: string, _styleGuide: StyleGuide | null, storyBibl
 // ===== P1：剧情走向 + 前情摘要 =====
 
 /** 解析章节范围字符串如 "1-3" 或 "4,7-9" 为数字数组 */
-function parseChapterRange(range: string): number[] {
+export function parseChapterRange(range: string): number[] {
     const nums: number[] = [];
     if (!range) return nums;
     const parts = range.split(/[,，]/);
@@ -572,8 +639,8 @@ function parseChapterRange(range: string): number[] {
 function assembleP1(projectId: string, recentSummaries: ChapterSummary[], currentChapterNumber?: number): string {
     const parts: string[] = ["━━━━ P1 · 剧情走向与前情摘要 ━━━━"];
     try {
-        const segs = getJSONSync(`plot-segments-${projectId}`, [] as any[]);
-        const chaps = getJSONSync(`plot-chapters-${projectId}`, [] as any[]);
+        const segs = getJSONSync(`plot-segments-${projectId}`, [] as PlotSegmentData[]);
+        const chaps = loadAllChapters(projectId);
         if (segs.length > 0) {
             // 如果知道当前章节号，找到它所属的卷（bright segment）
             let currentVolId = "";
@@ -670,7 +737,7 @@ function assembleP1(projectId: string, recentSummaries: ChapterSummary[], curren
     parts.push("");
 
     try {
-        const bible = getJSONSync(`novel-workbench-bible-${projectId}`, null as any);
+        const bible = getJSONSync(`novel-workbench-bible-${projectId}`, null as StoryBible | null);
         if (bible) {
             if (bible.locked_events?.length > 0) {
                 parts.push("【已锁定事件（不可提前/跳过）】");
@@ -755,11 +822,11 @@ function assembleP3(allCharacters: Character[], currentChapterNumber: number, al
 
     // 来源2: beat.characters 中引用的（从当前卷细纲匹配）
     try {
-        const segs = getJSONSync(`plot-segments-${allCharacters[0]?.project_id || ""}`, [] as any[]);
-        const chaps = getJSONSync(`plot-chapters-${allCharacters[0]?.project_id || ""}`, [] as any[]);
+        const segs = getJSONSync(`plot-segments-${allCharacters[0]?.project_id || ""}`, [] as PlotSegmentData[]);
+        const chaps = loadAllChapters(allCharacters[0]?.project_id || "");
         const currentChap = chaps.find((c: any) => c.number === currentChapterNumber);
         if (currentChap) {
-            const vol = segs.find((s: any) => s.id === currentChap.volumeSegmentId && s.type === "bright");
+            const vol = segs.find((s) => s.id === currentChap.volumeSegmentId && s.type === "bright");
             if (vol) {
                 const volChapsSorted = chaps.filter((c: any) => c.volumeSegmentId === vol.id).sort((a: any, b2: any) => a.number - b2.number);
                 const beat = vol.beats?.find((b: any) => {
@@ -794,24 +861,42 @@ function assembleP3(allCharacters: Character[], currentChapterNumber: number, al
     if (activeChars.length > 0) {
         parts.push("【本章活跃角色】（完整卡）");
         for (const c of activeChars) {
-            // 应用最新快照（年龄最大），字段级合并到角色卡
+            // ★ T5.3 D2修复：按章节时间线匹配快照（非盲取最大 age）
             const merged = { ...c };
             if (merged.snapshots?.length) {
-                const latest = [...merged.snapshots].sort((a, b) => (parseInt(b.age) || 0) - (parseInt(a.age) || 0))[0];
-                if (latest.changes.personality) merged.personality = latest.changes.personality;
-                if (latest.changes.ability) merged.ability = latest.changes.ability;
-                if (latest.changes.appearance) merged.appearance = latest.changes.appearance;
-                if (latest.changes.background) merged.background = latest.changes.background;
-                if (latest.changes.style) merged.style = latest.changes.style;
-                if (latest.changes.interests) merged.interests = latest.changes.interests;
-                if (latest.changes.desire) merged.desire = latest.changes.desire;
-                if (latest.changes.fear) merged.fear = latest.changes.fear;
-                if (latest.changes.flaw) merged.flaw = latest.changes.flaw;
-                if (latest.changes.arc) merged.arc = latest.changes.arc;
-                if (latest.changes.voice_style) merged.voice_style = latest.changes.voice_style;
-                if (latest.changes.faction) merged.faction = latest.changes.faction;
-                if (latest.changes.race) merged.race = latest.changes.race;
-                if (latest.age) merged.age = latest.age;
+                const baseAge = parseInt(c.age) || 0;
+                const sortedByAge = [...merged.snapshots].sort((a, b) => (parseInt(a.age) || 0) - (parseInt(b.age) || 0));
+                let bestSnap = sortedByAge[sortedByAge.length - 1]; // 默认最大 age
+                let matchedByTimeline = false;
+
+                if (baseAge > 0 && currentChapterNumber > 0) {
+                    // 尝试按时间线匹配：找 age 最接近 baseAge + chapter 偏移的快照
+                    const estimatedAge = baseAge + Math.floor((currentChapterNumber - 1) / 10);
+                    let bestDist = Infinity;
+                    for (const s of sortedByAge) {
+                        const dist = Math.abs((parseInt(s.age) || 0) - estimatedAge);
+                        if (dist < bestDist) { bestDist = dist; bestSnap = s; }
+                    }
+                    matchedByTimeline = bestDist < 20; // 差距过大则认为无法判断
+                }
+
+                if (!matchedByTimeline) {
+                    reportDiagnostic("warn", `角色「${c.name}」快照匹配：无法判断时间线，使用最大年龄 ${bestSnap.age} 岁快照`);
+                }
+                if (bestSnap.changes.personality) merged.personality = bestSnap.changes.personality;
+                if (bestSnap.changes.ability) merged.ability = bestSnap.changes.ability;
+                if (bestSnap.changes.appearance) merged.appearance = bestSnap.changes.appearance;
+                if (bestSnap.changes.background) merged.background = bestSnap.changes.background;
+                if (bestSnap.changes.style) merged.style = bestSnap.changes.style;
+                if (bestSnap.changes.interests) merged.interests = bestSnap.changes.interests;
+                if (bestSnap.changes.desire) merged.desire = bestSnap.changes.desire;
+                if (bestSnap.changes.fear) merged.fear = bestSnap.changes.fear;
+                if (bestSnap.changes.flaw) merged.flaw = bestSnap.changes.flaw;
+                if (bestSnap.changes.arc) merged.arc = bestSnap.changes.arc;
+                if (bestSnap.changes.voice_style) merged.voice_style = bestSnap.changes.voice_style;
+                if (bestSnap.changes.faction) merged.faction = bestSnap.changes.faction;
+                if (bestSnap.changes.race) merged.race = bestSnap.changes.race;
+                if (bestSnap.age) merged.age = bestSnap.age;
             }
             const fields: string[] = [merged.name];
             if (merged.gender) fields.push(merged.gender);
@@ -880,7 +965,7 @@ function assembleP4(projectId: string, currentChapterNumber: number): string {
     if (currentChapterNumber <= 1) return ""; // 第一章没有前一章
 
     try {
-        const plotChapters = getJSONSync(`plot-chapters-${projectId}`, [] as any[]);
+        const plotChapters = loadAllChapters(projectId);
         const prevChapter = plotChapters.find((ch: any) => ch.number === currentChapterNumber - 1);
         if (!prevChapter || !prevChapter.content) return "";
 

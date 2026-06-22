@@ -2,11 +2,12 @@ import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useAppStore } from "@/stores/app-store";
 import { getJSONSync } from "@/lib/storage";
+import { loadAllChapters } from "@/lib/chapter-store";
 import { BookOpen, BarChart3, Users, Globe2, ListTree, Eye } from "lucide-react";
 
-/** 从写作台的 localStorage 中读取含正文内容的章节列表 */
+/** 从 chapter-store 中读取含正文内容的章节列表 */
 function loadPlotChapters(pid: string): { id: string; content: string }[] {
-    return getJSONSync("plot-chapters-" + pid, [] as { id: string; content: string }[]);
+    return loadAllChapters(pid);
 }
 
 /** 从剧情走向读取段落和细纲 */

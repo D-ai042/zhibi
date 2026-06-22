@@ -2,6 +2,7 @@ use rusqlite::{Connection, Result};
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager};
+use log;
 
 pub struct DbState(pub Mutex<Option<Connection>>);
 
@@ -45,7 +46,9 @@ fn run_migrations(conn: &Connection) -> rusqlite::Result<()> {
         "ALTER TABLE characters ADD COLUMN interests TEXT DEFAULT ''",
     ];
     for stmt in &migration_cols {
-        conn.execute(stmt, []).ok();
+        if let Err(e) = conn.execute(stmt, []) {
+            log::warn!("[migration] 列迁移失败（正常如列已存在）: {}", e);
+        }
     }
     Ok(())
 }
@@ -58,7 +61,7 @@ pub fn open_project_db(project_id: &str, state: &DbState) -> rusqlite::Result<()
     let schema = include_str!("schema.sql");
     conn.execute_batch(schema)?;
     run_migrations(&conn)?;
-    let mut guard = state.0.lock().unwrap();
+    let mut guard = state.0.lock().unwrap_or_else(|e| e.into_inner());
     *guard = Some(conn);
     Ok(())
 }
@@ -67,7 +70,10 @@ pub fn with_conn<F, T>(state: &DbState, f: F) -> Result<T>
 where
     F: FnOnce(&Connection) -> Result<T>,
 {
-    let guard = state.0.lock().unwrap();
-    let conn = guard.as_ref().expect("no project db open");
+    let guard = state.0.lock().unwrap_or_else(|e| e.into_inner());
+    let conn = guard.as_ref().ok_or_else(|| rusqlite::Error::SqliteFailure(
+        rusqlite::ffi::Error::new(1),
+        Some("未打开项目数据库，请先选择一个项目".into()),
+    ))?;
     f(conn)
 }

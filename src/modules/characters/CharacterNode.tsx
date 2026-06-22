@@ -9,8 +9,8 @@ export interface CharacterNodeData {
     onDelete: (id: string) => void;
 }
 
-function CharacterNode({ data, selected }: NodeProps<CharacterNodeData>) {
-    const { character, onUpdate } = data;
+function CharacterNode({ data, selected }: NodeProps<Record<string, unknown>>) {
+    const { character, onUpdate } = data as unknown as CharacterNodeData;
     const [editing, setEditing] = useState(false);
     const [draft, setDraft] = useState(character.name);
     const inputRef = useRef<HTMLInputElement>(null);

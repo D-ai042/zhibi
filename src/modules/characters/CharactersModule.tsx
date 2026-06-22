@@ -7,6 +7,7 @@ import {
 import "@xyflow/react/dist/style.css";
 import { api } from "@/lib/api";
 import { useAppStore } from "@/stores/app-store";
+import { getJSONSync, saveJSON } from "@/lib/storage";
 import type { Character, RelationshipEdge } from "@/types";
 import CharacterNode from "./CharacterNode";
 import CustomEdge from "./CustomEdge";
@@ -92,12 +93,11 @@ export function CharactersModule() {
       if (!currentProject) return;
       restoringRef.current = true;
       try {
-        const raw = localStorage.getItem(STORAGE_KEY);
-        if (raw) {
-          const data = JSON.parse(raw);
+        const data = getJSONSync(STORAGE_KEY, null as any);
+        if (data) {
           data.characters = snapshot.chars;
           data.edges = snapshot.rawEdges;
-          localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+          saveJSON(STORAGE_KEY, data);
         }
         saveGroups(currentProject.id, snapshot.groups as any[]);
       } catch { /* ignore */ }

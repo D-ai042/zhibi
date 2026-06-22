@@ -2,7 +2,8 @@ import { useState, useEffect, useCallback } from "react";
 import { BookMarked, Save, Shield, Palette, History, FileText, Sparkles, MessageCircle } from "lucide-react";
 import { useAppStore } from "@/stores/app-store";
 import { api } from "@/lib/api";
-import { getJSONSync, setJSONSync, setJSON } from "@/lib/storage";
+import { getJSONSync, setJSONSync, saveJSON } from "@/lib/storage";
+import { loadAllChapters } from "@/lib/chapter-store";
 import type { StyleGuide, StoryBible } from "@/types";
 
 type TabId = "style" | "rules" | "voices" | "summary" | "versions";
@@ -50,10 +51,10 @@ function TabButton({ active, icon, label, onClick }: { active: boolean; icon: Re
 interface PlotSegment { id: string; project_id: string; type: "bright" | "dark"; title: string; characters: string; location: string; time: string; event: string; terms?: string; }
 interface PlotChapter { id: string; volumeSegmentId: string; number: number; title: string; content: string; }
 function loadPlotChapters(pid: string): PlotChapter[] {
-    try { return JSON.parse(localStorage.getItem(`plot-chapters-${pid}`) || "[]"); } catch { return []; }
+    return loadAllChapters(pid);
 }
 function loadPlotSegments(pid: string): PlotSegment[] {
-    try { return JSON.parse(localStorage.getItem(`plot-segments-${pid}`) || "[]"); } catch { return []; }
+    return getJSONSync(`plot-segments-${pid}`, []);
 }
 /** 获取按卷分组、按 number 排序的章节选项列表 */
 function getVolumeGroupedChapterOptions(pid: string): { value: string; label: string; volumeName: string }[] {
@@ -101,24 +102,22 @@ function StyleGuideEditor({ projectId }: { projectId: string }) {
     const handleSave = useCallback(() => {
         const updated = { ...guide, updated_at: new Date().toISOString() };
         setJSONSync(`novel-workbench-style-${projectId}`, updated);
-        setJSON(`novel-workbench-style-${projectId}`, updated);
         setGuide(updated); setSaved(true); setTimeout(() => setSaved(false), 2000);
     }, [guide, projectId]);
 
     const handleExtractFromChapters = useCallback(async () => {
         setExtracting(true);
         try {
-            // 尝试从 localStorage 读取（浏览器模式）；回退到 API（Tauri 模式）
-            let allChapters = JSON.parse(localStorage.getItem(`plot-chapters-${projectId}`) || "[]") as any[];
+            // T3：从 chapter-store 读取章节
+            let allChapters = loadAllChapters(projectId) as any[];
             let fullText = "";
             if (selectedChapterForExtract) {
                 const target = allChapters.find((ch: any) => ch.id === selectedChapterForExtract);
                 if (target?.content) fullText = target.content;
                 if (!fullText) {
                     // 从 mock 或 API 读取章节内容
-                    const mockRaw = localStorage.getItem("novel-workbench-mock");
-                    if (mockRaw) {
-                        const mock = JSON.parse(mockRaw);
+                    const mock = getJSONSync("novel-workbench-mock", null as any);
+                    if (mock) {
                         const cc = mock.chapterContents?.find((c: any) => c.chapter_id === selectedChapterForExtract);
                         if (cc) { try { fullText = JSON.parse(cc.body_json); } catch { fullText = (cc.body_html || "").replace(/<br>/g, "\n"); } }
                     }
@@ -132,9 +131,8 @@ function StyleGuideEditor({ projectId }: { projectId: string }) {
                 }
             } else {
                 for (const ch of allChapters) { if (ch.content) fullText += "\n\n" + ch.content; }
-                const mockRaw = localStorage.getItem("novel-workbench-mock");
-                if (mockRaw) {
-                    const mock = JSON.parse(mockRaw);
+                const mock = getJSONSync("novel-workbench-mock", null as any);
+                if (mock) {
                     for (const cc of mock.chapterContents || []) {
                         try { fullText += "\n\n" + JSON.parse(cc.body_json); } catch { fullText += "\n\n" + (cc.body_html || "").replace(/<br>/g, "\n"); }
                     }
@@ -217,14 +215,14 @@ function BibleRulesEditor({ projectId }: { projectId: string }) {
         } catch { /* ignore */ }
         // 从大纲自动读取世界观词条（从 novel-workbench-mock 读取）
         try {
-            const mock = JSON.parse(localStorage.getItem('novel-workbench-mock') || '{}');
+            const mock = getJSONSync('novel-workbench-mock', {} as any);
             const terms = (mock.worldTerms || []).filter((t: any) => t.project_id === projectId);
             const typeLabel: Record<string, string> = { rule: "规则", faction: "势力", place: "地点", item: "道具", system: "制度", other: "其他" };
             setAutoWorldTerms(terms.map((t: any) => ({ type: typeLabel[t.term_type] || t.term_type, title: t.title, desc: t.one_liner || "" })));
         } catch { setAutoWorldTerms([]); }
         // 从大纲自动读取剧情走向
         try {
-            const segs = JSON.parse(localStorage.getItem(`plot-segments-${projectId}`) || "[]");
+            const segs = getJSONSync(`plot-segments-${projectId}`, []);
             setAutoPlotSegs(segs.map((s: any) => ({ type: s.type === "bright" ? "明线" : "暗线", title: s.title, event: s.event || "" })));
         } catch { setAutoPlotSegs([]); }
     }, [projectId]);
@@ -232,7 +230,6 @@ function BibleRulesEditor({ projectId }: { projectId: string }) {
     const handleSave = useCallback(() => {
         const updated = { ...bible, updated_at: new Date().toISOString() };
         setJSONSync(`novel-workbench-bible-${projectId}`, updated);
-        setJSON(`novel-workbench-bible-${projectId}`, updated);
         setBible(updated); setSaved(true); setTimeout(() => setSaved(false), 2000);
     }, [bible, projectId]);
 
@@ -383,7 +380,6 @@ function CharacterVoiceEditor({ projectId }: { projectId: string }) {
     const handleSave = useCallback(() => {
         const filtered = entries.filter(e => e.char.trim());
         setJSONSync(`novel-workbench-voices-${projectId}`, filtered);
-        setJSON(`novel-workbench-voices-${projectId}`, filtered);
         setEntries(filtered); setSaved(true); setTimeout(() => setSaved(false), 2000);
     }, [entries, projectId]);
 
@@ -402,15 +398,15 @@ function CharacterVoiceEditor({ projectId }: { projectId: string }) {
     const handleAnalyze = useCallback(async () => {
         setExtracting(true);
         try {
-            // 尝试从 localStorage 读取（浏览器模式）；回退到 API（Tauri 模式）
-            let allChapters = JSON.parse(localStorage.getItem(`plot-chapters-${projectId}`) || "[]") as any[];
+            // T3：从 chapter-store 读取章节
+            let allChapters = loadAllChapters(projectId) as any[];
             let fullText = "";
             if (selectedChapter) {
                 const target = allChapters.find((ch: any) => ch.id === selectedChapter);
                 if (target?.content) fullText = target.content;
                 if (!fullText) {
-                    const mockRaw = localStorage.getItem("novel-workbench-mock");
-                    if (mockRaw) { const mock = JSON.parse(mockRaw); const cc = mock.chapterContents?.find((c: any) => c.chapter_id === selectedChapter); if (cc) { try { fullText = JSON.parse(cc.body_json); } catch { fullText = (cc.body_html || "").replace(/<br>/g, "\n"); } } }
+                    const mock = getJSONSync("novel-workbench-mock", null as any);
+                    if (mock) { const cc = mock.chapterContents?.find((c: any) => c.chapter_id === selectedChapter); if (cc) { try { fullText = JSON.parse(cc.body_json); } catch { fullText = (cc.body_html || "").replace(/<br>/g, "\n"); } } }
                     if (!fullText) {
                         const cc = await api.getChapterContent(selectedChapter);
                         if (cc) {
@@ -420,8 +416,8 @@ function CharacterVoiceEditor({ projectId }: { projectId: string }) {
                 }
             } else {
                 for (const ch of allChapters) { if (ch.content) fullText += "\n\n" + ch.content; }
-                const mockRaw = localStorage.getItem("novel-workbench-mock");
-                if (mockRaw) { const mock = JSON.parse(mockRaw); for (const cc of mock.chapterContents || []) { try { fullText += "\n\n" + JSON.parse(cc.body_json); } catch { fullText += "\n\n" + (cc.body_html || "").replace(/<br>/g, "\n"); } } }
+                const mock = getJSONSync("novel-workbench-mock", null as any);
+                if (mock) { for (const cc of mock.chapterContents || []) { try { fullText += "\n\n" + JSON.parse(cc.body_json); } catch { fullText += "\n\n" + (cc.body_html || "").replace(/<br>/g, "\n"); } } }
                 if (!fullText.trim()) {
                     try {
                         const chapters = await api.listChapters(projectId);
@@ -544,7 +540,6 @@ function ContextEditor({ projectId }: { projectId: string }) {
             savedAt: new Date().toISOString(),
         };
         setJSONSync(`novel-workbench-bible-${projectId}`, bible);
-        setJSON(`novel-workbench-bible-${projectId}`, bible);
         setSavedOverride(true);
         setTimeout(() => setSavedOverride(false), 2000);
     }, [projectId, selectedId, ctx, edits]);
@@ -639,9 +634,9 @@ function ContextEditor({ projectId }: { projectId: string }) {
 function VersionHistory({ projectId }: { projectId: string }) {
     const [versions, setVersions] = useState<any[]>([]);
     const handleTakeSnapshot = useCallback(() => {
-        try { const s = localStorage.getItem(`novel-workbench-style-${projectId}`); const b = localStorage.getItem(`novel-workbench-bible-${projectId}`); const v = localStorage.getItem(`novel-workbench-voices-${projectId}`); const snapshot = { projectId, styleGuide: s ? JSON.parse(s) : null, storyBible: b ? JSON.parse(b) : null, voices: v ? JSON.parse(v) : null, taken_at: new Date().toISOString() }; const existing = JSON.parse(localStorage.getItem(`novel-workbench-versions-${projectId}`) || "[]"); existing.push(snapshot); if (existing.length > 50) existing.shift(); localStorage.setItem(`novel-workbench-versions-${projectId}`, JSON.stringify(existing)); setVersions(existing); } catch { /* ignore */ }
+        try { const s = getJSONSync(`novel-workbench-style-${projectId}`, null); const b = getJSONSync(`novel-workbench-bible-${projectId}`, null); const v = getJSONSync(`novel-workbench-voices-${projectId}`, null); const snapshot = { projectId, styleGuide: s, storyBible: b, voices: v, taken_at: new Date().toISOString() }; const existing = getJSONSync(`novel-workbench-versions-${projectId}`, [] as any[]); existing.push(snapshot); if (existing.length > 50) existing.shift(); saveJSON(`novel-workbench-versions-${projectId}`, existing); setVersions(existing); } catch { /* ignore */ }
     }, [projectId]);
-    useEffect(() => { try { const raw = localStorage.getItem(`novel-workbench-versions-${projectId}`); if (raw) setVersions(JSON.parse(raw)); } catch { /* ignore */ } }, [projectId]);
+    useEffect(() => { try { setVersions(getJSONSync(`novel-workbench-versions-${projectId}`, [])); } catch { /* ignore */ } }, [projectId]);
     return (
         <div className="max-w-3xl">
             <div className="mb-4 flex items-center gap-3"><h3 className="text-sm font-semibold text-slate-700">版本记录</h3><button type="button" className="rounded-md bg-violet-600 px-3 py-1.5 text-xs text-white hover:bg-violet-700" onClick={handleTakeSnapshot}>📸 记录当前版本</button></div>
