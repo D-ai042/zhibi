@@ -211,7 +211,9 @@ export function useAiChatStream(
             section: outlineSection,
             chapterId: store.writingChapterId ?? undefined,
             entityId: selectedEntity?.id,
-            zoneFilter: store.worldviewZoneEnabled,
+            zoneFilter: ctxModule === "worldview" ? store.worldviewZoneEnabled
+              : ctxModule === "characters" ? store.characterZoneEnabled
+                : undefined,
           });
         } catch {
           projectContext = await buildChatContext(currentProject.id).catch(() => "");

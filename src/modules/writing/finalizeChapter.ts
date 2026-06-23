@@ -3,7 +3,7 @@
 
 import { api } from "@/lib/api";
 import { uuid } from "@/lib/uuid";
-import { getJSONSync } from "@/lib/storage";
+import { getJSONSync, setJSONSync } from "@/lib/storage";
 import { loadAllChapters } from "@/lib/chapter-store";
 import { updateMemory, activateNextChapterTerms, activateNextChapterCharacters, createSnapshot } from "@/lib/memory-updater";
 import { createBackup } from "@/lib/backup";
@@ -29,6 +29,49 @@ async function aiExtractNewCharacters(projectId: string, chapterNumber: number, 
     } catch (e) { /* 角色识别失败不影响定稿 */ }
 }
 
+/** 计算字符串的简单哈希 */
+function simpleHash(str: string): string {
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+        hash = ((hash << 5) - hash) + str.charCodeAt(i);
+        hash |= 0;
+    }
+    return hash.toString(36);
+}
+
+/** 收集全书关键数据并计算哈希，与上次快照对比，判断是否需要新建快照 */
+function shouldCreateSnapshot(projectId: string): boolean {
+    try {
+        const parts: string[] = [];
+        // 收集所有项目相关的 localStorage 数据
+        const prefixes = [
+            `novel-workbench-log-${projectId}`, `plot-chapters-${projectId}`,
+            `plot-segments-${projectId}`, `plot-edges-${projectId}`,
+            `worldview-edges-${projectId}`, `worldview-groups-${projectId}`,
+            `chapter-index-${projectId}`, `chapter-${projectId}-`,
+            `char-groups-${projectId}`,
+        ];
+        for (let i = 0; i < localStorage.length; i++) {
+            const key = localStorage.key(i);
+            if (!key) continue;
+            if (key === "novel-workbench-mock" || prefixes.some(p => key.startsWith(p))) {
+                const val = localStorage.getItem(key);
+                if (val !== null) parts.push(key + ":" + val);
+            }
+        }
+        const currentHash = simpleHash(parts.join("|"));
+
+        // 与上次快照哈希对比
+        const lastHashKey = `last-snapshot-hash-${projectId}`;
+        const lastHash = getJSONSync(lastHashKey, "");
+        if (currentHash === lastHash && lastHash !== "") return false;
+
+        // 记录新哈希
+        setJSONSync(lastHashKey, currentHash);
+        return true;
+    } catch { return true; } // 出错则保守创建
+}
+
 export async function finalizeChapter(
     pid: string,
     chapterId: string,
@@ -52,11 +95,13 @@ export async function finalizeChapter(
     // 步骤2：激活下一章词条
     try {
         const allWorldTerms = await api.listWorldTerms(pid);
+        // ★ 排除锁定区词条，不发给 AI
+        const nonLockedTerms = allWorldTerms.filter(t => t.zone !== "locked");
         const segs = getJSONSync(`plot-segments-${pid}`, []);
         const chaps = loadAllChapters(pid);
         const logStore = getJSONSync(`novel-workbench-log-${pid}`, {});
         const recentSummaries = (logStore as any).summaries || [];
-        await activateNextChapterTerms(pid, chapterNumber, allWorldTerms.map(t => ({ id: t.id, title: t.title, one_liner: t.one_liner, term_type: t.term_type })), segs, chaps, recentSummaries.sort((a: any, b: any) => b.chapter_number - a.chapter_number).slice(0, 5));
+        await activateNextChapterTerms(pid, chapterNumber, nonLockedTerms.map(t => ({ id: t.id, title: t.title, one_liner: t.one_liner, term_type: t.term_type })), segs, chaps, recentSummaries.sort((a: any, b: any) => b.chapter_number - a.chapter_number).slice(0, 5));
         steps.push({ name: "词条激活", ok: true });
     } catch (e) {
         steps.push({ name: "词条激活", ok: false, error: String(e) });
@@ -90,10 +135,15 @@ export async function finalizeChapter(
         steps.push({ name: "创建备份", ok: false, error: String(e) });
     }
 
-    // 步骤6：创建快照
+    // 步骤6：创建快照（仅数据变化时）
     try {
-        createSnapshot(pid, `第${chapterNumber}章「${chapterTitle}」定稿`);
-        steps.push({ name: "创建快照", ok: true });
+        const needsSnapshot = shouldCreateSnapshot(pid);
+        if (needsSnapshot) {
+            createSnapshot(pid, `第${chapterNumber}章「${chapterTitle}」定稿`);
+            steps.push({ name: "创建快照", ok: true });
+        } else {
+            steps.push({ name: "创建快照", ok: true, error: "数据未变化，跳过" });
+        }
     } catch (e) {
         steps.push({ name: "创建快照", ok: false, error: String(e) });
     }

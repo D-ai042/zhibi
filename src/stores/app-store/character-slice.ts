@@ -2,13 +2,21 @@
 import type { StateCreator } from "zustand";
 import type { AppStore, WorldviewGroup } from "./types";
 
+export type CharGroup = { id: string; name: string; locked: boolean };
+
 export interface CharacterSlice {
   worldTermBump: number; groupBump: number; characterBump: number;
   pendingAiCharsBump: number; focusGroupBump: number;
   worldviewGroups: WorldviewGroup[];
+  /** 人物关系编组列表（同步到左侧大纲栏） */
+  characterGroups: CharGroup[];
+  /** 人物关系二分区域勾选状态 */
+  characterZoneEnabled: Record<string, boolean>;
   bumpWorldTerms: () => void; bumpGroups: () => void;
   bumpCharacters: () => void; bumpPendingAiChars: () => void;
   setWorldviewGroups: (g: WorldviewGroup[] | ((prev: WorldviewGroup[]) => WorldviewGroup[])) => void;
+  setCharacterGroups: (g: CharGroup[]) => void;
+  setCharacterZoneEnabled: (z: Record<string, boolean>) => void;
   focusGroup: (id: string) => void;
 }
 
@@ -16,6 +24,8 @@ export const createCharacterSlice: StateCreator<AppStore, [], [], CharacterSlice
   worldTermBump: 0, groupBump: 0, characterBump: 0,
   pendingAiCharsBump: 0, focusGroupBump: 0,
   worldviewGroups: [],
+  characterGroups: [],
+  characterZoneEnabled: { locked: false, display: true },
   bumpWorldTerms: () => set((s) => ({ worldTermBump: s.worldTermBump + 1 })),
   bumpGroups: () => set((s) => ({ groupBump: s.groupBump + 1 })),
   bumpCharacters: () => set((s) => ({ characterBump: s.characterBump + 1 })),
@@ -23,5 +33,7 @@ export const createCharacterSlice: StateCreator<AppStore, [], [], CharacterSlice
   setWorldviewGroups: (g) => set((s) => ({
     worldviewGroups: typeof g === "function" ? (g as (prev: WorldviewGroup[]) => WorldviewGroup[])(s.worldviewGroups) : g,
   })),
+  setCharacterGroups: (characterGroups) => set({ characterGroups }),
+  setCharacterZoneEnabled: (characterZoneEnabled) => set({ characterZoneEnabled }),
   focusGroup: (id) => set((s) => ({ focusGroupBump: s.focusGroupBump + 1, activeExtraId: id })),
 });

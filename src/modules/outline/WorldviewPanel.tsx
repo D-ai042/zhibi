@@ -497,7 +497,7 @@ export function WorldviewPanel() {
   }, [focusGroupBump]);
 
   // ==== drag ====
-  const onDragStop = useCallback(async (_: unknown, node: Node) => {
+  const onDragStop = useCallback(async (_: unknown, node: Node, allNodes?: Node[]) => {
     if (node.type === "group" && currentProject) {
       const gs = loadGroups(currentProject.id);
       const g = gs.find(x => x.id === node.id);
@@ -513,13 +513,15 @@ export function WorldviewPanel() {
             const absX = node.position.x + childNode.position.x;
             const absY = node.position.y + childNode.position.y;
             api.saveNodeLayout("world_term", cid, absX, absY).catch(e => console.error("saveNodeLayout failed:", e));
-            // 更新子词条的 zone 和坐标（突破编组锁定）
+            // ★ 全部子词条更新 layout 到 DB（不论 zone 是否变化）
             const ct = terms.find(x => x.id === cid);
-            if (ct && ct.zone !== newZone) {
-              const u = { ...ct, layout_x: absX, layout_y: absY, zone: newZone };
-              await api.saveWorldTerm(u as WorldTerm).catch(() => { });
-              setTerms(p => p.map(t => t.id === cid ? u : t));
-              setNodes(nds => nds.map(n => n.id === cid ? { ...n, data: { ...n.data, term: u } } : n));
+            if (ct) {
+              const u = { ...ct, layout_x: absX, layout_y: absY, zone: ct.zone !== newZone ? newZone : ct.zone };
+              if (ct.zone !== newZone || ct.layout_x !== absX || ct.layout_y !== absY) {
+                await api.saveWorldTerm(u as WorldTerm).catch(() => { });
+                setTerms(p => p.map(t => t.id === cid ? u : t));
+                setNodes(nds => nds.map(n => n.id === cid ? { ...n, data: { ...n.data, term: u } } : n));
+              }
             }
           }
         }
@@ -527,12 +529,18 @@ export function WorldviewPanel() {
       }
       return;
     }
-    const t = terms.find(x => x.id === node.id);
-    if (t) {
-      const newZone = zoneFromPos(node.position.x + 50, node.position.y + 24);
-      const u = { ...t, layout_x: node.position.x, layout_y: node.position.y, zone: newZone };
+    // ★ 处理多选拖拽：保存 ALL 被拖动词条的位置，而非仅主节点
+    const batch = allNodes && allNodes.length > 1
+      ? allNodes.filter(n => n.type === "worldviewTerm")
+      : [node];
+    for (const n of batch) {
+      if (n.type !== "worldviewTerm") continue;
+      const t = terms.find(x => x.id === n.id);
+      if (!t) continue;
+      const newZone = zoneFromPos(n.position.x + 50, n.position.y + 24);
+      const u = { ...t, layout_x: n.position.x, layout_y: n.position.y, zone: newZone };
       setTerms(p => p.map(x => x.id === t.id ? u : x));
-      setNodes(nds => nds.map(n => n.id === u.id ? { ...n, data: { ...n.data, term: u } } : n));
+      setNodes(nds => nds.map(n2 => n2.id === u.id ? { ...n2, data: { ...n2.data, term: u } } : n2));
       await api.saveWorldTerm(u as WorldTerm);
     }
   }, [terms, currentProject, setWorldviewGroups, zoneFromPos, setNodes]);
@@ -961,7 +969,13 @@ export function WorldviewPanel() {
       const childSet = new Set(allChildIds);
       const updatedTerms = nds.filter(n => n.type !== "group").map(n => {
         if (!childSet.has(n.id)) return n;
-        return { ...n, parentId: gid, extent: "parent", draggable: false, position: { x: n.position.x - gx, y: n.position.y - gy } };
+        // ★ 如果节点已有 parentId（来自被合并的旧编组），先转绝对坐标再算相对新编组
+        let absX = n.position.x, absY = n.position.y;
+        if (n.parentId) {
+          const oldParent = nds.find(x => x.id === n.parentId && x.type === "group");
+          if (oldParent) { absX += oldParent.position.x; absY += oldParent.position.y; }
+        }
+        return { ...n, parentId: gid, extent: "parent", draggable: false, position: { x: absX - gx, y: absY - gy } };
       });
       return [groupNode, ...survivingGroups, ...updatedTerms];
     });

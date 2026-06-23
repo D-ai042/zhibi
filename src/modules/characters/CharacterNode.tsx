@@ -27,6 +27,7 @@ function CharacterNode({ data, selected }: NodeProps<CharacterNodeData>) {
 
     const size = 72;
     const fontSize = Math.max(11, Math.min(14, 14 - (character.name.length - 2) * 1.5));
+    const zoneBadge = character.zone === "locked" ? ({ label: "🔒", color: "#4b5563" }) : character.zone === "display" ? ({ label: "✦", color: "#6366f1" }) : null;
 
     return (
         <div
@@ -52,6 +53,14 @@ function CharacterNode({ data, selected }: NodeProps<CharacterNodeData>) {
                 if (!character.is_locked) setEditing(true);
             }}
         >
+            {zoneBadge && (
+                <span style={{
+                    position: "absolute", top: 5, left: "50%", transform: "translateX(-50%)",
+                    background: zoneBadge.color, color: "#fff",
+                    borderRadius: 999, fontSize: 8, fontWeight: 700,
+                    padding: "0 4px", lineHeight: "14px", zIndex: 5,
+                }}>{zoneBadge.label}</span>
+            )}
             {editing ? (
                 <input
                     ref={inputRef}

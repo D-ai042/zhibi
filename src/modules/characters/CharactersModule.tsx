@@ -25,7 +25,10 @@ interface SavedGroup {
 }
 function gk(pid: string) { return "char-groups-" + pid; }
 function loadGroups(pid: string): SavedGroup[] { return getJSONSync(gk(pid), []); }
-function saveGroups(pid: string, gs: SavedGroup[]) { setJSONSync(gk(pid), gs); }
+function saveGroups(pid: string, gs: SavedGroup[]) {
+  setJSONSync(gk(pid), gs);
+  try { const s = useAppStore.getState(); s.setCharacterGroups(gs.map(g => ({ id: g.id, name: g.name, locked: g.locked }))); } catch { }
+}
 const GROUP_COLORS = ["#8b5cf6", "#ec4899", "#f97316", "#10b981", "#3b82f6", "#ef4444", "#14b8a6", "#f59e0b"];
 
 /** 从关系列表构建 ReactFlow 边（不碰节点位置） */
@@ -57,7 +60,7 @@ function rebuildEdges(
 }
 
 export function CharactersModule() {
-  const { currentProject, setSelectedEntity, characterBump, saveAllBump } = useAppStore();
+  const { currentProject, setSelectedEntity, characterBump, saveAllBump, characterGroups, setCharacterGroups, characterZoneEnabled, setCharacterZoneEnabled, focusGroupBump } = useAppStore();
   const rfRef = useRef<any>(null);
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
@@ -65,8 +68,15 @@ export function CharactersModule() {
   const [selectedChar, setSelectedChar] = useState<Character | null>(null);
   const [editingField, setEditingField] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState("");
-  /** 当前查看的角色快照索引（-1 = 初始卡，0+ = snapshots 数组索引） */
   const [snapshotIdx, setSnapshotIdx] = useState(-1);
+  // 上下分区常量
+  const CY = 350; // 分割线 y 坐标
+  const [vp, setVp] = useState({ x: 0, y: 0, zoom: 1 });
+  const zoneFromPos = useCallback((y: number): "locked" | "display" => y < CY ? "locked" : "display", []);
+  const ZONE_META: Record<string, { label: string; desc: string; color: string; pale: string }> = {
+    locked: { label: "锁定区", desc: "写作台AI不可见", color: "#4b5563", pale: "rgba(75,85,99,0.06)" },
+    display: { label: "展示区", desc: "发送给AI的角色数据", color: "#6366f1", pale: "rgba(99,102,241,0.06)" },
+  };
 
   // 当 selectedChar 变化时，重置 snapshotIdx 到最新年龄的快照
   useEffect(() => {
@@ -239,6 +249,14 @@ export function CharactersModule() {
       api.listCharacters(currentProject.id),
       api.listRelationshipEdges(currentProject.id),
     ]);
+    // 自动分配 zone（旧数据兼容）
+    for (const c of loadedChars) {
+      const computed = zoneFromPos(c.layout_y || 300);
+      if (c.zone !== computed) { c.zone = computed; api.saveCharacter(c).catch(() => { }); }
+    }
+    // 同步编组到 store（左侧大纲栏）
+    const groups = loadGroups(currentProject.id);
+    setCharacterGroups(groups.map(g => ({ id: g.id, name: g.name, locked: g.locked })));
     // 快照按年龄升序排列，小左大右
     for (const c of loadedChars) {
       if (c.snapshots?.length > 1) {
@@ -367,6 +385,17 @@ export function CharactersModule() {
   useEffect(() => { load(); }, [load]);
   useEffect(() => { if (characterBump > 0) load(); }, [characterBump]);
 
+  // 左侧编组栏点击跳转到编组
+  useEffect(() => {
+    if (focusGroupBump > 0 && rfRef.current) {
+      const targetId = useAppStore.getState().activeExtraId;
+      if (targetId) {
+        const node = nodes.find(n => n.id === targetId);
+        if (node) rfRef.current.setCenter(node.position.x + 200, node.position.y + 150, { zoom: 0.6, duration: 400 });
+      }
+    }
+  }, [focusGroupBump]);
+
   // 全局保存：将当前所有角色+编组位置刷入存储（只写存储，不触发渲染）
   useEffect(() => {
     if (saveAllBump <= 0 || !currentProject || !rfRef.current) return;
@@ -430,6 +459,8 @@ export function CharactersModule() {
     const g = gs.find(x => x.id === gid); if (!g) return;
     g.name = newName; saveGroups(currentProject.id, gs);
     const store = useAppStore.getState();
+    // 同步到左侧编组侧栏
+    store.setCharacterGroups(gs.map(x => ({ id: x.id, name: x.name, locked: x.locked })));
     store.bumpCharacters();
   }, [currentProject, pushSnapshot]);
 
@@ -586,16 +617,39 @@ export function CharactersModule() {
           if (c) {
             const nx = c.layout_x + dx;
             const ny = c.layout_y + dy;
+            const newZone = zoneFromPos(ny);
+            const u = { ...c, layout_x: nx, layout_y: ny, zone: newZone };
+            setChars(p => p.map(x => x.id === u.id ? u : x));
+            setNodes(nds => nds.map(n => n.id === u.id ? { ...n, data: { ...n.data, character: u } } : n));
             api.saveNodeLayout("character", cid, nx, ny).catch(e => console.error("saveNodeLayout failed:", e));
+            if (c.zone !== newZone) {
+              api.saveCharacter(u as Character).catch(() => { });
+            }
           }
         }
       }
       return;
     }
     if (node.type === "characterNode") {
-      await api.saveNodeLayout("character", node.id, node.position.x, node.position.y);
+      // 批量拖拽：选中多个角色时，一次性为所有选中的角色更新 zone
+      const isMulti = selIds.length > 1 && selIds.includes(node.id);
+      const targetIds = isMulti ? selIds.filter(id => nodes.find(n => n.id === id)?.type === "characterNode") : [node.id];
+      for (const id of targetIds) {
+        const n = id === node.id ? node : nodes.find(x => x.id === id);
+        if (!n) continue;
+        const newZone = zoneFromPos(n.position.y + 36);
+        const t = chars.find(x => x.id === id);
+        if (!t) continue;
+        const u = { ...t, layout_x: n.position.x, layout_y: n.position.y, zone: newZone };
+        setChars(p => p.map(x => x.id === u.id ? u : x));
+        setNodes(nds => nds.map(n2 => n2.id === u.id ? { ...n2, data: { ...n2.data, character: u } } : n2));
+        await api.saveNodeLayout("character", id, n.position.x, n.position.y);
+        if (t.zone !== newZone) {
+          api.saveCharacter(u as Character).catch(() => { });
+        }
+      }
     }
-  }, [currentProject, chars]);
+  }, [currentProject, chars, zoneFromPos, setChars, setNodes, selIds, nodes]);
 
   // ===== 连线 =====
   const onConnect = useCallback(async (conn: Connection) => {
@@ -750,7 +804,7 @@ export function CharactersModule() {
         </div>
       )}
 
-      <div className="relative flex-1">
+      <div className="relative flex-1 overflow-hidden">
         {/* 关系颜色图例 */}
         <div style={{
           position: "absolute", top: 10, left: 10, zIndex: 40,
@@ -961,23 +1015,43 @@ export function CharactersModule() {
         })()
         }
 
+        {/* 上下分区 SVG 覆盖层 */}
+        <svg className="pointer-events-none absolute inset-0 z-[5]"
+          style={{
+            width: "100%", height: "100%", overflow: "visible",
+            transform: "translate(" + vp.x + "px," + vp.y + "px) scale(" + vp.zoom + ")",
+            transformOrigin: "0 0",
+          }}>
+          <rect x={-50000} y={-50000} width={100000} height={CY + 50000} fill={characterZoneEnabled.locked ? "rgba(75,85,99,0.09)" : "rgba(75,85,99,0.02)"} />
+          <rect x={-50000} y={CY} width={100000} height={50000} fill={characterZoneEnabled.display ? "rgba(99,102,241,0.09)" : "rgba(99,102,241,0.02)"} />
+          <line x1={-50000} y1={CY} x2={50000} y2={CY} stroke="#475569" strokeWidth="2" strokeDasharray="10,6" opacity="0.7" />
+        </svg>
+
         <ReactFlow
-          onInit={(inst: any) => { rfRef.current = inst; }}
+          onInit={(inst: any) => { rfRef.current = inst; const v = inst.getViewport(); setVp(v); }}
           nodes={nodes} edges={edges}
           onNodesChange={onNodesChange as any} onEdgesChange={onEdgesChange}
           onNodeDragStop={onDragStop} onConnect={onConnect}
           onEdgeDoubleClick={onEdgeDbl}
           onSelectionChange={onSel}
           onNodeContextMenu={onNodeCtx as any}
+          onMove={(_e: any, v: any) => setVp(v)}
+          onNodeDoubleClick={(_e: any, node: Node) => {
+            if (node.type === "group") {
+              const gName = (node.data as any)?.label || "";
+              const gid = node.id;
+              // tell sidebar to enter rename mode
+              setRenameDlg({ gid, name: gName });
+            }
+          }}
           onNodeClick={(_e: any, node: Node) => {
             const c = chars.find(x => x.id === node.id);
             if (c) handleSelect(c);
           }}
           onClick={(e) => {
-            // 点击空白处关闭人物卡
             if (selectedChar) {
               const target = e.target as HTMLElement;
-              if (!target.closest('.react-flow__node')) { setSelectedChar(null); setSnapshotIdx(-1); }
+              if (!target.closest(".react-flow__node")) { setSelectedChar(null); setSnapshotIdx(-1); }
             }
           }}
           nodeTypes={nts} edgeTypes={ets}
@@ -988,7 +1062,7 @@ export function CharactersModule() {
           selectionMode="partial"
           multiSelectionKeyCode="Shift"
         >
-          <Background color="#e2e8f0" gap={24} size={1} />
+          <Background className="!opacity-30" color="#e2e8f0" gap={24} size={1} />
           <MiniMap className="!shadow-md !rounded-lg !border"
             nodeColor={(n: any) => {
               if (n.type === "group") return "#a78bfa";
@@ -997,45 +1071,57 @@ export function CharactersModule() {
             maskColor="rgba(0,0,0,0.08)" />
         </ReactFlow>
 
-        {/* 水平画布工具栏 */}
-        <div style={{
-          position: "absolute", bottom: 16, left: 16, zIndex: 40,
-          display: "flex", alignItems: "center", gap: 2,
-          borderRadius: 10, border: "1px solid #e2e8f0", background: "white",
-          padding: "4px 8px", boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
-        }}>
-          <button onClick={() => rfRef.current?.zoomIn()} style={btnStyle} title="放大">＋</button>
-          <button onClick={() => rfRef.current?.zoomOut()} style={btnStyle} title="缩小">−</button>
-          <span style={{ width: 1, height: 14, background: "#e2e8f0", margin: "0 4px" }} />
-          <button onClick={() => rfRef.current?.fitView()} style={btnStyle} title="适应画布">⊡</button>
-        </div>
-
-        {/* 选中工具栏 - 水平靠底部 */}
-        {selIds.length >= 2 && (
+        {/* 选中工具栏 - 画布顶栏 */}
+        {selIds.length >= 2 && !showDlg && (
           <div style={{
-            position: "absolute", bottom: 16, left: 16, zIndex: 50,
-            borderRadius: 12, border: "1px solid #e2e8f0", background: "white", padding: "8px 12px",
-            boxShadow: "0 4px 12px rgba(0,0,0,0.08)", display: "flex", alignItems: "center", gap: 6, fontSize: 12,
+            position: "absolute", top: 8, left: "50%", transform: "translateX(-50%)", zIndex: 50,
+            borderRadius: 12, border: "1px solid #e2e8f0", background: "white", padding: "6px 10px",
+            boxShadow: "0 4px 12px rgba(0,0,0,0.08)", display: "flex", alignItems: "center", gap: 4, fontSize: 11,
           }}>
-            <span style={{ color: "#94a3b8", marginRight: 4 }}>{selIds.length} 个</span>
-            <span style={{ width: 1, height: 16, background: "#e2e8f0" }} />
-            <button className="hover:bg-amber-50 rounded px-1 py-0.5" onClick={() => align("left")} title="左对齐">L</button>
-            <button className="hover:bg-amber-50 rounded px-1 py-0.5" onClick={() => align("ch")} title="水平居中">CH</button>
-            <button className="hover:bg-amber-50 rounded px-1 py-0.5" onClick={() => align("right")} title="右对齐">R</button>
-            <span style={{ width: 1, height: 16, background: "#e2e8f0" }} />
-            <button className="hover:bg-amber-50 rounded px-1 py-0.5" onClick={() => align("top")} title="顶对齐">T</button>
-            <button className="hover:bg-amber-50 rounded px-1 py-0.5" onClick={() => align("cv")} title="垂直居中">CV</button>
-            <button className="hover:bg-amber-50 rounded px-1 py-0.5" onClick={() => align("bottom")} title="底对齐">B</button>
-            <span style={{ width: 1, height: 16, background: "#e2e8f0" }} />
-            <button className="hover:bg-amber-50 rounded px-2 py-0.5 font-medium" onClick={() => dist("h")} title="水平等距">H=</button>
-            <button className="hover:bg-amber-50 rounded px-2 py-0.5 font-medium" onClick={() => dist("v")} title="垂直等距">V=</button>
-            <span style={{ width: 1, height: 16, background: "#e2e8f0" }} />
-            <button className="hover:bg-violet-50 rounded px-2 py-0.5 text-violet-700" onClick={() => { setPendSel([...selIds]); setGName(""); setShowDlg(true); }}>Ctrl+G</button>
-            <button className="hover:bg-violet-50 rounded px-2 py-0.5 text-violet-500" onClick={() => doUngroup()}>解散</button>
-            <span style={{ width: 1, height: 16, background: "#e2e8f0" }} />
-            <button className="hover:bg-red-50 rounded px-2 py-0.5 text-red-600" onClick={() => { for (const id of selIds) { const n = nodes.find(x => x.id === id); if (n?.type === "characterNode") handleDelete(id); } setSelIds([]); }}>X</button>
+            <span style={{ color: "#94a3b8", marginRight: 2, fontSize: 10 }}>{selIds.length}</span>
+            <span style={{ width: 1, height: 14, background: "#e2e8f0" }} />
+            <button className="hover:bg-amber-50 rounded px-1 py-0.5" onClick={() => align("left")} title="Left">L</button>
+            <button className="hover:bg-amber-50 rounded px-1 py-0.5" onClick={() => align("ch")} title="HCenter">CH</button>
+            <button className="hover:bg-amber-50 rounded px-1 py-0.5" onClick={() => align("right")} title="Right">R</button>
+            <span style={{ width: 1, height: 14, background: "#e2e8f0" }} />
+            <button className="hover:bg-amber-50 rounded px-1 py-0.5" onClick={() => align("top")} title="Top">T</button>
+            <button className="hover:bg-amber-50 rounded px-1 py-0.5" onClick={() => align("cv")} title="VCenter">CV</button>
+            <button className="hover:bg-amber-50 rounded px-1 py-0.5" onClick={() => align("bottom")} title="Bottom">B</button>
+            <span style={{ width: 1, height: 14, background: "#e2e8f0" }} />
+            <button className="hover:bg-amber-50 rounded px-1.5 py-0.5 font-medium" onClick={() => dist("h")} title="HSpacing" style={{ color: "#b45309" }}>H=</button>
+            <button className="hover:bg-amber-50 rounded px-1.5 py-0.5 font-medium" onClick={() => dist("v")} title="VSpacing" style={{ color: "#b45309" }}>V=</button>
+            <span style={{ width: 1, height: 14, background: "#e2e8f0" }} />
+            <button className="hover:bg-violet-50 rounded px-1.5 py-0.5 text-violet-700" onClick={() => { setPendSel([...selIds]); setGName(""); setShowDlg(true); }}>编组</button>
+            <button className="hover:bg-violet-50 rounded px-1.5 py-0.5 text-violet-500" onClick={() => doUngroup()}>解散</button>
+            <span style={{ width: 1, height: 14, background: "#e2e8f0" }} />
+            <button className="hover:bg-red-50 rounded px-1.5 py-0.5 text-red-600" onClick={() => { const ids = selIds.filter(id => nodes.find(n => n.id === id)?.type === "characterNode"); if (ids.length > 0 && window.confirm("Delete " + ids.length + " characters?")) { pushSnapshot(); ids.forEach(id => api.deleteCharacter(id)); const store = useAppStore.getState(); store.bumpCharacters(); setSelIds([]); } }}>X</button>
           </div>
         )}
+
+        {/* 分区勾选工具栏 */}
+        <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 rounded-xl border bg-white/90 px-3 py-2 text-xs shadow-lg backdrop-blur">
+          {["locked", "display"].map(zk => {
+            const zm = ZONE_META[zk];
+            const enabled = characterZoneEnabled[zk] ?? (zk === "display");
+            return (
+              <div key={zk} className="group relative flex items-center gap-1">
+                <button
+                  onClick={() => setCharacterZoneEnabled({ ...characterZoneEnabled, [zk]: !enabled })}
+                  className="rounded px-2 py-0.5 font-medium transition-colors"
+                  style={{
+                    backgroundColor: enabled ? zm.color : zm.pale,
+                    color: enabled ? "#fff" : zm.color,
+                  }}
+                >
+                  {enabled ? "☑" : "☐"} {zm.label}
+                </button>
+                <div className="absolute -top-8 left-1/2 -translate-x-1/2 hidden group-hover:block whitespace-nowrap rounded bg-slate-800 px-2 py-1 text-[10px] text-white shadow-lg z-50 pointer-events-none">
+                  {zm.desc}
+                </div>
+              </div>
+            );
+          })}
+        </div>
       </div>
     </div>
   );

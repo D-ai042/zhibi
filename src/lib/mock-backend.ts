@@ -74,6 +74,16 @@ function load(): MockStore {
   const raw = localStorage.getItem(STORAGE_KEY);
   if (raw) {
     const data = JSON.parse(raw) as MockStore;
+    // ★ 防御：apiConfig 可能不存在或损坏
+    if (!data.apiConfig) data.apiConfig = {
+      api_base_url: "https://api.deepseek.com",
+      api_model: "deepseek-chat",
+      has_api_key: false,
+      provider_keys: {},
+      provider_base_urls: {},
+      provider_models: {},
+      stt: { activeProvider: "openai", providers: {}, enabled: false },
+    } as any;
     // 反混淆 API Key（每次 load 都需要）
     if (data.apiConfig.api_key) data.apiConfig.api_key = deobfuscate(data.apiConfig.api_key);
     if (data.apiConfig.provider_keys) {

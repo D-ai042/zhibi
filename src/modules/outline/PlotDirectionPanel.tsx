@@ -39,6 +39,39 @@ function savePositions(pid: string, pos: Record<string, { x: number; y: number }
 function loadTimelineConfig(pid: string): TimelineConfig { return getJSONSync("plot-timeline-config-" + pid, { ...DEFAULT_TIMELINE }); }
 function saveTimelineConfig(pid: string, cfg: TimelineConfig) { setJSONSync("plot-timeline-config-" + pid, cfg); }
 
+// ===== 自动连线逻辑 =====
+function generatePlotEdges(segs: PlotSegment[]): Edge[] {
+  const edges: Edge[] = [];
+  const brights = segs.filter(s => s.type === "bright");
+  const darks = segs.filter(s => s.type === "dark");
+  // 明线横向链式: bright[i].right → bright[i+1].left
+  for (let i = 0; i < brights.length - 1; i++) {
+    edges.push({
+      id: "auto-bright-" + i,
+      source: brights[i].id,
+      target: brights[i + 1].id,
+      sourceHandle: "right",
+      targetHandle: "left",
+      type: "straight",
+      style: { stroke: "#7dd3fc", strokeWidth: 2 },
+    } as Edge);
+  }
+  // 明暗上下配对: bright[i].bottom → dark[i].top
+  const pairs = Math.min(brights.length, darks.length);
+  for (let i = 0; i < pairs; i++) {
+    edges.push({
+      id: "auto-pair-" + i,
+      source: brights[i].id,
+      target: darks[i].id,
+      sourceHandle: "bottom",
+      targetHandle: "top",
+      type: "straight",
+      style: { stroke: "#f59e0b", strokeWidth: 2, strokeDasharray: "4,3" },
+    } as Edge);
+  }
+  return edges;
+}
+
 export function PlotDirectionPanel() {
   const { currentProject, plotBump } = useAppStore();
   const rfRef = useRef<any>(null);
@@ -151,14 +184,16 @@ export function PlotDirectionPanel() {
     pushSnapshot();
     const all = loadSegments(currentProject.id).filter(x => x.id !== id);
     saveSegments(currentProject.id, all);
-    const updEdges = loadEdges(currentProject.id).filter(e => e.source !== id && e.target !== id);
-    saveEdges(currentProject.id, updEdges);
     // 清理被删节点的位置
     const pos = loadPositions(currentProject.id);
     delete pos[id];
     savePositions(currentProject.id, pos);
     setNodes(nds => nds.filter(n => n.id !== id));
-    setEdges(updEdges);
+    // 重新生成连线
+    const remaining = loadSegments(currentProject.id);
+    const updEdges2 = generatePlotEdges(remaining);
+    saveEdges(currentProject.id, updEdges2);
+    setEdges(updEdges2);
   }, [currentProject, setNodes, setEdges, pushSnapshot]);
   handleDeleteRef.current = handleDelete;
 
@@ -167,15 +202,35 @@ export function PlotDirectionPanel() {
     if (!currentProject) return;
     const segs = loadSegments(currentProject.id);
     const savedPos = loadPositions(currentProject.id);
-    const segNodes: Node[] = segs.map(s => ({
-      id: s.id,
-      type: "storyNode",
-      position: savedPos[s.id] || { x: s.type === "bright" ? 100 + segs.indexOf(s) * 260 : 100 + segs.filter(x => x.type === "dark").indexOf(s) * 260, y: s.type === "bright" ? 180 : 500 },
-      data: { segment: s, onUpdate: handleUpdateRef.current, onDelete: handleDeleteRef.current, characterOptions: characterNames, placeOptions: placeNames, termOptions: termNames } as PlotStoryNodeData,
-      draggable: true, selectable: true,
-    }));
+    // 按明暗配对计算默认位置：第 N 个明线和第 N 个暗线共享同一 X
+    const brightOrder: string[] = [];
+    const darkOrder: string[] = [];
+    for (const s of segs) {
+      if (s.type === "bright") brightOrder.push(s.id);
+      else darkOrder.push(s.id);
+    }
+    const brightIndex = new Map<string, number>();
+    const darkIndex = new Map<string, number>();
+    brightOrder.forEach((id, i) => brightIndex.set(id, i));
+    darkOrder.forEach((id, i) => darkIndex.set(id, i));
+    const segNodes: Node[] = segs.map(s => {
+      const bi = brightIndex.get(s.id);
+      const di = darkIndex.get(s.id);
+      // 使用配对位置：第 N 个明线 / 暗线共享 X = 100 + N * 260
+      const idx = s.type === "bright" ? (bi ?? 0) : (di ?? 0);
+      return {
+        id: s.id,
+        type: "storyNode",
+        position: savedPos[s.id] || { x: 100 + idx * 260, y: s.type === "bright" ? 180 : 500 },
+        data: { segment: s, onUpdate: handleUpdateRef.current, onDelete: handleDeleteRef.current, characterOptions: characterNames, placeOptions: placeNames, termOptions: termNames } as PlotStoryNodeData,
+        draggable: true, selectable: true,
+      };
+    });
+    // 自动生成连线并持久化
+    const autoEdges = generatePlotEdges(segs);
+    saveEdges(currentProject.id, autoEdges);
     setNodes(segNodes);
-    setEdges(loadEdges(currentProject.id));
+    setEdges(autoEdges);
   }, [currentProject, setNodes, setEdges, characterNames, placeNames, termNames]);
 
   // 加载角色名和世界观地名
@@ -220,6 +275,9 @@ export function PlotDirectionPanel() {
     };
     all.push(s);
     saveSegments(currentProject.id, all);
+    // 自动生成并保存连线
+    const autoEdges = generatePlotEdges(all);
+    saveEdges(currentProject.id, autoEdges);
     setNodes(nds => {
       const updated = [...nds, {
         id: s.id, type: "storyNode",
@@ -233,6 +291,7 @@ export function PlotDirectionPanel() {
       savePositions(currentProject.id, positions);
       return updated;
     });
+    setEdges(autoEdges);
   }, [currentProject, setNodes, pushSnapshot]);
 
   // ===== 拖拽停止 =====

@@ -419,7 +419,6 @@ export async function activateNextChapterTerms(
     plotChapters: any[],
     recentSummaries: ChapterSummary[],
 ): Promise<TermActivityEntry[]> {
-    // 找到下一章（第 N+1 章）对应的 beat
     const nextChapterNumber = chapterNumber + 1;
     const nextChap = plotChapters.find((c: any) => c.number === nextChapterNumber);
     let nextBeatInfo = "";
@@ -430,11 +429,9 @@ export async function activateNextChapterTerms(
         if (vol) {
             nextVolInfo = `所属卷：${vol.title}\n卷概要：角色：${vol.characters || ""}  地点：${vol.location || ""}  时间：${vol.time || ""}  事件：${vol.event || ""}`;
             const beats = vol.beats || [];
-            // 用 beat.chapters 精确匹配（修复旧版 idxInVol + 1 的映射错误）
-            const nextChapterNum = nextChapterNumber;
             const beat = beats.find((b: any) => {
                 const range = parseChapterRange(b.chapters || "");
-                return range.includes(nextChapterNum);
+                return range.includes(nextChapterNumber);
             });
             if (beat) {
                 nextBeatInfo = `细纲 #${beat.number}「${beat.title}」\n角色：${beat.characters || ""}\n地点：${beat.location || ""}\n时间：${beat.time || ""}\n事件：${beat.event || ""}\n章节范围：${beat.chapters || ""}`;
@@ -516,9 +513,7 @@ ${nextBeatInfo}`;
             evaluatedAt: new Date().toISOString(),
         }));
 
-        // 写入 log store
         const store = getLogStore(projectId);
-        // 移除旧的对同一章的评估
         store.termActivity = (store.termActivity || []).filter(
             e => e.activeForChapter !== nextChapterNumber
         );
@@ -528,6 +523,16 @@ ${nextBeatInfo}`;
         return entries;
     } catch (e) {
         throw new Error("AI 词条激活结果 JSON 解析失败: " + (e instanceof Error ? e.message : String(e)));
+    }
+}
+
+/** 从逗号/顿号分隔的字符串中提取关键词，滤掉单字和空串（供 P0 other 区模糊匹配使用） */
+function addKeywords(target: Set<string>, source: string | undefined) {
+    if (!source) return;
+    const parts = source.split(/[,，、\s]+/);
+    for (const p of parts) {
+        const t = p.trim();
+        if (t.length >= 2) target.add(t);
     }
 }
 
@@ -583,6 +588,8 @@ export async function activateNextChapterCharacters(
     let chaps: any[] = [];
     try {
         allCharacters = await api.listCharacters(projectId);
+        // ★ 排除锁定区角色，不发给 AI
+        allCharacters = allCharacters.filter((c: any) => c.zone !== "locked");
         summaries = await api.getChapterSummaries(projectId);
         segs = getJSONSync(`plot-segments-${projectId}`, []) as any[];
         chaps = loadAllChapters(projectId) as any[];

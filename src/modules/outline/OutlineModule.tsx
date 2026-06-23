@@ -1,4 +1,4 @@
-import { Globe2, GitBranch, Users, Layers, Lock } from "lucide-react";
+import { Globe2, GitBranch, Users, Layers, Lock, Eye } from "lucide-react";
 import { useAppStore } from "@/stores/app-store";
 import { useState } from "react";
 import type { OutlineSection } from "@/types";
@@ -16,37 +16,60 @@ const SECTIONS: { id: OutlineSection; icon: typeof Globe2; desc: string }[] = [
 function updateGroupName(gid: string, newName: string) {
   const pid = useAppStore.getState().currentProject?.id;
   if (!pid) return;
-  const key = "worldview-groups-" + pid;
-  const saved = JSON.parse(localStorage.getItem(key) || "[]");
-  const idx = saved.findIndex((g: any) => g.id === gid);
-  if (idx >= 0) { saved[idx].name = newName; localStorage.setItem(key, JSON.stringify(saved)); }
+  // worldview groups
+  const wKey = "worldview-groups-" + pid;
+  const wSaved = JSON.parse(localStorage.getItem(wKey) || "[]");
+  const wIdx = wSaved.findIndex((g: any) => g.id === gid);
+  if (wIdx >= 0) { wSaved[wIdx].name = newName; localStorage.setItem(wKey, JSON.stringify(wSaved)); }
+  // character groups
+  const cKey = "char-groups-" + pid;
+  const cSaved = JSON.parse(localStorage.getItem(cKey) || "[]");
+  const cIdx = cSaved.findIndex((g: any) => g.id === gid);
+  if (cIdx >= 0) { cSaved[cIdx].name = newName; localStorage.setItem(cKey, JSON.stringify(cSaved)); }
 }
 
 function removeGroup(gid: string) {
   const pid = useAppStore.getState().currentProject?.id;
   if (!pid) return;
-  const key = "worldview-groups-" + pid;
-  const saved = getJSONSync(key, [] as any[]);
-  setJSONSync(key, saved.filter((g: any) => g.id !== gid));
+  // worldview groups
+  const wKey = "worldview-groups-" + pid;
+  const wSaved = JSON.parse(localStorage.getItem(wKey) || "[]");
+  localStorage.setItem(wKey, JSON.stringify(wSaved.filter((g: any) => g.id !== gid)));
+  // character groups
+  const cKey = "char-groups-" + pid;
+  const cSaved = JSON.parse(localStorage.getItem(cKey) || "[]");
+  localStorage.setItem(cKey, JSON.stringify(cSaved.filter((g: any) => g.id !== gid)));
 }
 
 export function OutlineModule() {
-  const { outlineSection, setOutlineSection, worldviewGroups, setWorldviewGroups, focusGroup, bumpGroups } = useAppStore();
+  const { outlineSection, setOutlineSection, worldviewGroups, setWorldviewGroups, focusGroup, bumpGroups, characterGroups } = useAppStore();
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; gid: string; name: string } | null>(null);
   const [editId, setEditId] = useState<string | null>(null);
   const [editVal, setEditVal] = useState("");
 
   const doRename = (gid: string, name: string) => {
     updateGroupName(gid, name);
-    setWorldviewGroups(worldviewGroups.map(g => g.id === gid ? { ...g, name } : g));
-    bumpGroups(); // sync canvas
+    if (gid.startsWith("cgroup-")) {
+      const s = useAppStore.getState();
+      s.setCharacterGroups(s.characterGroups.map(g => g.id === gid ? { ...g, name } : g));
+      s.bumpCharacters();
+    } else {
+      setWorldviewGroups(worldviewGroups.map(g => g.id === gid ? { ...g, name } : g));
+      bumpGroups();
+    }
     setEditId(null);
   };
 
   const doRemove = (gid: string) => {
     removeGroup(gid);
-    setWorldviewGroups(worldviewGroups.filter(g => g.id !== gid));
-    bumpGroups(); // sync canvas
+    if (gid.startsWith("cgroup-")) {
+      const s = useAppStore.getState();
+      s.setCharacterGroups(s.characterGroups.filter(g => g.id !== gid));
+      s.bumpCharacters();
+    } else {
+      setWorldviewGroups(worldviewGroups.filter(g => g.id !== gid));
+      bumpGroups();
+    }
   };
 
   return (
@@ -80,6 +103,34 @@ export function OutlineModule() {
                   onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setCtxMenu({ x: e.clientX, y: e.clientY, gid: g.id, name: g.name }); }}
                   onDoubleClick={() => { setEditId(g.id); setEditVal(g.name); }}>
                   {g.locked ? <Lock className="w-3 h-3 text-amber-500 shrink-0" /> : <span className="w-1.5 h-1.5 rounded-full bg-violet-400 shrink-0" />}
+                  {editId === g.id ? (
+                    <input className="flex-1 text-xs border-b border-amber-400 outline-none px-1 bg-transparent" value={editVal} autoFocus
+                      onChange={e => setEditVal(e.target.value)}
+                      onBlur={() => doRename(g.id, editVal)}
+                      onKeyDown={e => { if (e.key === "Enter") doRename(g.id, editVal); if (e.key === "Escape") setEditId(null); }}
+                      onClick={e => e.stopPropagation()} />
+                  ) : (
+                    <span className="truncate">{g.name}</span>
+                  )}
+                  <button className="ml-auto opacity-0 group-hover:opacity-100 text-slate-400 hover:text-red-500 text-[10px]"
+                    onClick={e => { e.stopPropagation(); doRemove(g.id); }}>✕</button>
+                </div>
+              ))}
+            </div>
+          )}
+          {outlineSection === "characters" && characterGroups.length > 0 && (
+            <div className="mt-3">
+              <div className="flex items-center gap-1 px-3 py-1 mb-1">
+                <Users className="h-3 w-3 text-indigo-500" />
+                <span className="text-[10px] font-medium uppercase tracking-wider text-indigo-600">人物编组</span>
+              </div>
+              {characterGroups.map(g => (
+                <div key={g.id}
+                  className="mb-0.5 w-full rounded px-3 py-1.5 text-left text-xs hover:bg-slate-50 flex items-center gap-2 cursor-pointer group"
+                  onClick={() => { setOutlineSection("characters"); focusGroup(g.id); }}
+                  onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setCtxMenu({ x: e.clientX, y: e.clientY, gid: g.id, name: g.name }); }}
+                  onDoubleClick={() => { setEditId(g.id); setEditVal(g.name); }}>
+                  {g.locked ? <Lock className="w-3 h-3 text-amber-500 shrink-0" /> : <Eye className="w-3 h-3 text-indigo-400 shrink-0" />}
                   {editId === g.id ? (
                     <input className="flex-1 text-xs border-b border-amber-400 outline-none px-1 bg-transparent" value={editVal} autoFocus
                       onChange={e => setEditVal(e.target.value)}

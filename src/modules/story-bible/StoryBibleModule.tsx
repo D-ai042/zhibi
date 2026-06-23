@@ -1,12 +1,12 @@
-import { useState, useEffect, useCallback } from "react";
-import { BookMarked, Save, Shield, Palette, History, FileText, Sparkles, MessageCircle } from "lucide-react";
+﻿import { useState, useEffect, useCallback } from "react";
+import { BookMarked, Save, Shield, Palette, FileText, Sparkles, MessageCircle } from "lucide-react";
 import { useAppStore } from "@/stores/app-store";
 import { api } from "@/lib/api";
 import { getJSONSync, setJSONSync, setJSON } from "@/lib/storage";
 import { loadAllChapters } from "@/lib/chapter-store";
 import type { StyleGuide, StoryBible } from "@/types";
 
-type TabId = "style" | "rules" | "voices" | "summary" | "versions";
+type TabId = "style" | "rules" | "voices" | "summary";
 
 export function StoryBibleModule() {
     const { currentProject } = useAppStore();
@@ -25,14 +25,12 @@ export function StoryBibleModule() {
                 <TabButton active={activeTab === "rules"} icon={<Shield className="h-4 w-4" />} label="故事铁则" onClick={() => setActiveTab("rules")} />
                 <TabButton active={activeTab === "voices"} icon={<MessageCircle className="h-4 w-4" />} label="角色语言" onClick={() => setActiveTab("voices")} />
                 <TabButton active={activeTab === "summary"} icon={<FileText className="h-4 w-4" />} label="上下文编辑器" onClick={() => setActiveTab("summary")} />
-                <TabButton active={activeTab === "versions"} icon={<History className="h-4 w-4" />} label="版本记录" onClick={() => setActiveTab("versions")} />
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto p-4">
                 {activeTab === "style" && <StyleGuideEditor projectId={currentProject.id} />}
                 {activeTab === "rules" && <BibleRulesEditor projectId={currentProject.id} />}
                 {activeTab === "voices" && <CharacterVoiceEditor projectId={currentProject.id} />}
                 {activeTab === "summary" && <ContextEditor projectId={currentProject.id} />}
-                {activeTab === "versions" && <VersionHistory projectId={currentProject.id} />}
             </div>
         </div>
     );
@@ -629,23 +627,6 @@ function ContextEditor({ projectId }: { projectId: string }) {
                     选择章节后点击「加载上下文」，可预览并编辑发给 AI 的内容
                 </div>
             )}
-        </div>
-    );
-}
-
-// ===== 版本记录 =====
-
-function VersionHistory({ projectId }: { projectId: string }) {
-    const [versions, setVersions] = useState<any[]>([]);
-    const handleTakeSnapshot = useCallback(() => {
-        try { const s = getJSONSync(`novel-workbench-style-${projectId}`, null) as string | null; const b = getJSONSync(`novel-workbench-bible-${projectId}`, null) as string | null; const v = getJSONSync(`novel-workbench-voices-${projectId}`, null) as string | null; const snapshot = { projectId, styleGuide: s ? JSON.parse(s) : null, storyBible: b ? JSON.parse(b) : null, voices: v ? JSON.parse(v) : null, taken_at: new Date().toISOString() }; const existing = getJSONSync(`novel-workbench-versions-${projectId}`, [] as any[]); existing.push(snapshot); if (existing.length > 50) existing.shift(); setJSONSync(`novel-workbench-versions-${projectId}`, existing); setVersions(existing); } catch { /* ignore */ }
-    }, [projectId]);
-    useEffect(() => { try { const raw = getJSONSync(`novel-workbench-versions-${projectId}`, [] as any[]); if (raw && raw.length > 0) setVersions(raw); } catch { /* ignore */ } }, [projectId]);
-    return (
-        <div className="max-w-3xl">
-            <div className="mb-4 flex items-center gap-3"><h3 className="text-sm font-semibold text-slate-700">版本记录</h3><button type="button" className="rounded-md bg-violet-600 px-3 py-1.5 text-xs text-white hover:bg-violet-700" onClick={handleTakeSnapshot}>📸 记录当前版本</button></div>
-            {versions.length === 0 && <p className="text-xs text-slate-400">暂无版本记录</p>}
-            {[...versions].reverse().map((v, i) => <div key={i} className="mb-2 rounded border border-slate-100 bg-white p-3"><p className="mb-1 text-xs font-medium text-slate-600">{v.taken_at ? new Date(v.taken_at).toLocaleString() : `版本 ${versions.length - i}`}</p><div className="flex gap-4 text-xs text-slate-500"><span>风格指南：{v.styleGuide ? (v.styleGuide.narrative_style || "已保存") : "未设置"}</span><span>故事铁则：{v.storyBible ? `${v.storyBible.inviolable_rules?.length || 0} 条规则` : "未设置"}</span><span>角色语言：{v.voices ? `${Array.isArray(v.voices) ? v.voices.length : 1} 条` : "未设置"}</span></div></div>)}
         </div>
     );
 }

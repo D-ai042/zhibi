@@ -116,6 +116,8 @@ export interface Character {
   layout_x: number;
   layout_y: number;
   is_locked: boolean;
+  /** 画布上下分区: locked=锁定区 display=展示区 */
+  zone?: "locked" | "display";
   first_appearance_chapter?: number;
   /** AI 生成的一句话身份标识，创建/编辑时自动填充，不暴露在 UI */
   summary?: string;

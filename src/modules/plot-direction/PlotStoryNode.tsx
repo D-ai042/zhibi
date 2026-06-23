@@ -40,10 +40,17 @@ const BRIGHT = { bg: "#f0f9ff", border: "#7dd3fc", text: "#0c4a6e", label: "#036
 const DARK = { bg: "#f5f3ff", border: "#c4b5fd", text: "#1e1b4b", label: "#6d28d9", tag: "🌑 暗线", tagBg: "#ede9fe", tagColor: "#6d28d9" };
 
 /** 单个细纲卡片 — 样式同段落卡片，去掉明线标签 */
-function BeatCard({ beat, onUpdate, onDelete }: {
+function BeatCard({ beat, onUpdate, onDelete, isDragOver, onDragStart, onDragOver, onDragEnd, onDrop, selected, onToggleSelect }: {
     beat: PlotBeat;
     onUpdate: (b: PlotBeat) => void;
     onDelete: (id: string) => void;
+    isDragOver?: boolean;
+    onDragStart?: (e: React.DragEvent) => void;
+    onDragOver?: (e: React.DragEvent) => void;
+    onDragEnd?: (e: React.DragEvent) => void;
+    onDrop?: (e: React.DragEvent) => void;
+    selected?: boolean;
+    onToggleSelect?: () => void;
 }) {
     const [editingBeat, setEditingBeat] = useState(false);
     const [beatDraft, setBeatDraft] = useState(beat.title);
@@ -82,19 +89,33 @@ function BeatCard({ beat, onUpdate, onDelete }: {
     return (
         <div
             className="nodrag rounded-xl transition-all duration-200 select-none"
+            draggable
+            onDragStart={onDragStart}
+            onDragOver={onDragOver}
+            onDragEnd={onDragEnd}
+            onDrop={onDrop}
             style={{
                 width: 200,
                 background: "#fff",
-                border: "2px solid #e2e8f0",
-                boxShadow: "0 2px 8px rgba(0,0,0,0.04), 0 1px 2px rgba(0,0,0,0.02)",
+                border: isDragOver ? "2px solid #f59e0b" : "2px solid #e2e8f0",
+                boxShadow: isDragOver ? "0 0 0 4px rgba(245,158,11,0.15)" : "0 2px 8px rgba(0,0,0,0.04), 0 1px 2px rgba(0,0,0,0.02)",
+                opacity: 0.95,
                 overflow: "hidden",
+                cursor: "grab",
             }}
         >
             {/* 顶部色条 */}
             <div style={{ height: 4, background: "#94a3b8" }} />
 
-            {/* 头部：序号靠左 · 标题居中 · 关闭靠右 */}
+            {/* 头部：选框 · 序号 · 标题 · 关闭 */}
             <div style={{ padding: "6px 8px 2px", display: "flex", alignItems: "center", gap: 2 }}>
+                <div onClick={e => e.stopPropagation()} style={{ flexShrink: 0, width: 14, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    <input type="checkbox" checked={!!selected} onChange={onToggleSelect}
+                        className="nodrag"
+                        style={{ width: 12, height: 12, cursor: "pointer", accentColor: "#ef4444" }}
+                        onClick={e => e.stopPropagation()}
+                    />
+                </div>
                 <span style={{ fontSize: 10, fontWeight: 700, color: "#94a3b8", flexShrink: 0, width: 16, textAlign: "left" }}>{beat.number}</span>
                 {editingBeat ? (
                     <input ref={beatInputRef} value={beatDraft} onChange={e => setBeatDraft(e.target.value)}
@@ -235,6 +256,70 @@ function PlotStoryNode({ data, selected }: NodeProps<PlotStoryNodeData>) {
         onUpdate({ ...segment, beats: beats.filter(x => x.id !== id) });
     };
 
+    // ★ 拖拽重排细纲
+    const [dragBeatId, setDragBeatId] = useState<string | null>(null);
+    const [dropTargetId, setDropTargetId] = useState<string | null>(null);
+
+    // ★ 批量删除
+    const [selectedBeatIds, setSelectedBeatIds] = useState<Set<string>>(new Set());
+    const toggleBeatSelect = (id: string) => {
+        setSelectedBeatIds(prev => {
+            const next = new Set(prev);
+            if (next.has(id)) next.delete(id); else next.add(id);
+            return next;
+        });
+    };
+    const allSelected = beats.length > 0 && selectedBeatIds.size === beats.length;
+    const toggleSelectAll = () => {
+        if (allSelected) {
+            setSelectedBeatIds(new Set());
+        } else {
+            setSelectedBeatIds(new Set(beats.map(b => b.id)));
+        }
+    };
+    const batchDeleteBeats = () => {
+        if (selectedBeatIds.size === 0) return;
+        if (!window.confirm(`确定删除选中的 ${selectedBeatIds.size} 个细纲？此操作不可撤销。`)) return;
+        const remaining = beats.filter(b => !selectedBeatIds.has(b.id));
+        const renumbered = remaining.map((b, i) => ({ ...b, number: i + 1 }));
+        onUpdate({ ...segment, beats: renumbered });
+        setSelectedBeatIds(new Set());
+    };
+
+    const handleDragStart = (beatId: string) => (e: React.DragEvent) => {
+        e.dataTransfer.setData("text/plain", beatId);
+        e.dataTransfer.effectAllowed = "move";
+        setDragBeatId(beatId);
+    };
+
+    const handleDragOver = (beatId: string) => (e: React.DragEvent) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "move";
+        if (beatId !== dragBeatId) setDropTargetId(beatId);
+    };
+
+    const handleDragEnd = () => {
+        setDragBeatId(null);
+        setDropTargetId(null);
+    };
+
+    const handleDrop = (targetId: string) => (e: React.DragEvent) => {
+        e.preventDefault();
+        const sourceId = e.dataTransfer.getData("text/plain");
+        if (!sourceId || sourceId === targetId) { setDragBeatId(null); setDropTargetId(null); return; }
+        const srcIdx = beats.findIndex(b => b.id === sourceId);
+        const tgtIdx = beats.findIndex(b => b.id === targetId);
+        if (srcIdx < 0 || tgtIdx < 0) { setDragBeatId(null); setDropTargetId(null); return; }
+        const reordered = [...beats];
+        const [moved] = reordered.splice(srcIdx, 1);
+        reordered.splice(tgtIdx, 0, moved);
+        // 重编序号
+        const renumbered = reordered.map((b, i) => ({ ...b, number: i + 1 }));
+        onUpdate({ ...segment, beats: renumbered });
+        setDragBeatId(null);
+        setDropTargetId(null);
+    };
+
     return (
         <div className="relative">
             {/* 展开的细纲卡片行 */}
@@ -242,20 +327,50 @@ function PlotStoryNode({ data, selected }: NodeProps<PlotStoryNodeData>) {
                 <div
                     className="absolute" style={{ bottom: "100%", left: "50%", transform: "translateX(-50%)", marginBottom: 10, display: "flex", flexDirection: "column", alignItems: "center" }}
                 >
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, padding: "0 2px", width: "100%" }}>
+                        <span style={{ fontSize: 10, fontWeight: 600, color: "#64748b" }}>细纲 ({beats.length})</span>
+                        <label style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 10, color: "#64748b", cursor: "pointer" }}
+                            onClick={e => e.stopPropagation()}>
+                            <input type="checkbox" checked={allSelected}
+                                onChange={toggleSelectAll}
+                                className="nodrag"
+                                style={{ width: 12, height: 12, cursor: "pointer", accentColor: "#ef4444" }}
+                                onClick={e => e.stopPropagation()}
+                            />
+                            全选
+                        </label>
+                        {selectedBeatIds.size > 0 && (
+                            <button type="button"
+                                onClick={e => { e.stopPropagation(); batchDeleteBeats(); }}
+                                className="nodrag"
+                                style={{ fontSize: 10, fontWeight: 600, color: "#ef4444", background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: 6, padding: "2px 8px", cursor: "pointer" }}
+                            >批量删除 ({selectedBeatIds.size})</button>
+                        )}
+                    </div>
                     <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 200px)", gap: 6, padding: "0 2px" }}>
                         {beats.map((beat, idx) => (
-                            <BeatCard key={beat.id} beat={beat} onUpdate={updateBeat} onDelete={deleteBeat} />
+                            <BeatCard key={beat.id} beat={beat} onUpdate={updateBeat} onDelete={deleteBeat}
+                                isDragOver={dropTargetId === beat.id}
+                                onDragStart={handleDragStart(beat.id)}
+                                onDragOver={handleDragOver(beat.id)}
+                                onDragEnd={handleDragEnd}
+                                onDrop={handleDrop(beat.id)}
+                                selected={selectedBeatIds.has(beat.id)}
+                                onToggleSelect={() => toggleBeatSelect(beat.id)}
+                            />
                         ))}
                     </div>
-                    <button
-                        type="button"
-                        onClick={e => { e.stopPropagation(); addBeat(); }}
-                        className="nodrag rounded-lg border border-dashed border-slate-300 bg-white/60 flex items-center justify-center hover:bg-slate-100 transition-colors shadow-sm"
-                        style={{ width: 36, height: 28, cursor: "pointer", color: "#94a3b8", marginTop: 6 }}
-                        title="添加细纲"
-                    >
-                        <Plus className="h-4 w-4" />
-                    </button>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6 }}>
+                        <button
+                            type="button"
+                            onClick={e => { e.stopPropagation(); addBeat(); }}
+                            className="nodrag rounded-lg border border-dashed border-slate-300 bg-white/60 flex items-center justify-center hover:bg-slate-100 transition-colors shadow-sm"
+                            style={{ width: 36, height: 28, cursor: "pointer", color: "#94a3b8" }}
+                            title="添加细纲"
+                        >
+                            <Plus className="h-4 w-4" />
+                        </button>
+                    </div>
                 </div>
             )}
 

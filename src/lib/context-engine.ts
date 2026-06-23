@@ -15,7 +15,7 @@
  */
 
 import { api } from "./api";
-import { getJSONSync } from "./storage";
+import { getJSONSync, setJSONSync } from "./storage";
 import { loadAllChapters } from "./chapter-store";
 import type {
     Chapter,
@@ -142,10 +142,13 @@ export async function buildModuleContext(input: ChatContextInput): Promise<strin
         } catch { /* ignore */ }
 
     } else if (mod === "characters") {
-        // 人物关系：强调角色卡 + 关系网 + 快照系统说明
-        if (allCharacters.length > 0) {
+        // 人物关系：按勾选区域过滤角色
+        const filteredChars = zoneFilter
+            ? allCharacters.filter(c => zoneFilter[c.zone ?? "display"] !== false)
+            : allCharacters;
+        if (filteredChars.length > 0) {
             parts.push("\n===== 👤 全部角色档案 =====");
-            for (const c of allCharacters) {
+            for (const c of filteredChars) {
                 const fields: string[] = [c.name];
                 if (c.faction) fields.push(`【${c.faction}】`);
                 if (c.age) fields.push(`${c.age}岁`);
@@ -256,7 +259,7 @@ export async function buildModuleContext(input: ChatContextInput): Promise<strin
 
     } else {
         // chat(默认)：全量概要（保留当前行为）
-        if (allCharacters.length > 0) {
+        if (filteredChars.length > 0) {
             parts.push("\n===== 项目角色一览 =====");
             for (const c of allCharacters.slice(0, 30)) {
                 parts.push(`· ${c.name}${c.faction ? `（${c.faction}）` : ""}${c.personality ? `：${c.personality}` : ""}`);
@@ -447,60 +450,113 @@ async function loadRecentSummaries(projectId: string, currentChapter?: Chapter):
     } catch { return []; }
 }
 
+/** 从 beat 对象的 characters/location/time/event 字段中提取关键词（≥2字符） */
+function extractKeywordsFromBeat(target: Set<string>, beat: any) {
+    if (!beat) return;
+    const fields = [beat.characters, beat.location, beat.time, beat.event, beat.title];
+    for (const field of fields) {
+        if (!field || typeof field !== "string") continue;
+        const parts = field.split(/[,，、\s]+/);
+        for (const p of parts) {
+            const t = p.trim();
+            if (t.length >= 2) target.add(t);
+        }
+    }
+}
+
 // ===== P0：世界观背景 =====
 
 function assembleP0(projectId: string, _styleGuide: StyleGuide | null, storyBible: StoryBible | null, worldTerms: WorldTerm[], currentChapterNumber?: number): string {
     const parts: string[] = ["━━━━ P0 · 世界观背景（不可违反） ━━━━"];
 
-    // 世界观词条（优先使用已传入的参数，兼容 localStorage 回退）
     const terms = worldTerms.length > 0 ? worldTerms : loadWorldTerms(projectId);
     if (terms.length > 0) {
-        // 筛选逻辑：rule 类型全部保留 + termActivity 中 active 的
-        const activeTermIds = new Set<string>();
-        const logStore = getLogStoreV2(projectId);
-        const termActivity = logStore.termActivity || [];
+        // ★ 四象限分组
+        const coreTerms = terms.filter(t => t.zone === "core");
+        const lockedTerms = terms.filter(t => t.zone === "locked"); // 永远排除
+        const activeZoneTerms = terms.filter(t => t.zone === "active");
+        const otherTerms = terms.filter(t => t.zone === "other" || !t.zone);
 
-        // 所有 rule 类型无条件加载
+        // ★ core: 无条件加载（已通过 zone 标记）
+        const activeTermIds = new Set<string>();
+        for (const t of coreTerms) activeTermIds.add(t.id);
+
+        // ★ rule 类型属于核心规则，永远加载（但 locked 区排除）
         for (const t of terms) {
-            if (t.term_type === "rule") activeTermIds.add(t.id);
+            if (t.term_type === "rule" && t.zone !== "locked") activeTermIds.add(t.id);
         }
 
-        // 第一章保底：按当前 beat 的 characters / location 匹配词条 title
-        if (currentChapterNumber) {
-            const termActivityForChapter = termActivity.filter(e => e.activeForChapter === currentChapterNumber);
-            if (termActivityForChapter.length > 0) {
-                for (const a of termActivityForChapter) {
-                    if (a.status === "active") activeTermIds.add(a.termId);
-                }
-            } else {
-                // 无 termActivity（第一章或尚未评估）：用 beat 直接引用的词条兜底
-                try {
-                    const chaps = loadAllChapters(projectId);
-                    const segs = getJSONSync(`plot-segments-${projectId}`, [] as any[]);
-                    const currentChap = chaps.find((c: any) => c.number === currentChapterNumber);
-                    if (currentChap) {
-                        const vol = segs.find((s: any) => s.id === currentChap.volumeSegmentId && s.type === "bright");
-                        if (vol) {
-                            const volChaps = chaps.filter((c: any) => c.volumeSegmentId === vol.id).sort((a: any, b: any) => a.number - b.number);
-                            const idxInVol = volChaps.findIndex((c: any) => c.id === currentChap.id);
-                            const beats = vol.beats || [];
-                            const beat = beats.find((b: any) => b.number === idxInVol + 1);
-                            if (beat) {
-                                for (const t of terms) {
-                                    if (beat.characters?.includes(t.title) || beat.location?.includes(t.title)) {
-                                        activeTermIds.add(t.id);
-                                    }
+        // ★ active zone: 按 termActivity 中标记 active 的才加载
+        const logStore = getLogStoreV2(projectId);
+        const termActivity = logStore.termActivity || [];
+        const termActivityForChapter = currentChapterNumber
+            ? termActivity.filter(e => e.activeForChapter === currentChapterNumber)
+            : [];
+        for (const a of termActivityForChapter) {
+            if (a.status === "active" && activeZoneTerms.some(t => t.id === a.termId)) {
+                activeTermIds.add(a.termId);
+            }
+        }
+        // 第一章保底：用 beat 直接引用的词条兜底
+        if (currentChapterNumber && termActivityForChapter.length === 0) {
+            try {
+                const chaps = loadAllChapters(projectId);
+                const segs = getJSONSync(`plot-segments-${projectId}`, [] as any[]);
+                const currentChap = chaps.find((c: any) => c.number === currentChapterNumber);
+                if (currentChap) {
+                    const vol = segs.find((s: any) => s.id === currentChap.volumeSegmentId && s.type === "bright");
+                    if (vol) {
+                        const volChaps = chaps.filter((c: any) => c.volumeSegmentId === vol.id).sort((a: any, b: any) => a.number - b.number);
+                        const idxInVol = volChaps.findIndex((c: any) => c.id === currentChap.id);
+                        const beat = (vol.beats || []).find((b: any) => b.number === idxInVol + 1);
+                        if (beat) {
+                            for (const t of terms) {
+                                if (beat.characters?.includes(t.title) || beat.location?.includes(t.title)) {
+                                    activeTermIds.add(t.id);
                                 }
                             }
                         }
                     }
-                } catch { /* ignore */ }
+                }
+            } catch { /* ignore */ }
+        }
+
+        // ★ other zone: 关键词模糊匹配
+        const otherKeywords = new Set<string>();
+        if (currentChapterNumber) {
+            try {
+                const chaps = loadAllChapters(projectId);
+                const segs = getJSONSync(`plot-segments-${projectId}`, [] as any[]);
+                const currentChap = chaps.find((c: any) => c.number === currentChapterNumber);
+                if (currentChap) {
+                    const vol = segs.find((s: any) => s.id === currentChap.volumeSegmentId && s.type === "bright");
+                    if (vol) {
+                        const volChaps = chaps.filter((c: any) => c.volumeSegmentId === vol.id).sort((a: any, b: any) => a.number - b.number);
+                        const idxInVol = volChaps.findIndex((c: any) => c.id === currentChap.id);
+                        const beat = (vol.beats || []).find((b: any) => b.number === idxInVol + 1);
+                        if (beat) {
+                            extractKeywordsFromBeat(otherKeywords, beat);
+                        }
+                        // 卷级关键词
+                        extractKeywordsFromBeat(otherKeywords, vol);
+                    }
+                }
+            } catch { /* ignore */ }
+        }
+        for (const kw of otherKeywords) {
+            const kwLower = kw.toLowerCase();
+            for (const t of otherTerms) {
+                if (activeTermIds.has(t.id)) continue;
+                if (t.title?.toLowerCase().includes(kwLower) || t.one_liner?.toLowerCase().includes(kwLower)) {
+                    activeTermIds.add(t.id);
+                }
             }
         }
 
         const filtered = terms.filter(t => activeTermIds.has(t.id));
         const MAX_TERMS = 20;
         const MAX_CHARS = 600;
+
         if (filtered.length > 0) {
             // 优先级：rule 无条件最高优，其余按原筛选
             const prioritized = [
@@ -521,12 +577,12 @@ function assembleP0(projectId: string, _styleGuide: StyleGuide | null, storyBibl
                 charCount += line.length;
                 shown++;
             }
-            if (terms.length > shown) parts.push(`...共 ${terms.length} 个词条，本处展示 ${shown} 条`);
+            if (filtered.length > shown) parts.push(`...共 ${filtered.length} 个词条，本处展示 ${shown} 条`);
         } else {
-            // 筛选后为空，兜底展示前 MAX_TERMS 条（规则优先）
+            // 筛选后为空，兜底展示 core + rule
             const prioritized = [
                 ...terms.filter(t => t.term_type === "rule"),
-                ...terms.filter(t => t.term_type !== "rule"),
+                ...coreTerms,
             ].slice(0, MAX_TERMS);
             parts.push("【世界设定】");
             let charCount = 0;
@@ -541,7 +597,7 @@ function assembleP0(projectId: string, _styleGuide: StyleGuide | null, storyBibl
                 charCount += line.length;
                 shown++;
             }
-            parts.push(`（共 ${terms.length} 个词条，尚未评估相关性，展示 ${shown} 条）`);
+            parts.push(`（共 ${terms.length} 个词条，展示 ${shown} 条）`);
         }
         parts.push("");
     }
@@ -650,27 +706,71 @@ function assembleP1(projectId: string, recentSummaries: ChapterSummary[], curren
                         parts.push(`· ${vol.event || "（暂无细纲）"}`);
                     }
                     parts.push("");
+
+                    // ★ 配对的暗线概要 + 细纲 ±3（第 N 个明线 ↔ 第 N 个暗线）
+                    const brightIdx = bright.findIndex((b: any) => b.id === currentVolId);
+                    const pd = brightIdx >= 0 && brightIdx < dark.length ? dark[brightIdx] : null;
+                    if (pd) {
+                        parts.push(`【配对的暗线 — 🌑 ${pd.title}】`);
+                        parts.push(`  ${pd.characters ? `角色：${pd.characters}  ` : ""}${pd.location ? `地点：${pd.location}  ` : ""}${pd.time ? `时间：${pd.time}  ` : ""}${pd.chapters ? `章节范围：${pd.chapters}  ` : ""}${pd.event ? `事件：${pd.event}` : ""}`);
+                        const dBeats = pd.beats || [];
+                        if (dBeats.length > 0) {
+                            const currentDBeatIdx = dBeats.findIndex((b: any) => {
+                                const bc = parseChapterRange(b.chapters || "");
+                                return currentChapterNumber ? bc.includes(currentChapterNumber) : false;
+                            });
+                            const currentDBeatNumber = currentDBeatIdx >= 0 ? dBeats[currentDBeatIdx].number : 0;
+                            const dStart = Math.max(1, currentDBeatNumber - 3);
+                            const dEnd = Math.min(dBeats.length > 0 ? dBeats[dBeats.length - 1].number : 1, currentDBeatNumber + 3);
+                            parts.push(`  ══════ 暗线细纲（#${dStart}-#${dEnd}，共 ${dBeats.length} 条）══════`);
+                            if (dStart > 1) parts.push(`  ...（#1-#${dStart - 1} 已省略）`);
+                            for (const b of dBeats) {
+                                if (b.number < dStart || b.number > dEnd) continue;
+                                const bcs = parseChapterRange(b.chapters || "");
+                                const isCurr = currentChapterNumber ? bcs.includes(currentChapterNumber) : false;
+                                let mk = "";
+                                if (isCurr) mk = "  ← ✍";
+                                const ps = [`    #${b.number}「${b.title}」`];
+                                if (b.characters) ps.push(`\n      角色：${b.characters}`);
+                                if (b.location) ps.push(`\n      地点：${b.location}`);
+                                if (b.time) ps.push(`\n      时间：${b.time}`);
+                                if (b.event) ps.push(`\n      事件：${b.event}`);
+                                if (b.chapters) ps.push(`\n      章节：${b.chapters}`);
+                                ps.push(mk);
+                                parts.push(ps.join(""));
+                            }
+                            if (dEnd < (dBeats.length > 0 ? dBeats[dBeats.length - 1].number : 1))
+                                parts.push(`  ...（#${dEnd + 1}-#${dBeats[dBeats.length - 1].number} 已省略）`);
+                        }
+                        parts.push("");
+                    }
                 }
             }
 
-            // 其他卷：只展示卷概要（不展开细纲）
+            // 其他卷：明线标题+概要 + 配对暗线标题+概要
             const otherBright = currentVolId ? bright.filter((s: any) => s.id !== currentVolId) : bright;
             if (otherBright.length > 0) {
-                if (currentVolId) parts.push("【其他卷】");
-                else parts.push("【明线】");
-                for (const s of otherBright) {
-                    const segParts = [`· 「${s.title}」`];
-                    if (s.characters) segParts.push(`  角色：${s.characters}`);
-                    if (s.location) segParts.push(`  地点：${s.location}`);
-                    if (s.time) segParts.push(`  时间：${s.time}`);
-                    if (s.chapters) segParts.push(`  章节范围：${s.chapters}`);
-                    if (s.event) segParts.push(`  事件：${s.event}`);
-                    parts.push(segParts.join("\n"));
+                parts.push(currentVolId ? "【其他卷】" : "【明线】");
+                for (let i = 0; i < otherBright.length; i++) {
+                    const s = otherBright[i];
+                    const actualIdx = bright.indexOf(s);
+                    const segParts = [`· ☀「${s.title}」${s.event ? `：${s.event}` : ""}${s.characters ? ` | 角色：${s.characters}` : ""}`];
+                    parts.push(segParts.join(""));
+                    // ★ 配对暗线
+                    if (actualIdx < dark.length) {
+                        const dd = dark[actualIdx];
+                        parts.push(`  · ��「${dd.title}」${dd.event ? `：${dd.event}` : ""}${dd.characters ? ` | 角色：${dd.characters}` : ""}`);
+                    }
                 }
+                parts.push("");
             }
-            if (dark.length > 0) {
-                parts.push("【暗线】");
-                for (const s of dark) parts.push(`· 「${s.title}」${s.event ? `：${s.event}` : ""}${s.chapters ? `\n   章节范围：${s.chapters}` : ""}`);
+            // ★ 未配对的剩余暗线
+            const pairedCount = Math.min(bright.length, dark.length);
+            const remainingDarks = dark.slice(pairedCount);
+            if (remainingDarks.length > 0) {
+                parts.push("【未配对的暗线】");
+                for (const s of remainingDarks) parts.push(`· ��「${s.title}」${s.event ? `：${s.event}` : ""}${s.chapters ? ` | 章节：${s.chapters}` : ""}`);
+                parts.push("");
             }
         } else {
             parts.push("（剧情走向未设置，请到大纲·剧情走向中创建）");
@@ -748,7 +848,26 @@ function getLogStoreV2(projectId: string): LogStoreV2 {
 
 function assembleP3(allCharacters: Character[], currentChapterNumber: number, allEdges: RelationshipEdge[] = [], logStore: LogStoreV2 = {}): string {
     const parts: string[] = ["━━━━ P3 · 角色池 ━━━━"];
-    const charMap = new Map(allCharacters.map(c => [c.id, c.name]));
+
+    // ★ 入口过滤：锁定区（zone==="locked"）的角色完全排除
+    const displayChars = allCharacters.filter(c => c.zone !== "locked");
+    const charMap = new Map(displayChars.map(c => [c.id, c.name]));
+
+    // ★ 检测从锁定区回归的角色
+    const justUnlocked = new Set<string>();
+    try {
+        const pid = displayChars[0]?.project_id || "";
+        if (pid) {
+            const lastZoneSnap = getJSONSync("zone-snapshot-chars-" + pid, {} as Record<string, string>);
+            for (const c of allCharacters) {
+                const prev = lastZoneSnap[c.id];
+                if (prev === "locked" && c.zone === "display") justUnlocked.add(c.id);
+            }
+            const newSnap: Record<string, string> = {};
+            for (const c of allCharacters) { if (c.zone) newSnap[c.id] = c.zone; }
+            setJSONSync("zone-snapshot-chars-" + pid, newSnap);
+        }
+    } catch { /* ignore */ }
 
     // === 活跃角色来源 ===
     const activeCharNames = new Set<string>();
@@ -764,8 +883,9 @@ function assembleP3(allCharacters: Character[], currentChapterNumber: number, al
 
     // 来源2: beat.characters 中引用的（从当前卷细纲匹配）
     try {
-        const segs = getJSONSync(`plot-segments-${allCharacters[0]?.project_id || ""}`, [] as any[]);
-        const chaps = loadAllChapters(allCharacters[0]?.project_id || "");
+        const pid = displayChars[0]?.project_id || "";
+        const segs = getJSONSync(`plot-segments-${pid}`, [] as any[]);
+        const chaps = loadAllChapters(pid);
         const currentChap = chaps.find((c: any) => c.number === currentChapterNumber);
         if (currentChap) {
             const vol = segs.find((s: any) => s.id === currentChap.volumeSegmentId && s.type === "bright");
@@ -793,13 +913,13 @@ function assembleP3(allCharacters: Character[], currentChapterNumber: number, al
     }
 
     // 首章兜底：characterStates 为空 → 取 weight 最高的前 5 人
-    if (activeCharNames.size === 0 && allCharacters.length > 0) {
-        const top5 = [...allCharacters].sort((a, b) => (b.weight || 0) - (a.weight || 0)).slice(0, 5);
+    if (activeCharNames.size === 0 && displayChars.length > 0) {
+        const top5 = [...displayChars].sort((a, b) => (b.weight || 0) - (a.weight || 0)).slice(0, 5);
         for (const c of top5) activeCharNames.add(c.name);
     }
 
     // === 第一层：活跃角色完整卡 ===
-    const activeChars = allCharacters.filter(c => activeCharNames.has(c.name));
+    const activeChars = displayChars.filter(c => activeCharNames.has(c.name));
     if (activeChars.length > 0) {
         parts.push("【本章活跃角色】（完整卡）");
         for (const c of activeChars) {
@@ -823,6 +943,7 @@ function assembleP3(allCharacters: Character[], currentChapterNumber: number, al
                 if (latest.age) merged.age = latest.age;
             }
             const fields: string[] = [merged.name];
+            if (justUnlocked.has(c.id)) fields.push("【⚡ 刚解除锁定，优先关注】");
             if (merged.gender) fields.push(merged.gender);
             if (merged.age) fields.push(`${merged.age}岁`);
             if (merged.race) fields.push(merged.race);
@@ -865,9 +986,9 @@ function assembleP3(allCharacters: Character[], currentChapterNumber: number, al
     }
 
     // === 第三层：角色名册（全量，仅 summary） ===
-    if (allCharacters.length > 0) {
-        parts.push(`【角色名册】（共 ${allCharacters.length} 人，AI 可按需调用）`);
-        for (const c of allCharacters) {
+    if (displayChars.length > 0) {
+        parts.push(`【角色名册】（共 ${displayChars.length} 人，AI 可按需调用）`);
+        for (const c of displayChars) {
             const summary = c.summary || `性别：${c.gender || "?"} | ${c.personality || c.faction || ""}`;
             let lastInfo = "";
             if (charLastChapter.has(c.name)) {

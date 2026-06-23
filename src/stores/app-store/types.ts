@@ -31,9 +31,13 @@ export interface AppStore {
     worldTermBump: number; groupBump: number; characterBump: number;
     pendingAiCharsBump: number; focusGroupBump: number;
     worldviewGroups: WorldviewGroup[];
+    characterGroups: { id: string; name: string; locked: boolean }[];
+    characterZoneEnabled: Record<string, boolean>;
     bumpWorldTerms: () => void; bumpGroups: () => void;
     bumpCharacters: () => void; bumpPendingAiChars: () => void;
     setWorldviewGroups: (g: WorldviewGroup[] | ((prev: WorldviewGroup[]) => WorldviewGroup[])) => void;
+    setCharacterGroups: (g: { id: string; name: string; locked: boolean }[]) => void;
+    setCharacterZoneEnabled: (z: Record<string, boolean>) => void;
     focusGroup: (id: string) => void;
     // ---- ui slice ----
     activeModule: NavTarget; activeExtraId: string | null;
