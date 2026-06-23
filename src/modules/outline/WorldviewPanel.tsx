@@ -197,10 +197,12 @@ export function WorldviewPanel() {
   };
 
   // ==== callbacks ====
-  const handleUpdate = useCallback(async (u: WorldTerm) => { await api.saveWorldTerm(u); setTerms(p => p.map(t => t.id === u.id ? u : t)); setNodes(nds => nds.map(n => n.id === u.id ? { ...n, data: { ...n.data, term: u } } : n)); }, [setNodes]);
+  const pushHRef = useRef<() => void>(() => { });
+  const handleUpdate = useCallback(async (u: WorldTerm) => { pushHRef.current(); await api.saveWorldTerm(u); setTerms(p => p.map(t => t.id === u.id ? u : t)); setNodes(nds => nds.map(n => n.id === u.id ? { ...n, draggable: !u.is_locked, data: { ...n.data, term: u } } : n)); }, [setNodes]);
   const handleSelect = useCallback((t: WorldTerm) => { setSelectedEntity({ type: "world_term", id: t.id, name: t.title }); }, [setSelectedEntity]);
   const delRef = useRef<(id: string) => void>(() => { });
   delRef.current = useCallback(async (id: string) => {
+    pushHRef.current();
     // 找回词条名称用于确认对话框
     const term = terms.find(t => t.id === id);
     if (!window.confirm(`确定删除词条「${term?.title || id}」？此操作不可撤销。`)) return;
@@ -390,37 +392,32 @@ export function WorldviewPanel() {
   const load = useCallback(async () => {
     if (!currentProject) return;
     const loaded = await api.listWorldTerms(currentProject.id);
-    // 为没有 zone 的词条根据坐标自动分配分区
-    let zoneDirty = false;
+    // ★ 每次加载都根据坐标重新计算 zone（不依赖持久化，新旧数据兼容）
     for (const t of loaded) {
-      if (!t.zone) {
-        t.zone = zoneFromPos(t.layout_x || 400, t.layout_y || 200);
+      const computed = zoneFromPos(t.layout_x || 400, t.layout_y || 200);
+      if (t.zone !== computed) {
+        t.zone = computed;
+        // 异步持久化 zone（不阻塞渲染）
         api.saveWorldTerm(t).catch(() => { });
-        zoneDirty = true;
       }
     }
-    if (zoneDirty) { setTerms(loaded); }
     setTerms(loaded);
 
     const termNodes: Node[] = loaded.map((t) => {
+      const base = {
+        id: t.id,
+        data: { term: t, onUpdate: handleUpdate, onSelect: handleSelect, onDelete: delRef.current },
+        type: "worldviewTerm" as const,
+        draggable: !t.is_locked,
+      };
       // 已定位节点 → 使用 localStorage 保存的坐标
       if (t.layout_x !== 0 || t.layout_y !== 0) {
-        return {
-          id: t.id,
-          position: { x: t.layout_x, y: t.layout_y },
-          data: { term: t, onUpdate: handleUpdate, onSelect: handleSelect, onDelete: delRef.current },
-          type: "worldviewTerm",
-        };
+        return { ...base, position: { x: t.layout_x, y: t.layout_y } };
       }
       // 新节点（layout 为 0,0）→ 随机偏移避免全部堆叠在一起
       const offsetX = Math.round(Math.random() * 200 - 100);
       const offsetY = Math.round(Math.random() * 200 - 100);
-      return {
-        id: t.id,
-        position: { x: 400 + offsetX, y: 200 + offsetY },
-        data: { term: t, onUpdate: handleUpdate, onSelect: handleSelect, onDelete: delRef.current },
-        type: "worldviewTerm",
-      };
+      return { ...base, position: { x: 400 + offsetX, y: 200 + offsetY } };
     });
 
     // restore groups: convert child coords to relative, group node first
@@ -513,11 +510,17 @@ export function WorldviewPanel() {
         for (const cid of g.childIds) {
           const childNode = liveNodes.find((n: Node) => n.id === cid);
           if (childNode) {
-            // childNode.position 在 ReactFlow 中是相对父编组的坐标，始终正确
             const absX = node.position.x + childNode.position.x;
             const absY = node.position.y + childNode.position.y;
             api.saveNodeLayout("world_term", cid, absX, absY).catch(e => console.error("saveNodeLayout failed:", e));
-            setTerms(p => p.map(t => t.id === cid ? { ...t, layout_x: absX, layout_y: absY } : t));
+            // 更新子词条的 zone 和坐标（突破编组锁定）
+            const ct = terms.find(x => x.id === cid);
+            if (ct && ct.zone !== newZone) {
+              const u = { ...ct, layout_x: absX, layout_y: absY, zone: newZone };
+              await api.saveWorldTerm(u as WorldTerm).catch(() => { });
+              setTerms(p => p.map(t => t.id === cid ? u : t));
+              setNodes(nds => nds.map(n => n.id === cid ? { ...n, data: { ...n.data, term: u } } : n));
+            }
           }
         }
         setWorldviewGroups(p => p.map(gr => gr.id === g.id ? { ...gr, x: g.x, y: g.y } : gr));
@@ -578,6 +581,7 @@ export function WorldviewPanel() {
 
   // ==== connect + infect ====
   const onConnect = useCallback((conn: Connection) => {
+    pushH();
     if (!currentProject || !conn.source || !conn.target || conn.source === conn.target) return;
     // 感染逻辑：仅右引线(→左接头) 或 下引线(→上接头) 时传染类型
     const sh = conn.sourceHandle || "right";
@@ -622,36 +626,77 @@ export function WorldviewPanel() {
 
   const onEdgeDbl = useCallback((_: unknown, edge: Edge) => {
     if (!currentProject) return;
-    // 保存快照：直接写 hist ref（pushH 还未定义，不用 useCallback 间接调用）
-    hist.current.push({ nodes: JSON.parse(JSON.stringify(nodes)), edges: JSON.parse(JSON.stringify(edges)) });
-    if (hist.current.length > 50) hist.current.shift();
+    pushHRef.current();
     setEdges(eds => { const u = eds.filter(e => e.id !== edge.id); saveEdges(currentProject.id, u); return u; });
-  }, [currentProject, setEdges, nodes, edges]);
+  }, [currentProject, setEdges]);
 
   // ==== undo ==== （必须在 onConnect/onEdgeDbl 之前定义）
-  const hist = useRef<{ nodes: Node[]; edges: Edge[] }[]>([]);
-  const redoStack = useRef<{ nodes: Node[]; edges: Edge[] }[]>([]);
+  // 快照同时保存节点/边/词条数据，确保撤销能恢复数据库
+  const hist = useRef<{ nodes: Node[]; edges: Edge[]; terms: WorldTerm[] }[]>([]);
+  const redoStack = useRef<{ nodes: Node[]; edges: Edge[]; terms: WorldTerm[] }[]>([]);
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
-  const pushH = useCallback(() => { hist.current.push({ nodes: JSON.parse(JSON.stringify(nodes)), edges: JSON.parse(JSON.stringify(edges)) }); if (hist.current.length > 50) hist.current.shift(); redoStack.current = []; setCanUndo(true); setCanRedo(false); }, [nodes, edges]);
+  const pushH = useCallback(() => {
+    hist.current.push({ nodes: JSON.parse(JSON.stringify(nodes)), edges: JSON.parse(JSON.stringify(edges)), terms: JSON.parse(JSON.stringify(terms)) });
+    if (hist.current.length > 50) hist.current.shift();
+    redoStack.current = []; setCanUndo(true); setCanRedo(false);
+  }, [nodes, edges, terms]);
+  // 同步到 ref 供 handleUpdate 等早期定义使用
+  pushHRef.current = pushH;
   const undo = useCallback(() => {
     const s = hist.current.pop();
     if (s) {
-      redoStack.current.push({ nodes: JSON.parse(JSON.stringify(nodes)), edges: JSON.parse(JSON.stringify(edges)) });
+      redoStack.current.push({ nodes: JSON.parse(JSON.stringify(nodes)), edges: JSON.parse(JSON.stringify(edges)), terms: JSON.parse(JSON.stringify(terms)) });
       setNodes(s.nodes); setEdges(s.edges);
+      // 恢复词条数据到 mock-backend
+      if (currentProject) {
+        for (const t of s.terms) {
+          const exists = terms.find(x => x.id === t.id);
+          if (!exists) {
+            // 被删除的词条 → 重新创建
+            api.saveWorldTerm(t).catch(() => { });
+          } else if (JSON.stringify(exists) !== JSON.stringify(t)) {
+            // 被修改的词条 → 恢复原值
+            api.saveWorldTerm(t).catch(() => { });
+          }
+        }
+        // 删除本次快照后不存在的词条（由 redo 新增的）
+        for (const t of terms) {
+          if (!s.terms.find(x => x.id === t.id)) {
+            api.deleteWorldTerm(t.id).catch(() => { });
+          }
+        }
+      }
+      setTerms(s.terms);
       setCanUndo(hist.current.length > 0);
       setCanRedo(true);
     }
-  }, [setNodes, setEdges, nodes, edges]);
+  }, [setNodes, setEdges, nodes, edges, terms, currentProject]);
   const redo = useCallback(() => {
     const s = redoStack.current.pop();
     if (s) {
-      hist.current.push({ nodes: JSON.parse(JSON.stringify(nodes)), edges: JSON.parse(JSON.stringify(edges)) });
+      hist.current.push({ nodes: JSON.parse(JSON.stringify(nodes)), edges: JSON.parse(JSON.stringify(edges)), terms: JSON.parse(JSON.stringify(terms)) });
       setNodes(s.nodes); setEdges(s.edges);
+      if (currentProject) {
+        for (const t of s.terms) {
+          const exists = terms.find(x => x.id === t.id);
+          if (!exists) {
+            api.saveWorldTerm(t).catch(() => { });
+          } else if (JSON.stringify(exists) !== JSON.stringify(t)) {
+            api.saveWorldTerm(t).catch(() => { });
+          }
+        }
+        for (const t of terms) {
+          if (!s.terms.find(x => x.id === t.id)) {
+            api.deleteWorldTerm(t.id).catch(() => { });
+          }
+        }
+      }
+      setTerms(s.terms);
       setCanUndo(true);
       setCanRedo(redoStack.current.length > 0);
     }
-  }, [setNodes, setEdges, nodes, edges]);
+  }, [setNodes, setEdges, nodes, edges, terms, currentProject]);
   const onNodeDragStart = useCallback(() => { pushH(); }, [pushH]);
   useEffect(() => { const h = (e: KeyboardEvent) => { if (e.ctrlKey && !e.shiftKey && e.key === "z") { e.preventDefault(); undo(); } if ((e.ctrlKey && e.key === "y") || (e.ctrlKey && e.shiftKey && e.key === "z")) { e.preventDefault(); redo(); } }; window.addEventListener("keydown", h); return () => window.removeEventListener("keydown", h); }, [undo, redo]);
 
@@ -1078,15 +1123,17 @@ export function WorldviewPanel() {
                 setTerms(p => p.map(x => x.id === t.id ? u : x));
                 setNodes(nds => nds.map(n => n.id === u.id ? { ...n, data: { ...n.data, term: u } } : n));
               }
-            } else if (node.type === "group") {
-              // 编组实时检测
-              const gCenterX = node.position.x + 200;
-              const gCenterY = node.position.y + 150;
-              const newZone = zoneFromPos(gCenterX, gCenterY);
-              const childTermIds = (node.data as any)?.childIds || [];
-              if (childTermIds.length > 0) {
-                setTerms(p => p.map(t => childTermIds.includes(t.id) ? { ...t, zone: newZone } : t));
-                setNodes(nds => nds.map(n => childTermIds.includes(n.id) ? { ...n, data: { ...n.data, term: { ...n.data?.term, zone: newZone } } } : n));
+            } else if (node.type === "group" && currentProject) {
+              // 编组实时检测：从 localStorage 读取子节点列表
+              const allGroups = loadGroups(currentProject.id);
+              const gData = allGroups.find(x => x.id === node.id);
+              const cids = gData?.childIds || [];
+              const gW = gData?.w ?? 400;
+              const gH = gData?.h ?? 300;
+              const newZone = zoneFromPos(node.position.x + gW / 2, node.position.y + gH / 2);
+              if (cids.length > 0) {
+                setTerms(p => p.map(t => cids.includes(t.id) ? { ...t, zone: newZone } : t));
+                setNodes(nds => nds.map(n => cids.includes(n.id) ? { ...n, data: { ...n.data, term: { ...(n.data?.term || {}), zone: newZone } } } : n));
               }
             }
           }}
@@ -1151,25 +1198,29 @@ export function WorldviewPanel() {
           })}
         </div>
 
-        {selIds.length >= 2 && (
-          <div style={{ position: "absolute", top: 16, left: "50%", transform: "translateX(-50%)", zIndex: 50, borderRadius: 12, border: "1px solid #e2e8f0", background: "white", padding: "8px 12px", boxShadow: "0 4px 12px rgba(0,0,0,0.08)", display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
-            <span style={{ color: "#94a3b8", marginRight: 4 }}>{selIds.length} 个</span>
-            <span style={{ width: 1, height: 16, background: "#e2e8f0" }} />
+        {selIds.length >= 2 && !showDlg && (
+          <div style={{
+            position: "absolute", top: 8, left: "50%", transform: "translateX(-50%)", zIndex: 50,
+            borderRadius: 12, border: "1px solid #e2e8f0", background: "white", padding: "6px 10px",
+            boxShadow: "0 4px 12px rgba(0,0,0,0.08)", display: "flex", alignItems: "center", gap: 4, fontSize: 11,
+          }}>
+            <span style={{ color: "#94a3b8", marginRight: 2, fontSize: 10 }}>{selIds.length}</span>
+            <span style={{ width: 1, height: 14, background: "#e2e8f0" }} />
             <button className="hover:bg-amber-50 rounded px-1 py-0.5" onClick={() => align("left")} title="左对齐" style={{ color: "#475569", border: "none", background: "none", cursor: "pointer" }}>L</button>
             <button className="hover:bg-amber-50 rounded px-1 py-0.5" onClick={() => align("ch")} title="水平居中" style={{ color: "#475569", border: "none", background: "none", cursor: "pointer" }}>CH</button>
             <button className="hover:bg-amber-50 rounded px-1 py-0.5" onClick={() => align("right")} title="右对齐" style={{ color: "#475569", border: "none", background: "none", cursor: "pointer" }}>R</button>
-            <span style={{ width: 1, height: 16, background: "#e2e8f0" }} />
+            <span style={{ width: 1, height: 14, background: "#e2e8f0" }} />
             <button className="hover:bg-amber-50 rounded px-1 py-0.5" onClick={() => align("top")} title="顶对齐" style={{ color: "#475569", border: "none", background: "none", cursor: "pointer" }}>T</button>
             <button className="hover:bg-amber-50 rounded px-1 py-0.5" onClick={() => align("cv")} title="垂直居中" style={{ color: "#475569", border: "none", background: "none", cursor: "pointer" }}>CV</button>
             <button className="hover:bg-amber-50 rounded px-1 py-0.5" onClick={() => align("bottom")} title="底对齐" style={{ color: "#475569", border: "none", background: "none", cursor: "pointer" }}>B</button>
-            <span style={{ width: 1, height: 16, background: "#e2e8f0" }} />
-            <button className="hover:bg-amber-50 rounded px-2 py-0.5 font-medium" onClick={() => dist("h")} title="水平等距" style={{ color: "#b45309", border: "none", background: "none", cursor: "pointer" }}>H=</button>
-            <button className="hover:bg-amber-50 rounded px-2 py-0.5 font-medium" onClick={() => dist("v")} title="垂直等距" style={{ color: "#b45309", border: "none", background: "none", cursor: "pointer" }}>V=</button>
-            <span style={{ width: 1, height: 16, background: "#e2e8f0" }} />
-            <button className="hover:bg-violet-50 rounded px-2 py-0.5 text-violet-700" onClick={() => { setPendSel([...selIds]); setGName("新编组"); setShowDlg(true); }} style={{ border: "none", background: "none", cursor: "pointer" }}>Ctrl+G</button>
-            <button className="hover:bg-violet-50 rounded px-2 py-0.5 text-violet-500" onClick={() => doUngroup()} style={{ border: "none", background: "none", cursor: "pointer" }}>解散</button>
-            <span style={{ width: 1, height: 16, background: "#e2e8f0" }} />
-            <button className="hover:bg-red-50 rounded px-2 py-0.5 text-red-600" onClick={() => { const targetIds = selIds.filter(id => nodes.find(x => x.id === id)?.type === "worldviewTerm"); if (targetIds.length === 0) return; if (window.confirm(`确定一次性删除选中的 ${targetIds.length} 个词条？此操作不可撤销。`)) { pushH(); const p = currentProject; for (const id of targetIds) { api.deleteWorldTerm(id); setTerms(p2 => p2.filter(t => t.id !== id)); if (p) { const gs = loadGroups(p.id); let dirty = false; for (const g of gs) { const idx = g.childIds.indexOf(id); if (idx >= 0) { g.childIds.splice(idx, 1); dirty = true; } } if (dirty) saveGroups(p.id, gs.filter(g => g.childIds.length > 0)); } } setEdges(eds => { const u = eds.filter(e => !targetIds.includes(e.source) && !targetIds.includes(e.target)); if (p) saveEdges(p.id, u); return u; }); setNodes(nds => nds.filter(n => !targetIds.includes(n.id))); setSelIds([]); } }} style={{ border: "none", background: "none", cursor: "pointer" }}>X</button>
+            <span style={{ width: 1, height: 14, background: "#e2e8f0" }} />
+            <button className="hover:bg-amber-50 rounded px-1.5 py-0.5 font-medium" onClick={() => dist("h")} title="水平等距" style={{ color: "#b45309", border: "none", background: "none", cursor: "pointer" }}>H=</button>
+            <button className="hover:bg-amber-50 rounded px-1.5 py-0.5 font-medium" onClick={() => dist("v")} title="垂直等距" style={{ color: "#b45309", border: "none", background: "none", cursor: "pointer" }}>V=</button>
+            <span style={{ width: 1, height: 14, background: "#e2e8f0" }} />
+            <button className="hover:bg-violet-50 rounded px-1.5 py-0.5 text-violet-700" onClick={() => { setPendSel([...selIds]); setGName("新编组"); setShowDlg(true); }} style={{ border: "none", background: "none", cursor: "pointer" }}>编组</button>
+            <button className="hover:bg-violet-50 rounded px-1.5 py-0.5 text-violet-500" onClick={() => doUngroup()} style={{ border: "none", background: "none", cursor: "pointer" }}>解散</button>
+            <span style={{ width: 1, height: 14, background: "#e2e8f0" }} />
+            <button className="hover:bg-red-50 rounded px-1.5 py-0.5 text-red-600" onClick={() => { const targetIds = selIds.filter(id => nodes.find(x => x.id === id)?.type === "worldviewTerm"); if (targetIds.length === 0) return; if (window.confirm(`确定一次性删除选中的 ${targetIds.length} 个词条？此操作不可撤销。`)) { pushH(); const p = currentProject; for (const id of targetIds) { api.deleteWorldTerm(id); setTerms(p2 => p2.filter(t => t.id !== id)); if (p) { const gs = loadGroups(p.id); let dirty = false; for (const g of gs) { const idx = g.childIds.indexOf(id); if (idx >= 0) { g.childIds.splice(idx, 1); dirty = true; } } if (dirty) saveGroups(p.id, gs.filter(g => g.childIds.length > 0)); } } setEdges(eds => { const u = eds.filter(e => !targetIds.includes(e.source) && !targetIds.includes(e.target)); if (p) saveEdges(p.id, u); return u; }); setNodes(nds => nds.filter(n => !targetIds.includes(n.id))); setSelIds([]); } }} style={{ border: "none", background: "none", cursor: "pointer" }}>X</button>
           </div>
         )}
       </div>

@@ -69,8 +69,42 @@ export function AiChatPanel() {
     } satisfies AiChatStreamCallbacks
   );
 
-  // Business: handleInsert inline
-  const handleInsert = useCallback(async () => { if (pendingTerms.length === 0) { appendChatMessages([{ id: uuid(), role: "system", content: "⚠️ 没有待插入的词条", created_at: new Date().toISOString() }]); return; } const s = useAppStore.getState(); const cur = s.currentProject; if (!cur) return; const idMap = new Map<string, string>(); const titles: string[] = []; for (const term of pendingTerms) { const id = uuid(); idMap.set(term.title, id); await api.saveWorldTerm({ ...term, id, project_id: cur.id }); titles.push(term.title); } if (pendingEdges.length > 0) { const ek = "worldview-edges-" + cur.id; const ex = getJSONSync(ek, []); for (const ea of pendingEdges) { const si = idMap.get(ea.sourceTitle); const ti = idMap.get(ea.targetTitle); if (si && ti) ex.push({ id: uuid(), source: si, target: ti, type: "straight", style: { stroke: "#94a3b8", strokeWidth: 2 } }); } try { setJSONSync(ek, ex); } catch { } } s.bumpWorldTerms(); setPendingTerms([]); setPendingEdges([]); s.navigateTo("outline"); s.setOutlineSection("worldview"); appendChatMessages([{ id: uuid(), role: "system", content: `✅ 已插入 ${titles.length} 个词条：${titles.join("、")}`, created_at: new Date().toISOString() }]); }, [pendingTerms, pendingEdges, appendChatMessages, setPendingTerms, setPendingEdges]);
+  // Business: handleInsert — with zone selection dialog
+  const [insertZoneDlg, setInsertZoneDlg] = useState<"core" | "locked" | "active" | "other" | null>(null);
+  const handleInsert = useCallback(async () => {
+    if (pendingTerms.length === 0) { appendChatMessages([{ id: uuid(), role: "system", content: "⚠️ 没有待插入的词条", created_at: new Date().toISOString() }]); return; }
+    setInsertZoneDlg("active");
+  }, [pendingTerms, appendChatMessages]);
+  const confirmInsert = useCallback(async (zone: "core" | "locked" | "active" | "other") => {
+    setInsertZoneDlg(null); const s = useAppStore.getState(); const cur = s.currentProject; if (!cur) return;
+    const CX = 600, CY = 400;
+    const ORIGINS: Record<string, { x: number; y: number }> = { core: { x: 60, y: 60 }, locked: { x: CX + 60, y: 60 }, active: { x: 60, y: CY + 60 }, other: { x: CX + 60, y: CY + 60 } };
+    const origin = ORIGINS[zone];
+    const allT = await api.listWorldTerms(cur.id);
+    const zoneT = allT.filter(t => (t.zone ?? "other") === zone);
+    const SX = 290, SY = 210, MPR = 5;
+    const occ = new Set<string>();
+    for (const t of zoneT) {
+      if ((t.layout_x || 0) === 0 && (t.layout_y || 0) === 0) continue;
+      const gx = Math.round(((t.layout_x || 0) - origin.x) / SX);
+      const gy = Math.round(((t.layout_y || 0) - origin.y) / SY);
+      if (gx >= 0 && gx < MPR && gy >= 0) occ.add(gx + "," + gy);
+    }
+    const idMap = new Map<string, string>(); const titles: string[] = [];
+    let col = 0, row = 0;
+    for (const term of pendingTerms) {
+      const id = uuid(); idMap.set(term.title, id);
+      while (occ.has(col + "," + row)) { col++; if (col >= MPR) { col = 0; row++; } }
+      const px = origin.x + col * SX, py = origin.y + row * SY;
+      occ.add(col + "," + row); col++; if (col >= MPR) { col = 0; row++; }
+      await api.saveWorldTerm({ ...term, id, project_id: cur.id, zone, layout_x: px, layout_y: py });
+      titles.push(term.title);
+    }
+    if (pendingEdges.length > 0) { const ek = "worldview-edges-" + cur.id; const ex = getJSONSync(ek, []); for (const ea of pendingEdges) { const si = idMap.get(ea.sourceTitle), ti = idMap.get(ea.targetTitle); if (si && ti) ex.push({ id: uuid(), source: si, target: ti, type: "straight", style: { stroke: "#94a3b8", strokeWidth: 2 } }); } try { setJSONSync(ek, ex); } catch { } }
+    s.bumpWorldTerms(); setPendingTerms([]); setPendingEdges([]); s.navigateTo("outline"); s.setOutlineSection("worldview");
+    const zl = zone === "core" ? "核心规则" : zone === "locked" ? "词条锁定" : zone === "active" ? "当前创作" : "其他";
+    appendChatMessages([{ id: uuid(), role: "system", content: "✅ 已插入" + titles.length + "个词条到" + zl + "：" + titles.join("、"), created_at: new Date().toISOString() }]);
+  }, [pendingTerms, pendingEdges, appendChatMessages, setPendingTerms, setPendingEdges]);
   const handlePlotInsert = useCallback(async () => { if (!currentProject) return; const pid = currentProject.id; const ex = getJSONSync("plot-segments-" + pid, []); const nm = new Map<string, string>(); for (const s of ex) nm.set(s.title, s.id); for (const seg of pendingPlotSegments) { const id = uuid(); nm.set(seg.title, id); ex.push({ id, project_id: pid, ...seg, beats: [] }); } if (pendingPlotBeats.length > 0) { for (const pb of pendingPlotBeats) { const si = nm.get(pb.segmentTitle); if (si) { const seg = ex.find((s: any) => s.id === si); if (seg) { if (!seg.beats) seg.beats = []; const mn = seg.beats.reduce((m: number, b: any) => Math.max(m, b.number || 0), 0); seg.beats.push({ id: uuid(), number: mn + 1, ...pb.beat }); } } } } try { setJSONSync("plot-segments-" + pid, ex); } catch { } const ee = getJSONSync("plot-edges-" + pid, []); for (const ea of pendingPlotEdges) { const si = nm.get(ea.sourceTitle); const ti = nm.get(ea.targetTitle); if (si && ti) ee.push({ id: uuid(), source: si, target: ti, sourceHandle: "right", targetHandle: "left", type: "straight", style: { stroke: "#94a3b8", strokeWidth: 2 } }); } try { setJSONSync("plot-edges-" + pid, ee); } catch { } useAppStore.getState().bumpPlot(); setPendingPlotSegments([]); setPendingPlotEdges([]); setPendingPlotBeats([]); appendChatMessages([{ id: uuid(), role: "system", content: "✅ 已创建剧情段落/细纲，刷新画布查看。", created_at: new Date().toISOString() }]); }, [currentProject, pendingPlotSegments, pendingPlotEdges, pendingPlotBeats, appendChatMessages, setPendingPlotSegments, setPendingPlotEdges, setPendingPlotBeats]);
   const handleChapterInsert = useCallback(async () => { if (!currentProject || pendingChapters.length === 0) return; const pid = currentProject.id; const segs = getJSONSync("plot-segments-" + pid, []); const ex = loadAllChapters(pid); let created = 0; for (const pc of pendingChapters) { const seg = segs.find((s: any) => s.title === pc.volumeTitle && s.type === "bright"); if (!seg) continue; if (ex.some((c: any) => c.volumeSegmentId === seg.id && c.number === pc.number)) continue; const newChapter = { id: uuid(), volumeSegmentId: seg.id, number: pc.number, title: pc.title, content: "" }; ex.push(newChapter); saveChapter(pid, newChapter); created++; } setPendingChapters([]); useAppStore.getState().bumpPlot(); if (created > 0) appendChatMessages([{ id: uuid(), role: "system", content: `✅ 已创建 ${created} 个章节，前往写作台查看。`, created_at: new Date().toISOString() }]); }, [currentProject, pendingChapters, appendChatMessages, setPendingChapters]);
 
@@ -104,37 +138,63 @@ export function AiChatPanel() {
   }, [input, uploadedFiles, send, setInput, setUploadedFiles]);
 
   return (
-    <ChatPanelLayout
-      messages={messages} input={input} setInput={setInput} loading={loading}
-      uploadedFiles={uploadedFiles} setUploadedFiles={setUploadedFiles} hasAttachments={hasAttachments}
-      memoryTab={memoryTab} setMemoryTab={setMemoryTab} memoryEntries={memoryEntries}
-      streamingContent={streamingContent} streamingThinking={streamingThinking}
-      streamingPhase={streamingPhase} thinkingDuration={thinkingDuration}
-      editingMsgId={editingMsgId} setEditingMsgId={setEditingMsgId} editingContent={editingContent} setEditingContent={setEditingContent}
-      chapterSelectMode={chapterSelectMode as boolean} activeModule={activeModule}
-      pendingTerms={pendingTerms} pendingEdges={pendingEdges}
-      pendingChars={pendingChars} pendingCharEdges={pendingCharEdges} pendingRemoveEdges={pendingRemoveEdges}
-      pendingSnapshots={pendingSnapshots} pendingPlotSegments={pendingPlotSegments} pendingPlotBeats={pendingPlotBeats}
-      pendingChapters={pendingChapters}
-      setPendingTerms={setPendingTerms} setPendingEdges={setPendingEdges}
-      setPendingChars={setPendingChars} setPendingCharEdges={setPendingCharEdges}
-      setPendingRemoveEdges={setPendingRemoveEdges} setPendingSnapshots={setPendingSnapshots}
-      chatContainerRef={chatContainerRef} bottomRef={bottomRef} fileInputRef={fileInputRef}
-      stt={stt} sttLoading={sttLoading} contextHint={contextHint()}
-      onClearChat={() => { if (window.confirm('确定清空全部对话记录？此操作不可撤销。')) clearChat(); }}
-      onToggleMemory={setMemoryTab}
-      onStartEdit={(id: string, content: string) => { setEditingMsgId(id); setEditingContent(content); }}
-      onCommitEdit={handleConfirmEdit} onCancelEdit={() => { setEditingMsgId(null); setEditingContent(''); }}
-      onEditingChange={setEditingContent}
-      onCopy={handleCopyMessage} onDelete={handleDeleteMessage} onRegenerate={handleRegenerate}
-      lastAssistantMessage={lastAssistantMessage}
-      onSend={handleSend} onStop={handleStop} onSttToggle={handleSttToggle}
-      onFileSelect={handleFileSelect} onRemoveFile={removeFile}
-      onInsertTerms={handleInsert} onInsertCharacters={handleCharacterInsert} onInsertPlot={handlePlotInsert}
-      onInsertChapters={handleChapterInsert} onInsertText={handleTextInsert}
-      onToggleChapterSelect={() => { const s = useAppStore.getState(); s.setChapterSelectMode(!(chapterSelectMode as boolean)); if (chapterSelectMode) s.setSelectedChapterIds([]); }}
-      onRemoveLast={handleRemoveLast} onSave={handleSave}
-    />
+    <>
+      {/* 插入词条区域选择弹窗 */}
+      {insertZoneDlg && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/20" onClick={() => setInsertZoneDlg(null)}>
+          <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-xl" onClick={e => e.stopPropagation()} style={{ minWidth: 340 }}>
+            <h3 className="mb-3 text-sm font-semibold">选择插入区域</h3>
+            <p className="mb-3 text-xs text-slate-400">将 {pendingTerms.length} 个词条插入到：</p>
+            <div className="flex flex-col gap-2">
+              {[
+                { key: "core", label: "核心规则", color: "#dc2626" },
+                { key: "locked", label: "词条锁定", color: "#4b5563" },
+                { key: "active", label: "当前创作", color: "#16a34a" },
+                { key: "other", label: "其他", color: "#ea580c" },
+              ].map(z => (
+                <button key={z.key} onClick={() => confirmInsert(z.key)}
+                  className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-white transition-colors hover:opacity-80"
+                  style={{ backgroundColor: z.color }}>
+                  ☐ {z.label}
+                </button>
+              ))}
+            </div>
+            <button className="mt-3 w-full rounded-lg border px-3 py-1.5 text-sm text-slate-500 hover:bg-slate-50" onClick={() => setInsertZoneDlg(null)}>取消</button>
+          </div>
+        </div>
+      )}
+      <ChatPanelLayout
+        messages={messages} input={input} setInput={setInput} loading={loading}
+        uploadedFiles={uploadedFiles} setUploadedFiles={setUploadedFiles} hasAttachments={hasAttachments}
+        memoryTab={memoryTab} setMemoryTab={setMemoryTab} memoryEntries={memoryEntries}
+        streamingContent={streamingContent} streamingThinking={streamingThinking}
+        streamingPhase={streamingPhase} thinkingDuration={thinkingDuration}
+        editingMsgId={editingMsgId} setEditingMsgId={setEditingMsgId} editingContent={editingContent} setEditingContent={setEditingContent}
+        chapterSelectMode={chapterSelectMode as boolean} activeModule={activeModule}
+        pendingTerms={pendingTerms} pendingEdges={pendingEdges}
+        pendingChars={pendingChars} pendingCharEdges={pendingCharEdges} pendingRemoveEdges={pendingRemoveEdges}
+        pendingSnapshots={pendingSnapshots} pendingPlotSegments={pendingPlotSegments} pendingPlotBeats={pendingPlotBeats}
+        pendingChapters={pendingChapters}
+        setPendingTerms={setPendingTerms} setPendingEdges={setPendingEdges}
+        setPendingChars={setPendingChars} setPendingCharEdges={setPendingCharEdges}
+        setPendingRemoveEdges={setPendingRemoveEdges} setPendingSnapshots={setPendingSnapshots}
+        chatContainerRef={chatContainerRef} bottomRef={bottomRef} fileInputRef={fileInputRef}
+        stt={stt} sttLoading={sttLoading} contextHint={contextHint()}
+        onClearChat={() => { if (window.confirm('确定清空全部对话记录？此操作不可撤销。')) clearChat(); }}
+        onToggleMemory={setMemoryTab}
+        onStartEdit={(id: string, content: string) => { setEditingMsgId(id); setEditingContent(content); }}
+        onCommitEdit={handleConfirmEdit} onCancelEdit={() => { setEditingMsgId(null); setEditingContent(''); }}
+        onEditingChange={setEditingContent}
+        onCopy={handleCopyMessage} onDelete={handleDeleteMessage} onRegenerate={handleRegenerate}
+        lastAssistantMessage={lastAssistantMessage}
+        onSend={handleSend} onStop={handleStop} onSttToggle={handleSttToggle}
+        onFileSelect={handleFileSelect} onRemoveFile={removeFile}
+        onInsertTerms={handleInsert} onInsertCharacters={handleCharacterInsert} onInsertPlot={handlePlotInsert}
+        onInsertChapters={handleChapterInsert} onInsertText={handleTextInsert}
+        onToggleChapterSelect={() => { const s = useAppStore.getState(); s.setChapterSelectMode(!(chapterSelectMode as boolean)); if (chapterSelectMode) s.setSelectedChapterIds([]); }}
+        onRemoveLast={handleRemoveLast} onSave={handleSave}
+      />
+    </>
   );
 }
 

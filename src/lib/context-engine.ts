@@ -103,21 +103,23 @@ export async function buildModuleContext(input: ChatContextInput): Promise<strin
         loadStoryBible(projectId),
     ]);
 
-    // 按四象限分区过滤词条（仅当 zoneFilter 存在时）
-    const filteredTerms = zoneFilter
+    // 按四象限分区过滤词条（仅用于世界观模块的输出层，P0 规则词条不受影响）
+    const filteredTerms = zoneFilter && mod === "worldview"
         ? allWorldTerms.filter(t => zoneFilter[t.zone ?? "other"] !== false)
         : allWorldTerms;
+    // P0 始终用全量词条（规则+铁则必须全部加载）
+    const p0Terms = mod === "worldview" ? allWorldTerms : filteredTerms;
+    const p0 = assembleP0(projectId, styleGuide, storyBible, p0Terms, undefined);
 
     const parts: string[] = ["===== 📖 项目数据上下文 ====="];
 
     // P0 所有模块都带（铁则不可省略）
-    const p0 = assembleP0(projectId, styleGuide, storyBible, filteredTerms, undefined);
     parts.push(p0);
 
     // ===== 按模块分派 =====
     if (mod === "worldview") {
         // 世界观：强调词条，弱化角色
-        if (allWorldTerms.length > 0) {
+        if (filteredTerms.length > 0) {
             parts.push("\n===== 🌍 全部世界观词条 =====");
             for (const t of filteredTerms) {
                 parts.push(`· [${TYPE_LABEL[t.term_type] || t.term_type}] ${t.title}：${t.one_liner || ""}`);
@@ -271,7 +273,7 @@ export async function buildModuleContext(input: ChatContextInput): Promise<strin
             }
             if (allEdges.length > 30) parts.push(`...还有 ${allEdges.length - 30} 条关系`);
         }
-        if (allWorldTerms.length > 0) {
+        if (filteredTerms.length > 0) {
             parts.push("\n===== 世界观设定一览 =====");
             for (const t of filteredTerms.slice(0, 30)) {
                 parts.push(`· [${TYPE_LABEL[t.term_type] || t.term_type}] ${t.title}：${t.one_liner || "（待补充）"}`);
