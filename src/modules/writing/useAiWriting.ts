@@ -3,10 +3,8 @@ import { useCallback, useRef, useState } from "react";
 import { useAppStore } from "@/stores/app-store";
 import { api } from "@/lib/api";
 import { buildProjectContext } from "@/lib/context-engine";
-import { rebaseMemory } from "@/lib/memory-updater";
 import { getJSONSync } from "@/lib/storage";
-import { uuid } from "@/lib/uuid";
-import type { Chapter } from "@/types";
+import type { Chapter } from "@/lib/chapter-store";
 
 const POLISH_RULES = `你是资深文学编辑，专门给AI生成的小说去AI味。你的工作是做减法，不是做加法。你的任务：读完一章AI生成的小说，输出润色后的版本。只删不改——删冗余、简啰嗦、去模板化。`;
 
@@ -19,7 +17,7 @@ export function useAiWriting(
     pushUndo: () => void,
     setEditingContent: (v: string) => void,
     setChapters: (updater: (prev: Chapter[]) => Chapter[]) => void,
-    saveChapters: (pid: string, chs: Chapter[]) => void,
+    persistChapters: (pid: string, chs: Chapter[]) => void,
     syncEditorHTML: (content: string) => void,
 ) {
     const [aiWriting, setAiWriting] = useState(false);
@@ -46,11 +44,11 @@ export function useAiWriting(
                 pushUndo(); setEditingContent(safeContent);
                 setTimeout(() => syncEditorHTML(safeContent), 0);
                 _skipNextChapterEffect.current = true;
-                setChapters(prev => { const upd = prev.map(c => c.id === selectedChapter.id ? { ...c, content: safeContent } : c); saveChapters(pid, upd); return upd; });
+                setChapters(prev => { const upd = prev.map(c => c.id === selectedChapter.id ? { ...c, content: safeContent } : c); persistChapters(pid, upd); return upd; });
                 useAppStore.getState().setAutosaveStatus("✅ 精修完成");
             }
         } catch { } finally { polishingRef.current = false; setPolishing(false); }
-    }, [pid, selectedChapter, editingContent, pushUndo, setEditingContent, setChapters, saveChapters, syncEditorHTML]);
+    }, [pid, selectedChapter, editingContent, pushUndo, setEditingContent, setChapters, persistChapters, syncEditorHTML]);
 
     const handleHumanize = useCallback(async () => {
         if (!pid || !selectedChapter || !String(editingContent ?? '').trim() || humanizingRef.current) return;
@@ -63,11 +61,11 @@ export function useAiWriting(
                 pushUndo(); setEditingContent(safeContent);
                 setTimeout(() => syncEditorHTML(safeContent), 0);
                 _skipNextChapterEffect.current = true;
-                setChapters(prev => { const upd = prev.map(c => c.id === selectedChapter.id ? { ...c, content: safeContent } : c); saveChapters(pid, upd); return upd; });
+                setChapters(prev => { const upd = prev.map(c => c.id === selectedChapter.id ? { ...c, content: safeContent } : c); persistChapters(pid, upd); return upd; });
                 useAppStore.getState().setAutosaveStatus("✅ 去 AI 味完成");
             }
         } catch { } finally { humanizingRef.current = false; setHumanizing(false); }
-    }, [pid, selectedChapter, editingContent, pushUndo, setEditingContent, setChapters, saveChapters, syncEditorHTML]);
+    }, [pid, selectedChapter, editingContent, pushUndo, setEditingContent, setChapters, persistChapters, syncEditorHTML]);
 
     const handleAiWriteChapter = useCallback(async (wordCount: number, plotDirection: string, refIds?: string[]) => {
         if (!pid || !selectedChapter || aiWritingRef.current) return;
@@ -97,14 +95,14 @@ export function useAiWriting(
                 const sc = String(res.content ?? ''); setEditingContent(sc);
                 setTimeout(() => syncEditorHTML(sc), 0);
                 _skipNextChapterEffect.current = true;
-                setChapters(prev => { const upd = prev.map(c => c.id === selectedChapter.id ? { ...c, content: sc } : c); saveChapters(pid, upd); return upd; });
+                setChapters(prev => { const upd = prev.map(c => c.id === selectedChapter.id ? { ...c, content: sc } : c); persistChapters(pid, upd); return upd; });
             }
         } catch (e) { setAiError(String(e)); }
         finally {
             for (let i = timeoutIdsRef.current.length - 1; i >= 0; i--) { if (timeoutIdsRef.current[i] === safetyTimer) { clearTimeout(timeoutIdsRef.current[i]); timeoutIdsRef.current.splice(i, 1); break; } }
             setAiWriting(false); aiWritingRef.current = false;
         }
-    }, [pid, selectedChapter, editingContent, pushUndo, setEditingContent, setChapters, saveChapters, syncEditorHTML]);
+    }, [pid, selectedChapter, editingContent, pushUndo, setEditingContent, setChapters, persistChapters, syncEditorHTML]);
 
     return { aiWriting, aiError, humanizing, polishing, writeDlg, setWriteDlg, lastWriteParamsRef, handleAiWriteChapter, handleHumanize, handlePolish };
 }

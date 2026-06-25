@@ -14,7 +14,7 @@
 
 import { uuid } from "@/lib/uuid";
 import { api } from "./api";
-import { getJSONSync, setJSONSync, setSync } from "./storage";
+import { getJSONSync, setJSONSync, setSync, getSync, saveJSON } from "./storage";
 import { loadAllChapters } from "./chapter-store";
 import { getAllProjectKeys } from "./backup";
 import { useAppStore } from "@/stores/app-store";
@@ -527,7 +527,7 @@ ${nextBeatInfo}`;
 }
 
 /** 从逗号/顿号分隔的字符串中提取关键词，滤掉单字和空串（供 P0 other 区模糊匹配使用） */
-function addKeywords(target: Set<string>, source: string | undefined) {
+export function addKeywords(target: Set<string>, source: string | undefined) {
     if (!source) return;
     const parts = source.split(/[,，、\s]+/);
     for (const p of parts) {

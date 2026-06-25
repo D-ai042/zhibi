@@ -13,6 +13,7 @@ import { WritingModule } from "@/modules/writing/WritingModule";
 import { ManuscriptModule } from "@/modules/manuscript/ManuscriptModule";
 import { MaterialModule } from "@/modules/material/MaterialModule";
 import { StoryBibleModule } from "@/modules/story-bible/StoryBibleModule";
+import { TutorialModule } from "@/modules/tutorial/TutorialModule";
 
 /** 渲染错误边界 — 捕获子组件渲染异常，防止整棵树白屏 */
 import { Component } from "react";
@@ -59,6 +60,7 @@ function ModuleRouter() {
   else if (activeModule === "story-bible") content = <StoryBibleModule />;
   else if (activeModule === "manuscript") content = <ManuscriptModule />;
   else if (activeModule === "material") content = <MaterialModule />;
+  else if (activeModule === "tutorial") content = <TutorialModule />;
   else if (activeModule === "custom") {
     const mod = customModules.find((m) => m.id === activeExtraId);
     if (mod) content = <CustomModuleRenderer mod={mod} />;

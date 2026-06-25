@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAppStore } from "@/stores/app-store";
 import {
-    FileText, Trash2, File as FileIcon, Plus, Image as ImageIcon, Sparkles,
+    FileText, Trash2, File as FileIcon, Image as ImageIcon, Sparkles,
     FileUp, Folder, FolderPlus, ChevronRight, ChevronDown
 } from "lucide-react";
 import { uuid } from "@/lib/uuid";
@@ -106,11 +106,6 @@ export function MaterialModule() {
         const ni = deleteItems ? items.filter(i => i.groupId !== gid) : items.map(i => i.groupId === gid ? { ...i, groupId: null } : i);
         persist(ng, ni);
         setDeleteDialog(null);
-    }, [pid, groups, items, persist]);
-
-    const renameGroup = useCallback((gid: string, name: string) => {
-        if (!pid || !name.trim()) return;
-        persist(groups.map(g => g.id === gid ? { ...g, name: name.trim() } : g), items);
     }, [pid, groups, items, persist]);
 
     const moveItemToGroup = useCallback((itemId: string, gid: string | null) => {

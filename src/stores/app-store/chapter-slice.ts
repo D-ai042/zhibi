@@ -1,4 +1,4 @@
-﻿// chapter-slice.ts — 写作台章节状态分片（T10）
+// chapter-slice.ts — 写作台章节状态分片（T10）
 import type { StateCreator } from "zustand";
 import type { AppStore } from "./types";
 
@@ -20,7 +20,7 @@ export interface ChapterSlice {
   setPendingInsertContent: (t: string) => void;
 }
 
-export const createChapterSlice: StateCreator<AppStore, [], [], ChapterSlice> = (set, get) => ({
+export const createChapterSlice: StateCreator<AppStore, [], [], ChapterSlice> = (set) => ({
   writingChapterId: null,
   writingDraft: "",
   ephemeralChapterContext: "",

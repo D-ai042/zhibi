@@ -16,7 +16,7 @@ const MAX_BACKUPS = 5;
 export function getAllProjectKeys(projectId: string): string[] {
   const keys: string[] = [];
   const prefixes = [
-    `novel-workbench-`, `plot-chapters-`, `plot-segments-`,
+    `novel-workbench-`, `plot-segments-`,
     `plot-edges-`, `worldview-edges-`, `worldview-groups-`,
     `chapter-index-`, `chapter-${projectId}-`,
     `draft-${projectId}-`, `novel-snapshots-`,

@@ -9,7 +9,7 @@ export function DynamicPageRenderer({ pageId }: { pageId: string }) {
     const content = dynamicPages[pageId] ?? "";
     const navItem = navItems.find((n) => n.id === pageId);
     const IconComponent = navItem
-        ? (LucideIcons as Record<string, React.ComponentType<{ className?: string }>>)[navItem.icon]
+        ? (LucideIcons as unknown as Record<string, React.ComponentType<{ className?: string }>>)[navItem.icon]
         : null;
 
     const htmlContent = useMemo(() => {

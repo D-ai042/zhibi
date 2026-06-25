@@ -45,7 +45,7 @@ function shouldCreateSnapshot(projectId: string): boolean {
         const parts: string[] = [];
         // 收集所有项目相关的 localStorage 数据
         const prefixes = [
-            `novel-workbench-log-${projectId}`, `plot-chapters-${projectId}`,
+            `novel-workbench-log-${projectId}`,
             `plot-segments-${projectId}`, `plot-edges-${projectId}`,
             `worldview-edges-${projectId}`, `worldview-groups-${projectId}`,
             `chapter-index-${projectId}`, `chapter-${projectId}-`,

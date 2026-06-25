@@ -1,4 +1,4 @@
-﻿// useAiChatStream.ts — AI 流式对话 Hook（T7 职责：完整 send() 业务逻辑）
+// useAiChatStream.ts — AI 流式对话 Hook（T7 职责：完整 send() 业务逻辑）
 //
 // 职责边界：
 // - 接收输入（用户文本、上传文件）和状态回调
@@ -59,6 +59,10 @@ export interface AiChatStreamCallbacks {
   setPendingChapters: (fn: any[] | ((prev: any[]) => any[])) => void;
 }
 
+const WORLD_TERM_TYPES = new Set<WorldTerm["term_type"]>(["rule", "faction", "place", "item", "system", "other"]);
+function normalizeWorldTermType(value: string | undefined): WorldTerm["term_type"] {
+  return WORLD_TERM_TYPES.has(value as WorldTerm["term_type"]) ? value as WorldTerm["term_type"] : "other";
+}
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -120,7 +124,7 @@ export function useAiChatStream(
   ) => {
     const store = useAppStore.getState();
     const {
-      chatMessages, addChatMessage, appendChatMessages,
+      addChatMessage, appendChatMessages,
       selectedEntity, currentProject,
     } = store;
 
@@ -411,7 +415,7 @@ export function useAiChatStream(
                     `- title 章节标题\n`
                     : ""
               ) +
-              `\n【重要规则】你当前正在「${activeModule === "outline" ? OUTLINE_SECTION_LABEL[outlineSection] : MODULE_LABEL[activeModule]}」模块中工作。\n` +
+              `\n【重要规则】你当前正在「${activeModule === "outline" ? (OUTLINE_SECTION_LABEL as Record<string, string>)[outlineSection] ?? outlineSection : (MODULE_LABEL as Record<string, string>)[activeModule] ?? activeModule}」模块中工作。\n` +
               `- 只允许输出当前模块对应的块模板，绝对不能输出其他模块的块模板。\n` +
               `- 当前模块：${activeModule === "outline" && outlineSection === "worldview" ? "只能输出 ---WORLD_TERMS--- 和 ---WORLD_TERM_UPDATE--- 块" : activeModule === "outline" && outlineSection === "characters" ? "只能输出 ---CHARACTERS--- 和 ---CHARACTER_UPDATE--- 块" : activeModule === "outline" && outlineSection === "plot-direction" ? "只能输出 ---PLOT_SEGMENTS--- 和 ---CHAPTERS--- 块" : "只能输出 ---CHAPTERS--- 块（创建章节）"}\n` +
               `- 即使对话历史中有其他模块的块模板示例，也不要模仿输出。\n` +
@@ -551,7 +555,7 @@ export function useAiChatStream(
           for (const wt of batchWorldTerms) {
             pendingWorldTerms.push({
               id: uuid(), project_id: currentProject.id,
-              term_type: wt.term_type, title: wt.title,
+              term_type: normalizeWorldTermType(wt.term_type), title: wt.title,
               one_liner: wt.one_liner, detail: wt.detail,
               ring_level: 1, forbidden: [], is_locked: false, layout_x: 0, layout_y: 0,
             });
@@ -569,7 +573,7 @@ export function useAiChatStream(
               const target = allTerms.find((t: any) => t.title === u.title);
               if (target) {
                 const updated = { ...target };
-                if (u.fields.term_type) updated.term_type = u.fields.term_type;
+                if (u.fields.term_type) updated.term_type = normalizeWorldTermType(u.fields.term_type);
                 if (u.fields.one_liner !== undefined) updated.one_liner = u.fields.one_liner;
                 if (u.fields.detail !== undefined) updated.detail = u.fields.detail;
                 if (u.fields.title_new) {

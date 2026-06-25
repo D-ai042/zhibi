@@ -6,17 +6,32 @@
  *
  * ★ EXE 模式下同步读写策略：
  *   - getJSONSync / getSync：先读 localStorage，未命中则查内存缓存（启动时预暖自 SQLite）
- *   - setJSONSync / setSync：同时写 localStorage + 异步 fire-and-forget 到 SQLite
+ *   - setJSONSync / setSync：EXE 写 SQLite + 内存缓存；小型设置才镜像 localStorage
  *   - 预暖在 useProjectBootstrap 中触发，早于任何组件渲染
  */
 
 import { api, isTauri } from "./api";
 import { reportDiagnostic } from "./diagnostics";
+import { auditRecord } from "./audit-log";
 
 // ===== EXE 模式内存缓存（启动时从 SQLite 预暖） =====
 
 /** SQLite → localStorage 的键值缓存，供 getJSONSync/getSync 回退使用 */
 const _sqliteCache = new Map<string, string>();
+
+function shouldMirrorSqliteKeyToLocalStorage(key: string): boolean {
+    if (key.startsWith("chapter-index-")) return false;
+    if (key.startsWith("chapter-")) return false;
+    if (key.startsWith("plot-chapters-")) return false;
+    if (key.startsWith("novel-workbench-backup-")) return false;
+    if (key === "zhibi-audit-log") return false;
+    if (key === "zhibi-error-log") return false;
+    return true;
+}
+
+function removeLocalCacheOnly(key: string): void {
+    try { localStorage.removeItem(key); } catch { /* ignore */ }
+}
 
 /**
  * EXE 启动时调用：将 SQLite 中所有 app_settings 读入内存缓存 + 写回 localStorage。
@@ -27,36 +42,53 @@ export async function prewarmFromSqlite(): Promise<void> {
     try {
         const all = await api.listAppSettings();
         let count = 0;
+        let chapterIndexCount = 0;
+        let chapterShardCount = 0;
+        let localCacheRemoved = 0;
+        const legacyChapterKeys: string[] = [];
         for (const { key, value } of all) {
             _sqliteCache.set(key, value);
-            // 只写入 localStorage 中不存在的 key，避免覆盖更新的本地数据
-            if (localStorage.getItem(key) === null) {
-                localStorage.setItem(key, value);
+            if (shouldMirrorSqliteKeyToLocalStorage(key)) {
+                // 只写入 localStorage 中不存在的 key，避免覆盖更新的本地数据
+                if (localStorage.getItem(key) === null) {
+                    localStorage.setItem(key, value);
+                }
+            } else if (localStorage.getItem(key) !== null) {
+                removeLocalCacheOnly(key);
+                localCacheRemoved++;
             }
+            if (key.startsWith("chapter-index-")) chapterIndexCount++;
+            if (key.startsWith("chapter-") && !key.startsWith("chapter-index-")) chapterShardCount++;
+            if (key.startsWith("plot-chapters-")) legacyChapterKeys.push(key);
             count++;
         }
         console.log(`[storage] 预暖完成: ${count} 条从 SQLite 载入`);
+        if (localCacheRemoved > 0) {
+            reportDiagnostic("warn", "已清理 EXE localStorage 章节缓存，数据仍保留在 SQLite", {
+                localCacheRemoved,
+                chapterIndexCount,
+                chapterShardCount,
+            });
+        }
+        if (legacyChapterKeys.length > 0) {
+            reportDiagnostic("warn", "检测到旧章节聚合数据，将在章节加载时迁移", {
+                legacyChapterKeys,
+                chapterIndexCount,
+                chapterShardCount,
+            });
+        }
     } catch (e) {
-        console.warn("[storage] 预暖失败（首次启动无数据属于正常）:", e);
+        reportDiagnostic("warn", "SQLite 预暖失败（首次启动无数据属于正常）", { error: String(e) });
     }
 }
 
 // ===== 底层读写 =====
 
-/**
- * 读取值：EXE 模式走 Tauri invoke → SQLite，浏览器模式走 localStorage
- */
-export async function get(key: string): Promise<string | null> {
-    if (isTauri()) {
-        return api.getSetting(key);
-    }
-    return localStorage.getItem(key);
-}
 
 /**
  * 写入值：EXE 模式走 Tauri invoke → SQLite，浏览器模式走 localStorage
  */
-export async function set(key: string, value: string): Promise<void> {
+async function set(key: string, value: string): Promise<void> {
     if (isTauri()) {
         return api.setSetting(key, value);
     }
@@ -64,28 +96,9 @@ export async function set(key: string, value: string): Promise<void> {
     return;
 }
 
-/**
- * 删除值
- */
-export async function remove(key: string): Promise<void> {
-    if (isTauri()) {
-        return api.setSetting(key, "");
-    }
-    localStorage.removeItem(key);
-    return;
-}
 
 // ===== JSON 便捷读写 =====
 
-export async function getJSON<T>(key: string, def: T): Promise<T> {
-    const raw = await get(key);
-    if (!raw) return def;
-    try {
-        return JSON.parse(raw) as T;
-    } catch {
-        return def;
-    }
-}
 
 export async function setJSON(key: string, value: unknown): Promise<void> {
     return set(key, JSON.stringify(value));
@@ -102,8 +115,12 @@ export function getSync(key: string): string | null {
     if (isTauri()) {
         const cached = _sqliteCache.get(key);
         if (cached !== undefined) {
-            // 写回 localStorage 加速下次访问（配额满时静默跳过，SQLite 兜底）
-            try { localStorage.setItem(key, cached); } catch { /* quota full */ }
+            if (shouldMirrorSqliteKeyToLocalStorage(key)) {
+                // 只对小型设置写回 localStorage 加速；大数据留在 SQLite + 内存缓存
+                try { localStorage.setItem(key, cached); } catch { /* quota full */ }
+            } else {
+                removeLocalCacheOnly(key);
+            }
             return cached;
         }
     }
@@ -111,19 +128,42 @@ export function getSync(key: string): string | null {
 }
 
 export function setSync(key: string, value: string): void {
+    // 审计：记录存储写入（静默，不影响性能）
+    auditRecord("storage.set", { entityType: key.split("-")[0] || "unknown", summary: key, ok: true });
+    // 在 EXE 模式下异步同步写入 SQLite（fire-and-forget，不阻塞 UI）
+    if (isTauri()) {
+        _sqliteCache.set(key, value);
+        if (shouldMirrorSqliteKeyToLocalStorage(key)) {
+            try { localStorage.setItem(key, value); } catch (e) {
+                reportDiagnostic("warn", "localStorage 缓存写入失败，已保存在 SQLite", { key, error: String(e) });
+            }
+        } else {
+            removeLocalCacheOnly(key);
+        }
+        api.setSetting(key, value).catch((e) => {
+            reportDiagnostic("warn", `SQLite 写入失败: ${key}`, { key, error: String(e) });
+        });
+        return;
+    }
     try { localStorage.setItem(key, value); } catch (e) {
         // T1.5: 写入失败时抛异常，让上层 saveJSON 捕获后调用 reportDiagnostic
         throw e;
     }
-    // 在 EXE 模式下异步同步写入 SQLite（fire-and-forget，不阻塞 UI）
+}
+
+export function removeSync(key: string): void {
+    try { localStorage.removeItem(key); } catch { /* ignore */ }
+    _sqliteCache.delete(key);
     if (isTauri()) {
-        _sqliteCache.set(key, value);
-        api.setSetting(key, value).catch((e) => {
-            console.warn(`[storage] SQLite 写入失败: ${key}`, e);
+        api.deleteSetting(key).catch((e) => {
+            reportDiagnostic("warn", `SQLite 删除失败: ${key}`, { key, error: String(e) });
         });
     }
 }
 
+/**
+ * @deprecated 使用 loadJSON 代替。
+ */
 export function getJSONSync<T>(key: string, def: T): T {
     // 1. 先试 localStorage
     const raw = localStorage.getItem(key);
@@ -136,8 +176,12 @@ export function getJSONSync<T>(key: string, def: T): T {
         const cached = _sqliteCache.get(key);
         if (cached !== undefined) {
             try {
-                // 写回 localStorage 加速下次访问
-                localStorage.setItem(key, cached);
+                if (shouldMirrorSqliteKeyToLocalStorage(key)) {
+                    // 只对小型设置写回 localStorage 加速；大数据留在 SQLite + 内存缓存
+                    localStorage.setItem(key, cached);
+                } else {
+                    removeLocalCacheOnly(key);
+                }
                 return JSON.parse(cached) as T;
             } catch { return def; }
         }

@@ -15,6 +15,9 @@ export default defineConfig({
     port: 1420,
     strictPort: false,
     host: true,
+    watch: {
+      ignored: ["**/src-tauri/**"],
+    },
     proxy: {
       "/baidu-api": {
         target: "https://aip.baidubce.com",

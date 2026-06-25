@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { BookOpen, FolderOpen, Plus, Settings, Trash2, Edit3, Check, X } from "lucide-react";
 import { api } from "@/lib/api";
+import { setJSONSync } from "@/lib/storage";
 import { useAppStore } from "@/stores/app-store";
 import type { Project } from "@/types";
 

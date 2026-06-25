@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ReactFlow, Background, Controls, MiniMap,
   useNodesState, useEdgesState,
-  Handle, Position,
   type Node, type Edge, type Connection, type NodeTypes, type EdgeTypes,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
@@ -42,8 +41,8 @@ function loadGroups(pid: string): SavedGroup[] { return getJSONSync(gk(pid), [])
  * - 永远镜像对称
  */
 function StepMergeEdge({
-  id, source, target, sourceX, sourceY, targetX, targetY,
-  sourcePosition, targetPosition, style, markerEnd,
+  sourceX, sourceY, targetX, targetY,
+  sourcePosition, style, markerEnd,
 }: any) {
   let path;
 
@@ -89,7 +88,7 @@ function StepMergeEdge({
 /**
  * ★ 合流分组渲染：对同一 target 的边，合并末端主干
  */
-function MergedEdgesGroup({ edges, nodeMap }: { edges: any[]; nodeMap: Map<string, { x: number; y: number }> }) {
+export function MergedEdgesGroup({ edges, nodeMap }: { edges: any[]; nodeMap: Map<string, { x: number; y: number }> }) {
   // 按 target 分组
   const groups = new Map<string, any[]>();
   for (const e of edges) {
@@ -165,7 +164,7 @@ function GroupNode({ data }: { data: any }) {
 }
 
 export function WorldviewPanel() {
-  const { currentProject, setSelectedEntity, worldTermBump, groupBump, worldviewGroups, setWorldviewGroups, focusGroupBump, worldviewZoneEnabled, setWorldviewZoneEnabled } = useAppStore();
+  const { currentProject, setSelectedEntity, worldTermBump, groupBump, setWorldviewGroups, focusGroupBump, worldviewZoneEnabled, setWorldviewZoneEnabled } = useAppStore();
   const rfRef = useRef<any>(null);
   const [terms, setTerms] = useState<WorldTerm[]>([]);
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
@@ -388,6 +387,7 @@ export function WorldviewPanel() {
 
     return loaded.map(t => positioned.get(t.id) ?? assigned.get(t.id) ?? { x: anchorX, y: MARGIN + layers.length * SPACING_Y });
   }, []);
+  void computeLayout;
 
   const load = useCallback(async () => {
     if (!currentProject) return;
@@ -421,7 +421,18 @@ export function WorldviewPanel() {
     });
 
     // restore groups: convert child coords to relative, group node first
-    const saved = loadGroups(currentProject.id);
+    const termIdSet = new Set(termNodes.map(n => n.id));
+    let groupsDirty = false;
+    const saved = loadGroups(currentProject.id).map(g => {
+      const childIds = (g.childIds || []).filter(id => termIdSet.has(id));
+      if (childIds.length !== (g.childIds || []).length) groupsDirty = true;
+      return { ...g, childIds };
+    }).filter(g => {
+      if (g.childIds.length > 0) return true;
+      groupsDirty = true;
+      return false;
+    });
+    if (groupsDirty) saveGroups(currentProject.id, saved);
     const gNodes: Node[] = [];
     const childIds = new Set<string>();
     for (const g of saved) {
@@ -592,8 +603,8 @@ export function WorldviewPanel() {
     pushH();
     if (!currentProject || !conn.source || !conn.target || conn.source === conn.target) return;
     // 感染逻辑：仅右引线(→左接头) 或 下引线(→上接头) 时传染类型
-    const sh = conn.sourceHandle || "right";
-    const th = conn.targetHandle || "left";
+    let sh = conn.sourceHandle || "right";
+    let th = conn.targetHandle || "left";
     const shouldInfect = (sh === "right" && th === "left") || (sh === "bottom" && th === "top");
     if (shouldInfect) {
       const srcT = terms.find(t => t.id === conn.source);
@@ -607,8 +618,6 @@ export function WorldviewPanel() {
     // 推算方向：根据节点位置决定横/纵（仅当用户未指定手柄时）
     const srcNode = nodes.find(n => n.id === conn.source);
     const tgtNode = nodes.find(n => n.id === conn.target);
-    let sh2 = conn.sourceHandle || "";
-    let th2 = conn.targetHandle || "";
     // 根据方向选择手柄
     if ((!sh || !th) && srcNode && tgtNode) {
       const dx = Math.abs(tgtNode.position.x - srcNode.position.x);
@@ -619,7 +628,7 @@ export function WorldviewPanel() {
         if (!sh) sh = "bottom"; if (!th) th = "top";
       }
     }
-    hist.current.push({ nodes: JSON.parse(JSON.stringify(nodes)), edges: JSON.parse(JSON.stringify(edges)) });
+    hist.current.push({ nodes: JSON.parse(JSON.stringify(nodes)), edges: JSON.parse(JSON.stringify(edges)), terms: JSON.parse(JSON.stringify(terms)) });
     if (hist.current.length > 50) hist.current.shift();
     setEdges(eds => {
       const upd = [...eds, {

@@ -27,6 +27,8 @@ const MIGRATABLE_PREFIXES = [
     "novel-workbench-mock",
     "novel-workbench-snapshots-",
     "plot-chapters-",
+    "chapter-index-",
+    "chapter-",
     "plot-segments-",
     "plot-edges-",
     "worldview-edges-",

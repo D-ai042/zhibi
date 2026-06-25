@@ -1,15 +1,16 @@
 import { memo, useCallback, useState, useRef, useEffect } from "react";
-import { Handle, Position, type NodeProps } from "@xyflow/react";
+import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
 import type { Character } from "@/types";
 
 export interface CharacterNodeData {
+    [key: string]: unknown;
     character: Character;
     onUpdate: (c: Character) => void;
     onSelect: (c: Character) => void;
     onDelete: (id: string) => void;
 }
 
-function CharacterNode({ data, selected }: NodeProps<CharacterNodeData>) {
+function CharacterNode({ data, selected }: NodeProps<Node<CharacterNodeData>>) {
     const { character, onUpdate } = data;
     const [editing, setEditing] = useState(false);
     const [draft, setDraft] = useState(character.name);
@@ -47,7 +48,7 @@ function CharacterNode({ data, selected }: NodeProps<CharacterNodeData>) {
                     ? "0 0 0 4px rgba(245,158,11,0.2), 0 4px 16px rgba(0,0,0,0.06)"
                     : "0 2px 8px rgba(0,0,0,0.04), 0 1px 2px rgba(0,0,0,0.03)",
             }}
-            onClick={(e) => { }}
+            onClick={() => { }}
             onDoubleClick={(e) => {
                 e.stopPropagation();
                 if (!character.is_locked) setEditing(true);

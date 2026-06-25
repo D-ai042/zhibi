@@ -62,7 +62,7 @@ const EFFECTIVE_MAX_TOKENS = MAX_TOKENS - 2_000;
 /** 从 novel-workbench-mock 中读取项目世界观词条 */
 function loadWorldTerms(projectId: string): any[] {
     try {
-        const mock = getJSONSync('novel-workbench-mock', {});
+        const mock = getJSONSync('novel-workbench-mock', {} as { worldTerms?: any[] });
         return (mock.worldTerms || []).filter((t: any) => t.project_id === projectId);
     } catch { return []; }
 }
@@ -146,7 +146,8 @@ export async function buildModuleContext(input: ChatContextInput): Promise<strin
         const filteredChars = zoneFilter
             ? allCharacters.filter(c => zoneFilter[c.zone ?? "display"] !== false)
             : allCharacters;
-        if (filteredChars.length > 0) {
+        const visibleCharIds = new Set(filteredChars.map(c => c.id));
+        if (allCharacters.length > 0) {
             parts.push("\n===== 👤 全部角色档案 =====");
             for (const c of filteredChars) {
                 const fields: string[] = [c.name];
@@ -165,10 +166,11 @@ export async function buildModuleContext(input: ChatContextInput): Promise<strin
             }
         }
         // 关系网
-        if (allEdges.length > 0) {
+        const filteredEdges = allEdges.filter(e => visibleCharIds.has(e.source_id) && visibleCharIds.has(e.target_id));
+        if (filteredEdges.length > 0) {
             parts.push("\n===== 🔗 人物关系网 =====");
-            const charMap = new Map(allCharacters.map(c => [c.id, c.name]));
-            for (const e of allEdges) {
+            const charMap = new Map(filteredChars.map(c => [c.id, c.name]));
+            for (const e of filteredEdges) {
                 const srcName = charMap.get(e.source_id) || "未知";
                 const tgtName = charMap.get(e.target_id) || "未知";
                 parts.push(`· ${srcName} → ${tgtName} [${e.relation_type}] 亲密度: ${e.strength}/10${e.is_secret ? " (秘密)" : ""}`);
@@ -217,14 +219,13 @@ export async function buildModuleContext(input: ChatContextInput): Promise<strin
 
     } else if (mod === "writing" && chapterId) {
         // 写作台：完整 P0-P4 + 本章正文
-        const plotChapter = findChapterFromPlotChapters(projectId, chapterId);
+        const plotChapter = findChapterFromStore(projectId, chapterId);
         const [chapters] = await Promise.all([
             api.listChapters(projectId),
         ]);
         const currentChapter = plotChapter
             ? { id: plotChapter.id, number: plotChapter.number, title: plotChapter.title, volume_id: "" } as Chapter
             : chapters.find((c) => c.id === chapterId);
-        const volumeName = plotChapter?.volumeName || "";
         const recentSummaries = await loadRecentSummaries(projectId, currentChapter);
         const logStore = getLogStoreV2(projectId);
 
@@ -259,7 +260,7 @@ export async function buildModuleContext(input: ChatContextInput): Promise<strin
 
     } else {
         // chat(默认)：全量概要（保留当前行为）
-        if (filteredChars.length > 0) {
+        if (allCharacters.length > 0) {
             parts.push("\n===== 项目角色一览 =====");
             for (const c of allCharacters.slice(0, 30)) {
                 parts.push(`· ${c.name}${c.faction ? `（${c.faction}）` : ""}${c.personality ? `：${c.personality}` : ""}`);
@@ -299,7 +300,7 @@ export async function buildChapterContext(projectId: string, chapterRange: strin
     if (rm) { startCh = parseInt(rm[1]); endCh = parseInt(rm[2]); }
     else if (sm) { startCh = endCh = parseInt(sm[1]); }
 
-    // ====== 唯一数据源: plot-chapters-{pid}（写作台卷章树）=======
+    // ====== 唯一数据源: chapter-store（写作台卷章树）=======
     let plotChapters: any[] = [];
     try {
         plotChapters = loadAllChapters(projectId);
@@ -335,8 +336,8 @@ export async function buildChatContext(projectId: string): Promise<string> {
 
 // ===== 章节上下文（P0-P4 新结构） =====
 
-/** 从 plot-chapters（写作台卷章树）读取章节，这是章节数据的唯一真实来源 */
-function findChapterFromPlotChapters(projectId: string, chapterId: string): { id: string; number: number; title: string; volumeName: string } | null {
+/** 从 chapter-store（写作台卷章树）读取章节，这是章节数据的唯一真实来源 */
+function findChapterFromStore(projectId: string, chapterId: string): { id: string; number: number; title: string; volumeName: string } | null {
     try {
         const chapters = loadAllChapters(projectId);
         if (!chapters || chapters.length === 0) return null;
@@ -358,8 +359,8 @@ function findChapterFromPlotChapters(projectId: string, chapterId: string): { id
 export async function buildProjectContext(input: ContextEngineInput): Promise<ContextEngineOutput> {
     const { projectId, chapterId } = input;
 
-    // 直接从 plot-chapters（写作台卷章树）找当前章节，确保能找到
-    const plotChapter = findChapterFromPlotChapters(projectId, chapterId);
+    // 直接从 chapter-store（写作台卷章树）找当前章节，确保能找到
+    const plotChapter = findChapterFromStore(projectId, chapterId);
     // 同时从 api 加载完整的章节列表（用于统计总章数等）
     const [chapters, allCharacters, allWorldTerms, styleGuide, storyBible, allEdges] = await Promise.all([
         api.listChapters(projectId),
@@ -370,9 +371,8 @@ export async function buildProjectContext(input: ContextEngineInput): Promise<Co
         api.listRelationshipEdges(projectId).catch(() => [] as RelationshipEdge[]),
     ]);
 
-    // 以 plot-chapters 为准构建 currentChapter
+    // 以 chapter-store 为准构建 currentChapter
     const currentChapter = plotChapter ? { id: plotChapter.id, number: plotChapter.number, title: plotChapter.title, volume_id: "" } as Chapter : chapters.find((c) => c.id === chapterId);
-    const volumeName = plotChapter?.volumeName || "";
     const recentSummaries = await loadRecentSummaries(projectId, currentChapter);
     const logStore = getLogStoreV2(projectId);
 
@@ -473,7 +473,6 @@ function assembleP0(projectId: string, _styleGuide: StyleGuide | null, storyBibl
     if (terms.length > 0) {
         // ★ 四象限分组
         const coreTerms = terms.filter(t => t.zone === "core");
-        const lockedTerms = terms.filter(t => t.zone === "locked"); // 永远排除
         const activeZoneTerms = terms.filter(t => t.zone === "active");
         const otherTerms = terms.filter(t => t.zone === "other" || !t.zone);
 
@@ -666,7 +665,7 @@ function assembleP1(projectId: string, recentSummaries: ChapterSummary[], curren
                         const currentChapInVol = currentChapterNumber
                             ? volChapsSorted.find(c => c.number === currentChapterNumber)
                             : null;
-                        const currentBeatIdx = beats.findIndex(b => {
+                        const currentBeatIdx = beats.findIndex((b: any) => {
                             const bc = parseChapterRange(b.chapters || "");
                             return currentChapInVol ? bc.includes(currentChapInVol.number) : false;
                         });
@@ -711,7 +710,7 @@ function assembleP1(projectId: string, recentSummaries: ChapterSummary[], curren
                     const brightIdx = bright.findIndex((b: any) => b.id === currentVolId);
                     const pd = brightIdx >= 0 && brightIdx < dark.length ? dark[brightIdx] : null;
                     if (pd) {
-                        parts.push(`【配对的暗线 — 🌑 ${pd.title}】`);
+                        parts.push(`【配对的暗线 - ${pd.title}】`);
                         parts.push(`  ${pd.characters ? `角色：${pd.characters}  ` : ""}${pd.location ? `地点：${pd.location}  ` : ""}${pd.time ? `时间：${pd.time}  ` : ""}${pd.chapters ? `章节范围：${pd.chapters}  ` : ""}${pd.event ? `事件：${pd.event}` : ""}`);
                         const dBeats = pd.beats || [];
                         if (dBeats.length > 0) {
@@ -754,12 +753,12 @@ function assembleP1(projectId: string, recentSummaries: ChapterSummary[], curren
                 for (let i = 0; i < otherBright.length; i++) {
                     const s = otherBright[i];
                     const actualIdx = bright.indexOf(s);
-                    const segParts = [`· ☀「${s.title}」${s.event ? `：${s.event}` : ""}${s.characters ? ` | 角色：${s.characters}` : ""}`];
+                    const segParts = [`· [明线]「${s.title}」${s.event ? `：${s.event}` : ""}${s.characters ? ` | 角色：${s.characters}` : ""}`];
                     parts.push(segParts.join(""));
                     // ★ 配对暗线
                     if (actualIdx < dark.length) {
                         const dd = dark[actualIdx];
-                        parts.push(`  · ��「${dd.title}」${dd.event ? `：${dd.event}` : ""}${dd.characters ? ` | 角色：${dd.characters}` : ""}`);
+                        parts.push(`  · [暗线]「${dd.title}」${dd.event ? `：${dd.event}` : ""}${dd.characters ? ` | 角色：${dd.characters}` : ""}`);
                     }
                 }
                 parts.push("");
@@ -769,7 +768,7 @@ function assembleP1(projectId: string, recentSummaries: ChapterSummary[], curren
             const remainingDarks = dark.slice(pairedCount);
             if (remainingDarks.length > 0) {
                 parts.push("【未配对的暗线】");
-                for (const s of remainingDarks) parts.push(`· ��「${s.title}」${s.event ? `：${s.event}` : ""}${s.chapters ? ` | 章节：${s.chapters}` : ""}`);
+                for (const s of remainingDarks) parts.push(`· [暗线]「${s.title}」${s.event ? `：${s.event}` : ""}${s.chapters ? ` | 章节：${s.chapters}` : ""}`);
                 parts.push("");
             }
         } else {
@@ -890,7 +889,6 @@ function assembleP3(allCharacters: Character[], currentChapterNumber: number, al
         if (currentChap) {
             const vol = segs.find((s: any) => s.id === currentChap.volumeSegmentId && s.type === "bright");
             if (vol) {
-                const volChapsSorted = chaps.filter((c: any) => c.volumeSegmentId === vol.id).sort((a: any, b2: any) => a.number - b2.number);
                 const beat = vol.beats?.find((b: any) => {
                     const bc = parseChapterRange(b.chapters || "");
                     return bc.includes(currentChapterNumber);

@@ -771,7 +771,11 @@ pub fn save_character(character: CharacterIn, state: State<'_, DbState>) -> Resu
 #[tauri::command]
 pub fn delete_character(id: String, state: State<'_, DbState>) -> Result<(), String> {
     with_conn(&state, |conn| {
-        conn.execute("DELETE FROM characters WHERE id=?1", params![id])?;
+        conn.execute(
+            "DELETE FROM relationship_edges WHERE source_id=?1 OR target_id=?1",
+            params![&id],
+        )?;
+        conn.execute("DELETE FROM characters WHERE id=?1", params![&id])?;
         Ok(())
     })
     .map_err(|e| e.to_string())
@@ -1229,6 +1233,14 @@ pub fn set_setting(key: String, value: String, _state: State<'_, DbState>) -> Re
         params![key, value],
     )
     .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn delete_setting(key: String, _state: State<'_, DbState>) -> Result<(), String> {
+    let conn = open_or_create_settings_db();
+    conn.execute("DELETE FROM app_settings WHERE key=?1", params![key])
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 

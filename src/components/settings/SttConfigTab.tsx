@@ -1,6 +1,6 @@
 ﻿// SttConfigTab.tsx — 语音识别配置（T9 拆分，从 SettingsModal 完整迁移）
 import { useState, useEffect, useCallback } from "react";
-import { Mic, Eye, EyeOff, Check } from "lucide-react";
+import { Eye, EyeOff, Check } from "lucide-react";
 import { api } from "@/lib/api";
 import { useAppStore } from "@/stores/app-store";
 import type { SttConfig } from "@/types";

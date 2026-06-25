@@ -52,6 +52,7 @@ interface MockStore {
   worldTerms: WorldTerm[];
   apiConfig: ApiConfig & { api_key?: string };
   currentProjectId: string | null;
+  _migrated_v2?: boolean;
 }
 
 function uid() {
@@ -225,8 +226,6 @@ export function clearMockStoreCache() {
 }
 
 /** 百度 STT：获取 access_token */
-let baiduTokenCache: { token: string; expiresAt: number } | null = null;
-
 // 百度 STT 相关函数已删除 — LO-3: 死代码清理
 
 /** 百度 STT：语音转文字 */
@@ -706,6 +705,7 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
 
     case "delete_character":
       s.characters = s.characters.filter((c) => c.id !== args?.id);
+      s.edges = s.edges.filter((e) => e.source_id !== args?.id && e.target_id !== args?.id);
       save(s);
       return undefined as T;
 
@@ -860,7 +860,7 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
     }
 
     case "save_style_guide": {
-      const guide = args?.guide as Record<string, unknown>;
+      const guide = args?.guide as unknown as unknown as Record<string, unknown>;
       if (guide?.project_id) {
         localStorage.setItem(`novel-workbench-style-${guide.project_id}`, JSON.stringify(guide));
       }
@@ -876,7 +876,7 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
     }
 
     case "save_story_bible": {
-      const bible = args?.bible as Record<string, unknown>;
+      const bible = args?.bible as unknown as unknown as Record<string, unknown>;
       if (bible?.project_id) {
         localStorage.setItem(`novel-workbench-bible-${bible.project_id}`, JSON.stringify(bible));
       }
@@ -916,7 +916,7 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
       const chapterIds = new Set(chapters.map(c => c.id));
 
       /** 将 mock JS 对象转换为 Rust import_project 可接受的 JSON 格式 */
-      const normalizeItem = (item: Record<string, unknown>, type: string): Record<string, unknown> => {
+      const normalizeItem = (item: Record<string, unknown>): Record<string, unknown> => {
         const out = { ...item };
         // boolean → int
         if ("is_locked" in out) out.is_locked = out.is_locked ? 1 : 0;
@@ -982,16 +982,16 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
       ];
 
       return {
-        project: proj as Record<string, unknown>,
-        worldTerms: (s.worldTerms || []).filter(t => t.project_id === pid).map(t => normalizeItem(t as Record<string, unknown>, "world_term")) as Record<string, unknown>[],
-        characters: (s.characters || []).filter(c => c.project_id === pid).map(c => normalizeItem(c as Record<string, unknown>, "character")) as Record<string, unknown>[],
-        relationships: (s.edges || []).filter(e => e.project_id === pid).map(e => normalizeItem(e as Record<string, unknown>, "edge")) as Record<string, unknown>[],
-        plotEvents: (s.plotEvents || []).filter(e => e.project_id === pid).map(e => normalizeItem(e as Record<string, unknown>, "plot_event")) as Record<string, unknown>[],
-        timelineNodes: (s.timelineNodes || []).filter(n => n.project_id === pid).map(n => normalizeItem(n as Record<string, unknown>, "timeline_node")) as Record<string, unknown>[],
-        volumes: (s.volumes || []).filter(v => v.project_id === pid).map(v => normalizeItem(v as Record<string, unknown>, "volume")) as Record<string, unknown>[],
-        chapters: chapters.map(c => normalizeItem(c as Record<string, unknown>, "chapter")) as Record<string, unknown>[],
-        beatCards: (s.beatCards || []).filter(b => chapterIds.has(b.chapter_id)).map(b => normalizeItem(b as Record<string, unknown>, "beat_card")) as Record<string, unknown>[],
-        chapterContents: mergedChapterContents.map(cc => normalizeItem(cc as Record<string, unknown>, "chapter_content")) as Record<string, unknown>[],
+        project: proj as unknown as unknown as Record<string, unknown>,
+        worldTerms: (s.worldTerms || []).filter(t => t.project_id === pid).map(t => normalizeItem(t as unknown as unknown as Record<string, unknown>)) as Record<string, unknown>[],
+        characters: (s.characters || []).filter(c => c.project_id === pid).map(c => normalizeItem(c as unknown as unknown as Record<string, unknown>)) as Record<string, unknown>[],
+        relationships: (s.edges || []).filter(e => e.project_id === pid).map(e => normalizeItem(e as unknown as unknown as Record<string, unknown>)) as Record<string, unknown>[],
+        plotEvents: (s.plotEvents || []).filter(e => e.project_id === pid).map(e => normalizeItem(e as unknown as unknown as Record<string, unknown>)) as Record<string, unknown>[],
+        timelineNodes: (s.timelineNodes || []).filter(n => n.project_id === pid).map(n => normalizeItem(n as unknown as Record<string, unknown>)) as Record<string, unknown>[],
+        volumes: (s.volumes || []).filter(v => v.project_id === pid).map(v => normalizeItem(v as unknown as Record<string, unknown>)) as Record<string, unknown>[],
+        chapters: chapters.map(c => normalizeItem(c as unknown as unknown as Record<string, unknown>)) as Record<string, unknown>[],
+        beatCards: (s.beatCards || []).filter(b => chapterIds.has(b.chapter_id)).map(b => normalizeItem(b as unknown as Record<string, unknown>)) as Record<string, unknown>[],
+        chapterContents: mergedChapterContents.map(cc => normalizeItem(cc as unknown as unknown as Record<string, unknown>)) as Record<string, unknown>[],
         plotSegments,
         plotEdges,
         plotChapters,
@@ -1005,7 +1005,7 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
 
     case "import_project": {
       const { projectData, mode } = args as { projectData: Record<string, unknown>; mode?: string };
-      const proj = projectData.project as Record<string, unknown> | undefined;
+      const proj = projectData.project as unknown as unknown as Record<string, unknown> | undefined;
       if (!proj || !proj.id) throw new Error("无效的项目数据");
 
       const importMode = mode || "overwrite";
@@ -1100,7 +1100,7 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
       // 浏览器模式：从 localStorage 收集匹配前缀的 key
       const prefixes = [
         "novel-workbench-style-", "novel-workbench-bible-", "novel-workbench-voices-",
-        "novel-workbench-log-", "novel-workbench-chat-", "plot-chapters-",
+        "novel-workbench-log-", "novel-workbench-chat-",
         "plot-segments-", "plot-edges-", "worldview-edges-", "worldview-groups-",
         "material-", "ai-pending-chars-", "ai-pending-world-terms-",
         "inspiration-cards-", "char-groups-", "writing-sidebar-width-",

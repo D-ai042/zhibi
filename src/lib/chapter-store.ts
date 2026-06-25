@@ -9,7 +9,8 @@
  *   plot-chapters-{pid}          旧的全量聚合缓存
  */
 
-import { getJSONSync, setJSONSync, getSync, setSync, saveJSON } from "@/lib/storage";
+import { getJSONSync, setJSONSync, getSync, setSync, saveJSON, removeSync } from "@/lib/storage";
+import { reportDiagnostic } from "@/lib/diagnostics";
 
 export interface Chapter {
     id: string;
@@ -27,14 +28,21 @@ export interface SaveResult {
 /** 加载项目所有章节（兼容旧格式自动迁移） */
 export function loadAllChapters(pid: string): Chapter[] {
     const ids: string[] = getJSONSync(`chapter-index-${pid}`, []);
+    const legacyKey = `plot-chapters-${pid}`;
+    if (ids.length > 0) {
+        if (getSync(legacyKey) !== null) removeSync(legacyKey);
+    }
     if (ids.length === 0) {
         // 兼容旧格式：从 plot-chapters-{pid} 迁移到分片存储
-        const old = getJSONSync(`plot-chapters-${pid}`, null as Chapter[] | null);
+        const old = getJSONSync(legacyKey, null as Chapter[] | null);
         if (old && old.length > 0) {
-            saveAllChapters(pid, old);
-            // 迁移后删除旧聚合 key
-            // T3 兼容：迁移完成后删除旧 key；T8 例外：removeItem 为迁移专用
-            try { localStorage.removeItem(`plot-chapters-${pid}`); } catch { /* ignore */ }
+            const result = saveAllChapters(pid, old);
+            if (!result.ok) {
+                reportDiagnostic("error", "旧章节数据迁移失败", { pid, error: result.error });
+                return old;
+            }
+            removeSync(legacyKey);
+            reportDiagnostic("warn", "已迁移旧章节聚合数据到分片存储", { pid, chapters: old.length });
             return old;
         }
         return [];

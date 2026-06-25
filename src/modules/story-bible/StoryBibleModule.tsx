@@ -1,4 +1,4 @@
-﻿import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { BookMarked, Save, Shield, Palette, FileText, Sparkles, MessageCircle } from "lucide-react";
 import { useAppStore } from "@/stores/app-store";
 import { api } from "@/lib/api";
@@ -48,6 +48,7 @@ function TabButton({ active, icon, label, onClick }: { active: boolean; icon: Re
 // ===== 从卷章树读取章节列表（供所有下拉框使用） =====
 interface PlotSegment { id: string; project_id: string; type: "bright" | "dark"; title: string; characters: string; location: string; time: string; event: string; terms?: string; }
 interface PlotChapter { id: string; volumeSegmentId: string; number: number; title: string; content: string; }
+type ContextLayerKey = "p0" | "p1" | "p2" | "p3" | "p4";
 function loadPlotChapters(pid: string): PlotChapter[] {
     return loadAllChapters(pid) as PlotChapter[];
 }
@@ -90,7 +91,7 @@ function StyleGuideEditor({ projectId }: { projectId: string }) {
 
     useEffect(() => {
         try {
-            const p = getJSONSync(`novel-workbench-style-${projectId}`, null);
+            const p = getJSONSync(`novel-workbench-style-${projectId}`, null as StyleGuide | null);
             if (p) {
                 setGuide({ project_id: projectId, narrative_style: p.narrative_style || "", writing_tone: p.writing_tone || "", writing_rules: p.writing_rules || "", character_voices: p.character_voices || "", updated_at: p.updated_at || new Date().toISOString(), updated_by_chapter: p.updated_by_chapter || 0 });
             }
@@ -501,7 +502,7 @@ function ContextEditor({ projectId }: { projectId: string }) {
         chapterLabel: string;
         totalTokens: number;
         omitted: string[];
-        layers: { p0: string; p1: string; p2: string; p3: string; p4: string };
+        layers: Record<ContextLayerKey, string>;
     } | null>(null);
     const [loading, setLoading] = useState(false);
     const [chapters] = useState(() => getVolumeGroupedChapterOptions(projectId));
@@ -554,7 +555,7 @@ function ContextEditor({ projectId }: { projectId: string }) {
         amber: "bg-amber-100 text-amber-700",
     };
 
-    const layers = [
+    const layers: { key: ContextLayerKey; color: string; label: string; icon: string }[] = [
         { key: "p4", color: "slate", label: "前一章正文", icon: "📄" },
         { key: "p0", color: "blue", label: "世界观背景（不可违反）", icon: "🌍" },
         { key: "p3", color: "purple", label: "角色池", icon: "👥" },

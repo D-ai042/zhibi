@@ -23,7 +23,7 @@ export interface ExportData {
 
 // ============ 辅助函数 ============
 
-function heading(text: string, level: HeadingLevel = HeadingLevel.HEADING_1) {
+function heading(text: string, level: (typeof HeadingLevel)[keyof typeof HeadingLevel] = HeadingLevel.HEADING_1) {
     return new Paragraph({ text, heading: level, spacing: { before: 300, after: 200 } });
 }
 
@@ -91,7 +91,7 @@ function simpleTable(headers: string[], rows: string[][]): Table {
 // ============ 生成设定文档 ============
 
 function buildSetupDoc(data: ExportData): Document {
-    const children: Paragraph[] = [];
+    const children: Array<Paragraph | Table> = [];
 
     // 封面
     children.push(new Paragraph({ spacing: { before: 3000 }, children: [] }));
@@ -205,7 +205,7 @@ function buildSetupDoc(data: ExportData): Document {
 // ============ 生成章节文档 ============
 
 function buildChaptersDoc(data: ExportData): Document {
-    const children: Paragraph[] = [];
+    const children: Array<Paragraph | Table> = [];
 
     children.push(new Paragraph({ spacing: { before: 3000 }, children: [] }));
     children.push(new Paragraph({
@@ -350,7 +350,7 @@ export async function exportChaptersDoc(data: ExportData, projectId?: string) {
 /** 导出全书文档 */
 export async function exportFullDoc(data: ExportData, projectId?: string) {
     // 合并两个文档的内容
-    const children: Paragraph[] = [];
+    const children: Array<Paragraph | Table> = [];
 
     // 封面
     children.push(new Paragraph({ spacing: { before: 3000 }, children: [] }));

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ReactFlow, Background, Controls, MiniMap, StraightEdge, addEdge,
+  ReactFlow, Background, Controls, MiniMap, StraightEdge, SelectionMode, addEdge,
   useNodesState, useEdgesState,
   type Connection, type Node, type Edge, type NodeTypes, type EdgeTypes,
 } from "@xyflow/react";
@@ -20,7 +20,6 @@ function loadEdges(pid: string): Edge[] { return getJSONSync(ek(pid), []); }
 function saveEdges(pid: string, eds: Edge[]) { setJSONSync(ek(pid), eds); }
 
 // ===== 撤回收缩 =====
-function gk(pid: string) { return "plot-groups-" + pid; }
 
 /** 时间轴配置（起始年 + 间隔） */
 interface TimelineConfig {
@@ -80,7 +79,7 @@ export function PlotDirectionPanel() {
   const [viewport, setViewport] = useState({ x: 0, y: 0, zoom: 1 });
   const [timelineConfig, setTimelineConfig] = useState<TimelineConfig>(DEFAULT_TIMELINE);
   const [timelineMarkers, setTimelineMarkers] = useState<{ id: string; px: number }[]>([]); // px position
-  const [showTimelineConfig, setShowTimelineConfig] = useState(false);  // 剧本段可引用的项目数据
+  const [showTimelineConfig, setShowTimelineConfig] = useState(false); void showTimelineConfig; void setShowTimelineConfig;  // 剧本段可引用的项目数据
   const [characterNames, setCharacterNames] = useState<string[]>([]);
   const [placeNames, setPlaceNames] = useState<string[]>([]);
   const [termNames, setTermNames] = useState<string[]>([]); const dragRef = useRef<{ id: string; startX: number; startPx: number; zoom: number } | null>(null);
@@ -271,7 +270,7 @@ export function PlotDirectionPanel() {
     const s: PlotSegment = {
       id: uuid(), project_id: currentProject.id, type,
       title: type === "bright" ? "新段落" : "新暗线",
-      characters: "", location: "", time: "", event: "", chapters: "",
+      characters: "", location: "", time: "", event: "", chapters: "", beats: [],
     };
     all.push(s);
     saveSegments(currentProject.id, all);
@@ -295,12 +294,14 @@ export function PlotDirectionPanel() {
   }, [currentProject, setNodes, pushSnapshot]);
 
   // ===== 拖拽停止 =====
-  const onNodeDragStop = useCallback((_: any, _node: Node) => {
+  const onNodeDragStop = useCallback((_: any, node: Node) => {
     if (!currentProject) return;
     pushSnapshot();
     const positions: Record<string, { x: number; y: number }> = {};
-    for (const n of nodes) {
-      positions[n.id] = { x: n.position.x, y: n.position.y };
+    const liveNodes: Node[] = rfRef.current?.getNodes?.() || nodes;
+    for (const n of liveNodes) {
+      const pos = n.id === node.id ? node.position : n.position;
+      positions[n.id] = { x: pos.x, y: pos.y };
     }
     savePositions(currentProject.id, positions);
   }, [currentProject, nodes, pushSnapshot]);
@@ -335,7 +336,6 @@ export function PlotDirectionPanel() {
       if (!dragRef.current) return;
       const dx = ev.clientX - dragRef.current.startX;
       const z = dragRef.current.zoom;
-      const stepPx = (240 / 2) * z; // 120px * zoom
       const newAbsPx = dragRef.current.startPx + dx / z;
       const snapPx = Math.round(newAbsPx / (120)) * 120;
       setTimelineMarkers(prev => prev.map(m => m.id === dragRef.current!.id ? { ...m, px: snapPx } : m));
@@ -443,7 +443,7 @@ export function PlotDirectionPanel() {
           connectOnClick={true}
           nodesDraggable elementsSelectable
           panOnDrag={[2]} selectionOnDrag
-          selectionMode="partial"
+          selectionMode={SelectionMode.Partial}
           deleteKeyCode={["Delete", "Backspace"]}
           multiSelectionKeyCode="Shift"
           onNodeDragStop={onNodeDragStop}

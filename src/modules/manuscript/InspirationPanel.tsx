@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Plus, Trash2, Lightbulb } from "lucide-react";
 import { useAppStore } from "@/stores/app-store";
 import { uuid } from "@/lib/uuid";
+import { getJSONSync, setJSONSync } from "@/lib/storage";
 
 // ===== 灵感卡片 =====
 interface InspirationCard {

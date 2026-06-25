@@ -41,9 +41,9 @@ interface Props {
 }
 
 export function CustomModuleRenderer({ mod }: Props) {
-    const { removeCustomModule, setActiveModule, customModules } = useAppStore();
+    const { removeCustomModule, navigateTo, customModules } = useAppStore();
     const IconComponent = useMemo(
-        () => (LucideIcons as Record<string, React.ComponentType<{ className?: string }>>)[mod.icon],
+        () => (LucideIcons as unknown as Record<string, React.ComponentType<{ className?: string }>>)[mod.icon],
         [mod.icon]
     );
 
@@ -87,7 +87,7 @@ export function CustomModuleRenderer({ mod }: Props) {
                     </button>
                     <button
                         type="button"
-                        onClick={() => { if (window.confirm(`确定删除模块「${mod.label || mod.id}」？`)) removeCustomModule(mod.id); }}
+                        onClick={() => { if (window.confirm(`确定删除模块「${mod.name || mod.id}」？`)) removeCustomModule(mod.id); }}
                         className="flex items-center gap-1 rounded-md border border-red-200 px-2.5 py-1 text-xs text-red-600 hover:bg-red-50"
                         title="删除此模块"
                     >
@@ -132,14 +132,14 @@ export function CustomModuleRenderer({ mod }: Props) {
                             {customModules
                                 .filter((m) => m.id !== mod.id)
                                 .map((m) => {
-                                    const OtherIcon = (LucideIcons as Record<string, React.ComponentType<{ className?: string }>>)[
+                                    const OtherIcon = (LucideIcons as unknown as Record<string, React.ComponentType<{ className?: string }>>)[
                                         m.icon
                                     ];
                                     return (
                                         <button
                                             key={m.id}
                                             type="button"
-                                            onClick={() => setActiveModule("custom", m.id)}
+                                            onClick={() => navigateTo("custom", m.id)}
                                             className="flex items-center gap-1.5 rounded-md border bg-white px-3 py-1.5 text-xs hover:bg-violet-50 hover:border-violet-200"
                                         >
                                             {OtherIcon && <OtherIcon className="h-3.5 w-3.5 text-violet-500" />}

@@ -50,4 +50,18 @@ describe("chapter-store", () => {
         // 迁移后旧 key 应已清除
         expect(localStorage.getItem(`plot-chapters-${PID}`)).toBeNull();
     });
+
+    it("已有分片章节时清理遗留旧聚合 key", () => {
+        const ch = { id: "new1", title: "新章", content: "新内容", number: 1, volumeSegmentId: PID };
+        saveChapter(PID, ch);
+        localStorage.setItem(`plot-chapters-${PID}`, JSON.stringify([
+            { id: "old1", title: "旧章", content: "旧内容", number: 1, volumeSegmentId: PID },
+        ]));
+
+        const all = loadAllChapters(PID);
+
+        expect(all).toHaveLength(1);
+        expect(all[0].id).toBe("new1");
+        expect(localStorage.getItem(`plot-chapters-${PID}`)).toBeNull();
+    });
 });

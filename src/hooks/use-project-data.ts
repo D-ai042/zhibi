@@ -4,6 +4,7 @@ import { useAppStore } from "@/stores/app-store";
 import { migrateLocalStorageToSqlite } from "@/lib/migrate-data";
 import { prewarmFromSqlite, getJSONSync } from "@/lib/storage";
 import { loadAllChapters } from "@/lib/chapter-store";
+import { reportDiagnostic } from "@/lib/diagnostics";
 
 export function useProjectBootstrap() {
   const {
@@ -49,7 +50,12 @@ export function useProjectBootstrap() {
     prewarmFromSqlite().then(() => {
       return migrateLocalStorageToSqlite();
     }).then(() => {
+      return prewarmFromSqlite();
+    }).then(() => {
       // 迁移完成后刷新数据
+      refresh();
+    }).catch((e) => {
+      reportDiagnostic("error", "项目启动数据预热/迁移失败", { error: String(e) });
       refresh();
     });
 

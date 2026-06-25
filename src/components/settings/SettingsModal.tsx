@@ -1,14 +1,15 @@
 ﻿// SettingsModal.tsx — 设置弹窗壳（T9 拆分，组合4个Tab子组件）
 import { useEffect, useState } from "react";
-import { X, Settings2, Mic, History, Download } from "lucide-react";
+import { X, Settings2, Mic, History, Download, Bug } from "lucide-react";
 import { useAppStore } from "@/stores/app-store";
 import { getCurrentVersion, checkForUpdate, markDismissed, type VersionInfo } from "@/lib/version-check";
 import { ApiConfigTab } from "./ApiConfigTab";
 import { SttConfigTab } from "./SttConfigTab";
 import { SnapshotManagerTab } from "./SnapshotManagerTab";
 import { DataMigrateTab } from "./DataMigrateTab";
+import { DiagnosticsTab } from "./DiagnosticsTab";
 
-type TabName = "api" | "stt" | "snapshots" | "migrate" | "about";
+type TabName = "api" | "stt" | "snapshots" | "migrate" | "diagnostics" | "about";
 
 export function SettingsModal() {
   const { settingsOpen, setSettingsOpen } = useAppStore();
@@ -29,7 +30,7 @@ export function SettingsModal() {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-      <div className="w-[520px] max-h-[85vh] rounded-lg bg-white shadow-xl flex flex-col">
+      <div className="w-[1040px] max-h-[85vh] rounded-lg bg-white shadow-xl flex flex-col">
         <div className="flex items-center justify-between border-b px-4 py-3 shrink-0">
           <h2 className="font-semibold">设置</h2>
           <button type="button" onClick={() => setSettingsOpen(false)}>
@@ -54,6 +55,10 @@ export function SettingsModal() {
             className={`flex items-center gap-1.5 px-4 py-2.5 font-medium ${tab === "migrate" ? "border-b-2 border-amber-500 text-amber-700" : "text-slate-500 hover:text-slate-700"}`}>
             <Download size={15} /> 数据迁移
           </button>
+          <button type="button" onClick={() => setTab("diagnostics")}
+            className={`flex items-center gap-1.5 px-4 py-2.5 font-medium ${tab === "diagnostics" ? "border-b-2 border-amber-500 text-amber-700" : "text-slate-500 hover:text-slate-700"}`}>
+            <Bug size={15} /> 诊断日志
+          </button>
           <button type="button" onClick={() => setTab("about")}
             className={`flex items-center gap-1.5 px-4 py-2.5 font-medium ${tab === "about" ? "border-b-2 border-amber-500 text-amber-700" : "text-slate-500 hover:text-slate-700"}`}>
             <History size={15} /> 关于
@@ -65,6 +70,7 @@ export function SettingsModal() {
           {tab === "stt" && <SttConfigTab />}
           {tab === "snapshots" && <SnapshotManagerTab />}
           {tab === "migrate" && <DataMigrateTab />}
+          {tab === "diagnostics" && <DiagnosticsTab />}
           {tab === "about" && (
             <div className="space-y-3">
               <p className="text-sm font-semibold">执笔 · 先定章法，再落笔墨</p>
@@ -94,15 +100,15 @@ export function SettingsModal() {
                 </button>
                 {updateStatus === "available" && updateInfo && (
                   <button onClick={() => {
-                    if (updateInfo.releaseUrl) window.open(updateInfo.releaseUrl, "_blank");
-                    markDismissed(updateInfo);
+                    if (updateInfo.download_url) window.open(updateInfo.download_url, "_blank");
+                    markDismissed(updateInfo.version);
                     setUpdateStatus("up-to-date");
                   }} className="rounded-lg bg-violet-600 px-4 py-2 text-xs text-white hover:bg-violet-700">
-                    下载 v{updateInfo.latestVersion}
+                    下载 v{updateInfo.version}
                   </button>
                 )}
                 {updateStatus === "available" && updateInfo && (
-                  <button onClick={() => { markDismissed(updateInfo); setUpdateStatus("up-to-date"); }}
+                  <button onClick={() => { markDismissed(updateInfo.version); setUpdateStatus("up-to-date"); }}
                     className="rounded-lg border px-4 py-2 text-xs hover:bg-slate-50">暂不更新</button>
                 )}
                 {updateStatus === "up-to-date" && <span className="text-xs text-green-600 py-2">已是最新版本</span>}

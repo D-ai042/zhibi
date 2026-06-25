@@ -270,14 +270,8 @@ ${text}`;
 
         // 4. 计算工作记忆（最近 N 轮）
         const nonSystem = messages.filter(m => m.role !== "system");
-        const userMessages = nonSystem.filter(m => m.role === "user");
-
         const WORKING_ROUNDS = 10;
         // 取最近 WORKING_ROUNDS 轮用户消息 + 对应的 AI 回复
-        const workingStart = Math.max(0, userMessages.length - WORKING_ROUNDS);
-        const workingUserIds = new Set(
-            userMessages.slice(workingStart).map(m => m.id)
-        );
 
         // 找到这些用户消息对应的整个轮次
         const workingSet = new Set<string>();

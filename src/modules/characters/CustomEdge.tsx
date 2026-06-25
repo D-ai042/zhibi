@@ -23,7 +23,8 @@ function CustomEdge({
     data,
     style,
     markerEnd,
-}: EdgeProps<CustomEdgeData>) {
+}: EdgeProps) {
+    const d = data as unknown as CustomEdgeData;
     const [edgePath, labelX, labelY] = getStraightPath({
         sourceX,
         // 角色圆形节点 72x72，Handle 在 Position.Top → 偏移 +36 到达节点中心
@@ -32,7 +33,7 @@ function CustomEdge({
         targetY: targetY + 9,
     });
 
-    const color = data?.color || (style?.stroke as string) || "#94a3b8";
+    const color = d?.color || (style?.stroke as string) || "#94a3b8";
 
     // 计算线段方向
     const rawAngle = Math.atan2(targetY - sourceY, targetX - sourceX) * (180 / Math.PI);
@@ -62,12 +63,12 @@ function CustomEdge({
 
     // 编辑状态
     const [editing, setEditing] = useState(false);
-    const [draft, setDraft] = useState(data?.label || "");
+    const [draft, setDraft] = useState(d?.label || "");
     const inputRef = useRef<HTMLInputElement>(null);
 
     useEffect(() => {
-        setDraft(data?.label || "");
-    }, [data?.label]);
+        setDraft(d?.label || "");
+    }, [d?.label]);
 
     useEffect(() => {
         if (editing && inputRef.current) {
@@ -80,35 +81,35 @@ function CustomEdge({
     const handlePathDblClick = useCallback(
         (e: React.MouseEvent) => {
             e.stopPropagation();
-            if (data?.onDelete && data?.rels && data.rels.length > 0) {
-                if (window.confirm(`确定删除关系「${data.label}」？`)) {
-                    data.onDelete(data.rels);
+            if (d?.onDelete && d?.rels && d.rels.length > 0) {
+                if (window.confirm(`确定删除关系「${d.label}」？`)) {
+                    d.onDelete(d.rels);
                 }
             }
         },
-        [data]
+        [d]
     );
 
     // 双击标签 → 编辑
     const handleLabelDblClick = useCallback(
         (e: React.MouseEvent) => {
             e.stopPropagation();
-            if (data?.rels && data.rels.length > 0) {
+            if (d?.rels && d.rels.length > 0) {
                 setEditing(true);
             }
         },
-        [data]
+        [d]
     );
 
     const commitEdit = useCallback(() => {
         setEditing(false);
         const t = draft.trim();
-        if (t && t !== data?.label && data?.onUpdate && data?.rels) {
-            data.onUpdate(data.rels, t);
+        if (t && t !== d?.label && d?.onUpdate && d?.rels) {
+            d.onUpdate(d.rels, t);
         } else {
-            setDraft(data?.label || "");
+            setDraft(d?.label || "");
         }
-    }, [draft, data]);
+    }, [draft, d]);
 
     return (
         <>
@@ -121,8 +122,8 @@ function CustomEdge({
                 onDoubleClick={handlePathDblClick}
                 style={{ cursor: "pointer" }}
             />
-            <BaseEdge id={id} path={edgePath} style={style} markerEnd={markerEnd} />
-            {data?.label && !editing && (
+            <BaseEdge id={id} path={edgePath} style={style as React.CSSProperties} markerEnd={markerEnd} />
+            {d?.label && !editing && (
                 <EdgeLabelRenderer>
                     <div
                         className="nodrag nopan"
@@ -144,12 +145,12 @@ function CustomEdge({
                         onDoubleClick={handleLabelDblClick}
                         title="双击修改关系名"
                     >
-                        {data.label}
+                        {d.label}
                     </div>
                 </EdgeLabelRenderer>
             )}
             {/* 编辑模式：输入框 */}
-            {data?.label && editing && (
+            {d?.label && editing && (
                 <EdgeLabelRenderer>
                     <div
                         className="nodrag nopan"
@@ -168,7 +169,7 @@ function CustomEdge({
                             onKeyDown={(e) => {
                                 if (e.key === "Enter" && draft.trim()) commitEdit();
                                 if (e.key === "Escape") {
-                                    setDraft(data?.label || "");
+                                    setDraft(d?.label || "");
                                     setEditing(false);
                                 }
                             }}

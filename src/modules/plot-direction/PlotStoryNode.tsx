@@ -1,5 +1,5 @@
 import { memo, useState, useRef, useCallback, useEffect } from "react";
-import { Handle, Position, type NodeProps } from "@xyflow/react";
+import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
 import { Trash2, ChevronUp, Plus, X } from "lucide-react";
 import { uuid } from "@/lib/uuid";
 
@@ -28,6 +28,7 @@ export interface PlotSegment {
 }
 
 export interface PlotStoryNodeData {
+    [key: string]: unknown;
     segment: PlotSegment;
     onUpdate: (s: PlotSegment) => void;
     onDelete: (id: string) => void;
@@ -40,17 +41,14 @@ const BRIGHT = { bg: "#f0f9ff", border: "#7dd3fc", text: "#0c4a6e", label: "#036
 const DARK = { bg: "#f5f3ff", border: "#c4b5fd", text: "#1e1b4b", label: "#6d28d9", tag: "🌑 暗线", tagBg: "#ede9fe", tagColor: "#6d28d9" };
 
 /** 单个细纲卡片 — 样式同段落卡片，去掉明线标签 */
-function BeatCard({ beat, onUpdate, onDelete, isDragOver, onDragStart, onDragOver, onDragEnd, onDrop, selected, onToggleSelect }: {
+function BeatCard({ beat, onUpdate, onDelete, onPointerDown, selected, onToggleSelect, beatIdForDom }: {
     beat: PlotBeat;
     onUpdate: (b: PlotBeat) => void;
     onDelete: (id: string) => void;
-    isDragOver?: boolean;
-    onDragStart?: (e: React.DragEvent) => void;
-    onDragOver?: (e: React.DragEvent) => void;
-    onDragEnd?: (e: React.DragEvent) => void;
-    onDrop?: (e: React.DragEvent) => void;
+    onPointerDown?: (e: React.PointerEvent) => void;
     selected?: boolean;
     onToggleSelect?: () => void;
+    beatIdForDom: string;
 }) {
     const [editingBeat, setEditingBeat] = useState(false);
     const [beatDraft, setBeatDraft] = useState(beat.title);
@@ -89,16 +87,13 @@ function BeatCard({ beat, onUpdate, onDelete, isDragOver, onDragStart, onDragOve
     return (
         <div
             className="nodrag rounded-xl transition-all duration-200 select-none"
-            draggable
-            onDragStart={onDragStart}
-            onDragOver={onDragOver}
-            onDragEnd={onDragEnd}
-            onDrop={onDrop}
+            data-beat-id={beatIdForDom}
+            onPointerDown={onPointerDown}
             style={{
                 width: 200,
                 background: "#fff",
-                border: isDragOver ? "2px solid #f59e0b" : "2px solid #e2e8f0",
-                boxShadow: isDragOver ? "0 0 0 4px rgba(245,158,11,0.15)" : "0 2px 8px rgba(0,0,0,0.04), 0 1px 2px rgba(0,0,0,0.02)",
+                border: "2px solid #e2e8f0",
+                boxShadow: "0 2px 8px rgba(0,0,0,0.04), 0 1px 2px rgba(0,0,0,0.02)",
                 opacity: 0.95,
                 overflow: "hidden",
                 cursor: "grab",
@@ -189,7 +184,7 @@ function BeatCard({ beat, onUpdate, onDelete, isDragOver, onDragStart, onDragOve
     );
 }
 
-function PlotStoryNode({ data, selected }: NodeProps<PlotStoryNodeData>) {
+function PlotStoryNode({ data, selected }: NodeProps<Node<PlotStoryNodeData>>) {
     const { segment, onUpdate } = data;
     const [editing, setEditing] = useState(false);
     const [draft, setDraft] = useState(segment.title);
@@ -256,9 +251,23 @@ function PlotStoryNode({ data, selected }: NodeProps<PlotStoryNodeData>) {
         onUpdate({ ...segment, beats: beats.filter(x => x.id !== id) });
     };
 
-    // ★ 拖拽重排细纲
-    const [dragBeatId, setDragBeatId] = useState<string | null>(null);
-    const [dropTargetId, setDropTargetId] = useState<string | null>(null);
+    // ★ 拖拽重排细纲（替身跟随鼠标，零 React re-render）
+    const dragRef = useRef<{
+        beatId: string;
+        startX: number; startY: number;
+        cardRect: DOMRect;  // 卡片初始屏幕位置
+        phantom: HTMLElement;  // document.body 上的替身
+        origEl: HTMLElement;   // 原始卡片（变透明占位）
+        totalDx: number; totalDy: number;
+        gridEl: HTMLElement | null;
+    } | null>(null);
+    const lastHighlightEl = useRef<HTMLElement | null>(null);
+    const beatsRef = useRef(beats);
+    const segmentRef = useRef(segment);
+    const onUpdateRef = useRef(onUpdate);
+    beatsRef.current = beats;
+    segmentRef.current = segment;
+    onUpdateRef.current = onUpdate;
 
     // ★ 批量删除
     const [selectedBeatIds, setSelectedBeatIds] = useState<Set<string>>(new Set());
@@ -286,38 +295,125 @@ function PlotStoryNode({ data, selected }: NodeProps<PlotStoryNodeData>) {
         setSelectedBeatIds(new Set());
     };
 
-    const handleDragStart = (beatId: string) => (e: React.DragEvent) => {
-        e.dataTransfer.setData("text/plain", beatId);
-        e.dataTransfer.effectAllowed = "move";
-        setDragBeatId(beatId);
-    };
+    // 找到替身中心点最近的目标卡片
+    function findClosestBeat(phantom: HTMLElement, gridEl: HTMLElement): string | null {
+        const pr = phantom.getBoundingClientRect();
+        const pcx = pr.left + pr.width / 2;
+        const pcy = pr.top + pr.height / 2;
+        let bestId: string | null = null;
+        let bestDist = Infinity;
+        const cards = gridEl.querySelectorAll<HTMLElement>('[data-beat-id]');
+        for (const card of cards) {
+            const cr = card.getBoundingClientRect();
+            const ccx = cr.left + cr.width / 2;
+            const ccy = cr.top + cr.height / 2;
+            const dist = Math.hypot(pcx - ccx, pcy - ccy);
+            if (dist < bestDist) {
+                bestDist = dist;
+                bestId = card.dataset.beatId ?? null;
+            }
+        }
+        return bestId;
+    }
 
-    const handleDragOver = (beatId: string) => (e: React.DragEvent) => {
-        e.preventDefault();
-        e.dataTransfer.dropEffect = "move";
-        if (beatId !== dragBeatId) setDropTargetId(beatId);
-    };
+    const handlePointerDown = (beatId: string) => (e: React.PointerEvent) => {
+        e.stopPropagation();
+        const el = e.currentTarget as HTMLElement;
+        const gridEl = el.closest('[data-beat-grid]') as HTMLElement;
+        const cardRect = el.getBoundingClientRect();
 
-    const handleDragEnd = () => {
-        setDragBeatId(null);
-        setDropTargetId(null);
-    };
+        // 创建替身 — position:fixed 贴屏幕，不受 React Flow 画布影响
+        const phantom = el.cloneNode(true) as HTMLElement;
+        phantom.style.position = "fixed";
+        phantom.style.left = cardRect.left + "px";
+        phantom.style.top = cardRect.top + "px";
+        phantom.style.width = cardRect.width + "px";
+        phantom.style.height = cardRect.height + "px";
+        phantom.style.zIndex = "99999";
+        phantom.style.pointerEvents = "none";
+        phantom.style.opacity = "0.9";
+        phantom.style.margin = "0";
+        phantom.style.transition = "none";
+        document.body.appendChild(phantom);
 
-    const handleDrop = (targetId: string) => (e: React.DragEvent) => {
-        e.preventDefault();
-        const sourceId = e.dataTransfer.getData("text/plain");
-        if (!sourceId || sourceId === targetId) { setDragBeatId(null); setDropTargetId(null); return; }
-        const srcIdx = beats.findIndex(b => b.id === sourceId);
-        const tgtIdx = beats.findIndex(b => b.id === targetId);
-        if (srcIdx < 0 || tgtIdx < 0) { setDragBeatId(null); setDropTargetId(null); return; }
-        const reordered = [...beats];
-        const [moved] = reordered.splice(srcIdx, 1);
-        reordered.splice(tgtIdx, 0, moved);
-        // 重编序号
-        const renumbered = reordered.map((b, i) => ({ ...b, number: i + 1 }));
-        onUpdate({ ...segment, beats: renumbered });
-        setDragBeatId(null);
-        setDropTargetId(null);
+        // 原卡片变淡占位
+        el.style.opacity = "0.25";
+
+        dragRef.current = {
+            beatId, startX: e.clientX, startY: e.clientY,
+            cardRect, phantom, origEl: el,
+            totalDx: 0, totalDy: 0, gridEl,
+        };
+
+        const onMove = (ev: PointerEvent) => {
+            const d = dragRef.current;
+            if (!d) return;
+            d.totalDx = ev.clientX - d.startX;
+            d.totalDy = ev.clientY - d.startY;
+            d.phantom.style.left = (d.cardRect.left + d.totalDx) + "px";
+            d.phantom.style.top = (d.cardRect.top + d.totalDy) + "px";
+
+            // 找最近卡片并高亮
+            const closestId = d.gridEl ? findClosestBeat(d.phantom, d.gridEl) : null;
+            const prev = lastHighlightEl.current;
+            // 跳过自己
+            const effectiveId = (closestId && closestId !== d.beatId) ? closestId : null;
+
+            if (prev && prev.dataset.beatId !== effectiveId) {
+                prev.style.border = "2px solid #e2e8f0";
+                prev.style.boxShadow = "0 2px 8px rgba(0,0,0,0.04), 0 1px 2px rgba(0,0,0,0.02)";
+                lastHighlightEl.current = null;
+            }
+            if (effectiveId) {
+                const target = d.gridEl?.querySelector<HTMLElement>(`[data-beat-id="${effectiveId}"]`);
+                if (target && target !== prev) {
+                    target.style.border = "2px solid #f59e0b";
+                    target.style.boxShadow = "0 0 0 4px rgba(245,158,11,0.15)";
+                    lastHighlightEl.current = target;
+                }
+            } else if (!effectiveId && prev) {
+                prev.style.border = "2px solid #e2e8f0";
+                prev.style.boxShadow = "0 2px 8px rgba(0,0,0,0.04), 0 1px 2px rgba(0,0,0,0.02)";
+                lastHighlightEl.current = null;
+            }
+        };
+        const onUp = () => {
+            document.removeEventListener("pointermove", onMove);
+            document.removeEventListener("pointerup", onUp);
+            const d = dragRef.current;
+            dragRef.current = null;
+
+            // 清理高亮
+            const prev = lastHighlightEl.current;
+            if (prev) {
+                prev.style.border = "2px solid #e2e8f0";
+                prev.style.boxShadow = "0 2px 8px rgba(0,0,0,0.04), 0 1px 2px rgba(0,0,0,0.02)";
+                lastHighlightEl.current = null;
+            }
+
+            if (d) {
+                // 删除替身
+                if (d.phantom.parentNode) d.phantom.parentNode.removeChild(d.phantom);
+                // 还原原卡片
+                d.origEl.style.opacity = "";
+            }
+
+            // 移动距离不足 20px，不交换
+            if (!d || Math.hypot(d.totalDx, d.totalDy) < 20) return;
+
+            const targetId = prev?.dataset?.beatId;
+            if (!targetId || targetId === d.beatId) return;
+            const bts = beatsRef.current;
+            const srcIdx = bts.findIndex(b => b.id === d.beatId);
+            const tgtIdx = bts.findIndex(b => b.id === targetId);
+            if (srcIdx < 0 || tgtIdx < 0) return;
+            const reordered = [...bts];
+            const [moved] = reordered.splice(srcIdx, 1);
+            reordered.splice(tgtIdx, 0, moved);
+            onUpdateRef.current({ ...segmentRef.current, beats: reordered.map((b, i) => ({ ...b, number: i + 1 })) });
+        };
+        document.addEventListener("pointermove", onMove);
+        document.addEventListener("pointerup", onUp);
     };
 
     return (
@@ -347,16 +443,13 @@ function PlotStoryNode({ data, selected }: NodeProps<PlotStoryNodeData>) {
                             >批量删除 ({selectedBeatIds.size})</button>
                         )}
                     </div>
-                    <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 200px)", gap: 6, padding: "0 2px" }}>
-                        {beats.map((beat, idx) => (
+                    <div data-beat-grid style={{ display: "grid", gridTemplateColumns: "repeat(4, 200px)", gap: 6, padding: "0 2px" }}>
+                        {beats.map((beat) => (
                             <BeatCard key={beat.id} beat={beat} onUpdate={updateBeat} onDelete={deleteBeat}
-                                isDragOver={dropTargetId === beat.id}
-                                onDragStart={handleDragStart(beat.id)}
-                                onDragOver={handleDragOver(beat.id)}
-                                onDragEnd={handleDragEnd}
-                                onDrop={handleDrop(beat.id)}
+                                onPointerDown={handlePointerDown(beat.id)}
                                 selected={selectedBeatIds.has(beat.id)}
                                 onToggleSelect={() => toggleBeatSelect(beat.id)}
+                                beatIdForDom={beat.id}
                             />
                         ))}
                     </div>

@@ -1,7 +1,6 @@
 // ChatPanelLayout.tsx — AI 对话面板完整 UI 布局（T7 拆分，从 AiChatPanel 完整提取）
-import { useEffect, useRef } from "react";
-import { Sparkles, FileText, Trash2, Square, Mic, MicOff, Paperclip, Send, X, ClipboardPlus, Eraser, Download } from "lucide-react";
-import { useAppStore } from "@/stores/app-store";
+import { useEffect } from "react";
+import { Sparkles, FileText, Trash2, Square, Mic, MicOff, Paperclip, Send, X } from "lucide-react";
 import { renderMarkdown } from "@/lib/markdown";
 import type { ChatMessage, MemoryEntry, WorldTerm } from "@/types";
 import { ChatMessageBubble } from "./ChatMessageBubble";
@@ -65,17 +64,17 @@ interface ChatPanelLayoutProps {
 }
 
 export function ChatPanelLayout(props: ChatPanelLayoutProps) {
-    const { messages, input, setInput, loading, uploadedFiles, setUploadedFiles, hasAttachments, memoryTab, setMemoryTab, memoryEntries,
+    const { messages, input, setInput, loading, uploadedFiles, hasAttachments, memoryTab, memoryEntries,
         streamingContent, streamingThinking, streamingPhase, thinkingDuration,
-        editingMsgId, setEditingMsgId, editingContent, setEditingContent,
+        editingMsgId, editingContent,
         chapterSelectMode, activeModule,
-        pendingTerms, pendingEdges, pendingChars, pendingCharEdges, pendingRemoveEdges, pendingSnapshots,
-        pendingPlotSegments, pendingPlotEdges, pendingPlotBeats, pendingChapters,
+        pendingTerms, pendingEdges, pendingChars, pendingCharEdges, pendingSnapshots,
+        pendingPlotSegments, pendingPlotBeats, pendingChapters,
         setPendingTerms, setPendingEdges, setPendingChars, setPendingCharEdges, setPendingRemoveEdges, setPendingSnapshots,
         chatContainerRef, bottomRef, fileInputRef, stt, sttLoading, contextHint,
         onClearChat, onToggleMemory, onStartEdit, onCommitEdit, onCancelEdit, onEditingChange,
         onCopy, onDelete, onRegenerate,
-        lastAssistantMessage, onSend, onStop, onSttToggle, onFileSelect, onRemoveFile,
+        onSend, onStop, onSttToggle, onFileSelect, onRemoveFile,
         onInsertTerms, onInsertCharacters, onInsertPlot, onInsertChapters, onInsertText,
         onToggleChapterSelect, onRemoveLast, onSave,
     } = props;
@@ -92,7 +91,7 @@ export function ChatPanelLayout(props: ChatPanelLayoutProps) {
                 </div>
             </div>
             <p className="border-b bg-slate-50/80 px-3 py-1 text-[10px] text-slate-400">{contextHint}</p>
-            <div className="flex-1 space-y-3 overflow-y-auto px-3 py-3" ref={chatContainerRef}>
+            <div className="flex-1 space-y-3 overflow-y-auto px-3 py-3" ref={chatContainerRef as React.Ref<HTMLDivElement>}>
                 {messages.filter(Boolean).map((m) => (
                     <ChatMessageBubble key={m.id} msg={m} isSystem={m.role === 'system'} editingMsgId={editingMsgId} editingContent={editingContent}
                         onStartEdit={(id, content) => { onStartEdit(id, content); }}
@@ -133,7 +132,7 @@ export function ChatPanelLayout(props: ChatPanelLayoutProps) {
                         </div>
                     </div>
                 )}
-                <div ref={bottomRef} />
+                <div ref={bottomRef as React.Ref<HTMLDivElement>} />
             </div>
             {memoryTab && (
                 <div className="max-h-60 overflow-y-auto border-t border-slate-100 bg-white p-3">

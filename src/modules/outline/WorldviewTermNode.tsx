@@ -1,5 +1,5 @@
 import { memo, useCallback, useState, useRef, useEffect } from "react";
-import { Handle, Position, type NodeProps } from "@xyflow/react";
+import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
 import { Lock, Trash2, Unlock } from "lucide-react";
 import type { WorldTerm } from "@/types";
 
@@ -22,6 +22,7 @@ const TYPE_LABEL: Record<WorldTerm["term_type"], string> = {
 };
 
 export interface WorldviewTermData {
+    [key: string]: unknown;
     term: WorldTerm;
     onUpdate: (term: WorldTerm) => void;
     onSelect: (term: WorldTerm) => void;
@@ -29,7 +30,7 @@ export interface WorldviewTermData {
     editing?: boolean;
 }
 
-function WorldviewTermNode({ data }: NodeProps<WorldviewTermData>) {
+function WorldviewTermNode({ data }: NodeProps<Node<WorldviewTermData>>) {
     const { term, onUpdate, onSelect, onDelete, editing } = data;
     const callbacks = useRef({ onUpdate, onSelect, onDelete });
     useEffect(() => { callbacks.current = { onUpdate, onSelect, onDelete }; }, [onUpdate, onSelect, onDelete]);

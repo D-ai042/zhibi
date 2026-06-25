@@ -8,6 +8,8 @@
   "permissions": [
     "core:default",
     "dialog:default",
+    "dialog:allow-confirm",
+    "dialog:allow-save",
     "sql:default",
     "sql:allow-execute",
     "sql:allow-load",

@@ -39,6 +39,7 @@ pub fn run() {
             commands::delete_world_term,
             commands::get_setting,
             commands::set_setting,
+            commands::delete_setting,
             commands::get_style_guide,
             commands::save_style_guide,
             commands::get_story_bible,

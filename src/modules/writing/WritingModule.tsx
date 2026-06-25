@@ -2,35 +2,25 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAppStore } from "@/stores/app-store";
 import { api } from "@/lib/api";
-import { updateMemory, activateNextChapterTerms, activateNextChapterCharacters, createSnapshot, rebaseMemory } from "@/lib/memory-updater";
+import { rebaseMemory } from "@/lib/memory-updater";
 import { AiWritingDialog } from "@/components/editor/AiWritingDialog";
 import { AiWriteChapterDialog } from "@/components/editor/AiWriteChapterDialog";
 import { renderMarkdown } from "@/lib/markdown";
 import { getJSONSync, setJSONSync } from "@/lib/storage";
-import { loadAllChapters } from "@/lib/chapter-store";
+import { loadAllChapters, saveChapter, saveAllChapters, deleteChapter as deleteStoredChapter, type Chapter as PlotChapter } from "@/lib/chapter-store";
 import type { ChapterSummary, BeatCard } from "@/types";
 import { uuid } from "@/lib/uuid";
-import { createBackup } from "@/lib/backup";
-import { runQualityCheck } from "@/lib/quality-checker";
 import { ChapterTree } from "./ChapterTree";
 import { ChapterEditor } from "./ChapterEditor";
 import { ContextPanel } from "./ContextPanel";
 import { useAiWriting } from "./useAiWriting";
 import { finalizeChapter } from "./finalizeChapter";
 
-interface PlotChapter { id: string; volumeSegmentId: string; number: number; title: string; content: string; }
 interface PlotSegment { id: string; project_id: string; type: "bright" | "dark"; title: string; characters: string; location: string; time: string; event: string; }
 
-function loadChapters(pid: string): PlotChapter[] {
-    const ids: string[] = getJSONSync(`chapter-index-${pid}`, []);
-    if (ids.length === 0) { const old = loadAllChapters(pid); if (old && old.length > 0) { saveChapters(pid, old); return old; } return []; }
-    return ids.map(id => getJSONSync(`chapter-${pid}-${id}`, null as PlotChapter)).filter((ch): ch is PlotChapter => ch !== null);
-}
-function saveChapters(pid: string, chs: PlotChapter[]) { const ids: string[] = []; for (const ch of chs) { setJSONSync(`chapter-${pid}-${ch.id}`, ch); ids.push(ch.id); } setJSONSync(`chapter-index-${pid}`, ids); }
 function loadSegments(pid: string): PlotSegment[] { return getJSONSync(`plot-segments-${pid}`, []); }
 function loadEdges(pid: string): { source: string; target: string; sourceHandle?: string; targetHandle?: string }[] { return getJSONSync(`plot-edges-${pid}`, []); }
 function bumpSavedChapterVersion(projectId: string, chapterNumber: number) { try { const key = `novel-workbench-log-${projectId}`; const store = getJSONSync(key, {} as any); if (!store) return; store.chapterVersions = store.chapterVersions || {}; store.chapterVersions[String(chapterNumber)] = (store.chapterVersions[String(chapterNumber)] || 0) + 1; setJSONSync(key, store); } catch { } }
-const colLabel: Record<string, string> = { goal: "目标", conflict: "冲突", turn: "转折", hook: "钩子", reveal: "揭示" };
 
 function detectStaleAhead(projectId: string, currentChapterNumber: number): { count: number; chapters: string; fromChapter: number } {
     try { const store = getJSONSync(`novel-workbench-log-${projectId}`, {} as any); const deps = store.dependencies || []; const stale = deps.filter((d: any) => { const dc = parseInt(d.dependsOnChapter); return dc <= currentChapterNumber && d.status === "stale"; }); if (stale.length === 0) return { count: 0, chapters: "", fromChapter: 0 }; const depsChs: number[] = []; const seen = new Set<number>(); for (const d of stale) { const n = parseInt(d.dependsOnChapter); if (!seen.has(n)) { seen.add(n); depsChs.push(n); } } depsChs.sort((a, b) => a - b); const first = depsChs[0]; const last = depsChs[depsChs.length - 1]; return { count: stale.length, chapters: first === last ? `第${first}章` : `第${first}-${last}章`, fromChapter: first }; } catch { return { count: 0, chapters: "", fromChapter: 0 }; }
@@ -93,14 +83,14 @@ export function WritingModule() {
     }
 
     useEffect(() => {
-        if (!pid) return; let loaded = loadChapters(pid); let changed = false;
+        if (!pid) return; let loaded = loadAllChapters(pid); let changed = false;
         const migrated = loaded.map(ch => { const n = migrateTitle(ch); if (n !== ch.title) { changed = true; return { ...ch, title: n }; } return ch; });
         const segs = loadSegments(pid); const bright = segs.filter(s => s.type === "bright"); const vvi = new Set(bright.map(b => b.id));
         const filtered = migrated.filter(ch => vvi.has(ch.volumeSegmentId)); if (filtered.length < migrated.length) changed = true;
         const sortedBright = getSortedBrightIds(pid); const vo = new Map<string, number>(); sortedBright.forEach((id, i) => vo.set(id, i));
         const sorted = [...filtered].sort((a, b) => { const oa = vo.get(a.volumeSegmentId) ?? 999; const ob = vo.get(b.volumeSegmentId) ?? 999; if (oa !== ob) return oa - ob; return a.number - b.number; });
         const renumbered = sorted.map((ch, idx) => { const nn = idx + 1; if (ch.number !== nn) { changed = true; return { ...ch, number: nn }; } return ch; });
-        if (changed) saveChapters(pid, renumbered); setChapters(renumbered);
+        if (changed) saveAllChapters(pid, renumbered); setChapters(renumbered);
     }, [pid]);
 
     const _skipNextChapterEffect = useRef(false);
@@ -136,21 +126,22 @@ export function WritingModule() {
     const selectedChapter = chapters.find(c => c.id === selectedChapterId);
     const selectedVolume = volumes.find(v => v.id === selectedChapter?.volumeSegmentId);
 
-    const saveContent = useCallback(() => { if (!pid || !selectedChapterId || !selectedChapter) return; pushUndo(); const nextChapters = chapters.map(c => c.id === selectedChapterId ? { ...c, content: editingContent } : c); try { _skipNextChapterEffect.current = true; saveChapters(pid, nextChapters); setChapters(nextChapters); savedContentRef.current = editingContent; setIsDirty(false); bumpSavedChapterVersion(pid, selectedChapter.number); useAppStore.getState().setAutosaveStatus("✅ 已保存"); const tid = setTimeout(() => useAppStore.getState().setAutosaveStatus("已就绪"), 2000); timeoutIdsRef.current.push(tid); } catch (e) { useAppStore.getState().setAutosaveStatus("⚠ 保存失败，请重试"); } }, [pid, selectedChapterId, selectedChapter, editingContent, chapters]);
+    const saveContent = useCallback(() => { if (!pid || !selectedChapterId || !selectedChapter) return; pushUndo(); const updatedChapter = { ...selectedChapter, content: editingContent }; const nextChapters = chapters.map(c => c.id === selectedChapterId ? updatedChapter : c); try { _skipNextChapterEffect.current = true; const saved = saveChapter(pid, updatedChapter); if (!saved.ok) throw new Error(saved.error || "保存失败"); setChapters(nextChapters); savedContentRef.current = editingContent; setIsDirty(false); bumpSavedChapterVersion(pid, selectedChapter.number); useAppStore.getState().setAutosaveStatus("✅ 已保存"); const tid = setTimeout(() => useAppStore.getState().setAutosaveStatus("已就绪"), 2000); timeoutIdsRef.current.push(tid); } catch (e) { useAppStore.getState().setAutosaveStatus("⚠ 保存失败，请重试"); } }, [pid, selectedChapterId, selectedChapter, editingContent, chapters]);
     const saveContentRef = useRef(saveContent); saveContentRef.current = saveContent;
     useEffect(() => { useAppStore.getState().setTriggerAutosave(() => saveContentRef.current()); return () => useAppStore.getState().setTriggerAutosave(() => { }); }, []);
 
     const DRAFT_KEY = (p: string, c: string) => `draft-${p}-${c}`;
-    const [pendingDraft, setPendingDraft] = useState<{ content: string; savedAt: string } | null>(null);
+    const [, setPendingDraft] = useState<{ content: string; savedAt: string } | null>(null);
     useEffect(() => { if (!editingContent || !selectedChapterId || !pid) return; const t = setTimeout(() => { setJSONSync(DRAFT_KEY(pid, selectedChapterId), { content: editingContent, savedAt: new Date().toISOString() }); }, 2000); return () => clearTimeout(t); }, [editingContent, selectedChapterId, pid]);
     useEffect(() => { if (selectedChapterId && pid) { const draft = getJSONSync(DRAFT_KEY(pid, selectedChapterId), null as { content: string; savedAt: string } | null); if (draft && draft.content !== savedContentRef.current) setPendingDraft(draft); else setPendingDraft(null); } }, [selectedChapterId, pid]);
 
-    const addChapter = useCallback((volumeSegmentId: string) => { if (!pid) return; setChapters(prev => { const gm = prev.reduce((m, c) => Math.max(m, c.number), 0); const ch: PlotChapter = { id: uuid(), volumeSegmentId, number: gm + 1, title: newChapterTitle.trim(), content: "" }; const upd = [...prev, ch]; saveChapters(pid, upd); setShowAddDlg(null); setNewChapterTitle(""); setSelectedChapterId(ch.id); return upd; }); }, [pid, newChapterTitle]);
-    const deleteChapter = useCallback((chId: string) => { if (!pid) return; const ch = chapters.find(c => c.id === chId); if (!window.confirm(`确定删除「${ch?.title || chId}」？章节内容将永久丢失。`)) return; setChapters(prev => { const all = prev.filter(c => c.id !== chId); saveChapters(pid, all); return all; }); if (selectedChapterId === chId) { setSelectedChapterId(null); setEditingContent(""); } }, [pid, selectedChapterId, chapters]);
-    const renameChapter = useCallback((chId: string, newTitle: string) => { if (!pid) return; setChapters(prev => { const upd = prev.map(c => c.id === chId ? { ...c, title: newTitle } : c); saveChapters(pid, upd); return upd; }); }, [pid]);
+    const addChapter = useCallback((volumeSegmentId: string) => { if (!pid) return; setChapters(prev => { const gm = prev.reduce((m, c) => Math.max(m, c.number), 0); const ch: PlotChapter = { id: uuid(), volumeSegmentId, number: gm + 1, title: newChapterTitle.trim(), content: "" }; const saved = saveChapter(pid, ch); if (!saved.ok) { useAppStore.getState().setAutosaveStatus("⚠ 保存失败，请重试"); return prev; } setShowAddDlg(null); setNewChapterTitle(""); setSelectedChapterId(ch.id); return [...prev, ch]; }); }, [pid, newChapterTitle]);
+    const deleteChapter = useCallback((chId: string) => { if (!pid) return; const ch = chapters.find(c => c.id === chId); if (!window.confirm(`确定删除「${ch?.title || chId}」？章节内容将永久丢失。`)) return; deleteStoredChapter(pid, chId); setChapters(prev => prev.filter(c => c.id !== chId)); if (selectedChapterId === chId) { setSelectedChapterId(null); setEditingContent(""); } }, [pid, selectedChapterId, chapters]);
+    const renameChapter = useCallback((chId: string, newTitle: string) => { if (!pid) return; setChapters(prev => { const upd = prev.map(c => c.id === chId ? { ...c, title: newTitle } : c); const renamed = upd.find(c => c.id === chId); if (renamed) saveChapter(pid, renamed); return upd; }); }, [pid]);
 
     // AI writing hook — all handlers extracted to useAiWriting.ts
-    const { aiWriting, aiError, humanizing, polishing, writeDlg, setWriteDlg, lastWriteParamsRef, handleAiWriteChapter, handleHumanize, handlePolish } = useAiWriting(pid, selectedChapter, editingContent, pushUndo, setEditingContent, (updater) => setChapters(prev => { const upd = updater(prev as any); saveChapters(pid!, upd as any); return upd as any; }), saveChapters, syncEditorHTML);
+    const persistAiChapters = useCallback((projectId: string, chs: PlotChapter[]) => { const current = selectedChapterId ? chs.find(c => c.id === selectedChapterId) : undefined; if (current) saveChapter(projectId, current); else saveAllChapters(projectId, chs); }, [selectedChapterId]);
+    const { aiWriting, aiError, humanizing, polishing, writeDlg, setWriteDlg, lastWriteParamsRef, handleAiWriteChapter, handleHumanize, handlePolish } = useAiWriting(pid, selectedChapter, editingContent, pushUndo, setEditingContent, (updater) => setChapters(prev => { const upd = updater(prev); persistAiChapters(pid!, upd); return upd; }), persistAiChapters, syncEditorHTML);
 
     const handleRebase = useCallback(async () => { if (!pid) return; setRebaseRunning(true); setRebaseProgress(null); try { await rebaseMemory(pid, staleInfo?.fromChapter || 1, (c, t) => setRebaseProgress({ current: c, total: t })); setStaleInfo(null); useAppStore.getState().setAutosaveStatus("✅ 级联重跑完成"); if (selectedChapterId) { const ch = chapters.find(c => c.id === selectedChapterId); if (ch) loadCtx(pid, ch.number, selectedChapterId); } } catch { useAppStore.getState().setAutosaveStatus("⚠ 级联重跑失败"); } finally { setRebaseRunning(false); setRebaseProgress(null); } }, [pid, selectedChapterId, chapters, staleInfo]);
 

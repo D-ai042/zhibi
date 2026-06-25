@@ -12,6 +12,8 @@
  * }
  */
 
+import { getJSONSync, setJSONSync } from "./storage";
+
 const VERSION_CHECK_URL = "http://175.178.18.102:8000/api/v1/version.json";
 
 /** 检查结果缓存 key（存 localStorage，避免每次启动都弹） */

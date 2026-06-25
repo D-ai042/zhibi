@@ -1,7 +1,11 @@
-﻿// ui-slice.ts — UI 状态 + 自定义模块 + AI 导航分片（T10）
+// ui-slice.ts — UI 状态 + 自定义模块 + AI 导航分片（T10）
 import type { StateCreator } from "zustand";
 import type { NavTarget, OutlineSection, OverviewSection, ManuscriptSection, CustomModule, NavItem } from "@/types";
 import type { AppStore } from "./types";
+import { getJSONSync, setJSONSync } from "@/lib/storage";
+
+const WORLDVIEW_ZONE_KEY = "ui-worldview-zone-enabled";
+const DEFAULT_WORLDVIEW_ZONE_ENABLED = { core: true, locked: false, active: true, other: true };
 
 export interface UiSlice {
   activeModule: NavTarget; activeExtraId: string | null;
@@ -27,13 +31,13 @@ export interface UiSlice {
   removeDynamicPage: (pageId: string) => void;
 }
 
-export const createUiSlice: StateCreator<AppStore, [], [], UiSlice> = (set, get) => ({
+export const createUiSlice: StateCreator<AppStore, [], [], UiSlice> = (set) => ({
   activeModule: "overview", activeExtraId: null,
   outlineSection: "worldview",
   overviewSection: "stats",
   manuscriptSection: "inspirations",
   drawerOpen: true, drawerWidth: 420, navCollapsed: false, settingsOpen: false,
-  worldviewZoneEnabled: { core: true, locked: false, active: true, other: true },
+  worldviewZoneEnabled: { ...DEFAULT_WORLDVIEW_ZONE_ENABLED, ...getJSONSync(WORLDVIEW_ZONE_KEY, {}) },
   navigateTo: (target, extraId) => set({ activeModule: target, activeExtraId: extraId ?? null }),
   setOutlineSection: (outlineSection) => set({ outlineSection }),
   setOverviewSection: (overviewSection) => set({ overviewSection }),
@@ -42,7 +46,10 @@ export const createUiSlice: StateCreator<AppStore, [], [], UiSlice> = (set, get)
   setDrawerWidth: (drawerWidth) => set({ drawerWidth }),
   setNavCollapsed: (navCollapsed) => set({ navCollapsed }),
   setSettingsOpen: (settingsOpen) => set({ settingsOpen }),
-  setWorldviewZoneEnabled: (worldviewZoneEnabled) => set({ worldviewZoneEnabled }),
+  setWorldviewZoneEnabled: (worldviewZoneEnabled) => {
+    setJSONSync(WORLDVIEW_ZONE_KEY, worldviewZoneEnabled);
+    set({ worldviewZoneEnabled });
+  },
   customModules: [], navItems: [], dynamicPages: {},
   addCustomModule: (mod) => set((s) => ({ customModules: [...s.customModules, mod] })),
   removeCustomModule: (id) => set((s) => {

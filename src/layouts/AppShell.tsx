@@ -19,11 +19,12 @@ import {
 } from "lucide-react";
 import { useAppStore } from "@/stores/app-store";
 import { api } from "@/lib/api";
+import { getJSONSync } from "@/lib/storage";
 import type { NavItem, NavTarget, ProjectStage } from "@/types";
 import { MODULE_LABEL } from "@/types";
 
 import { RightDrawer } from "./RightDrawer";
-import { getCurrentVersion, checkForUpdate, markDismissed, type VersionInfo } from "@/lib/version-check";
+import { getCurrentVersion, checkForUpdate, type VersionInfo } from "@/lib/version-check";
 
 const STAGE_LABEL: Record<ProjectStage, string> = {
   ideation: "构思中",
@@ -134,7 +135,7 @@ function groupModels(
 }
 
 const ICON_MAP: Record<string, typeof Puzzle> = {
-  LayoutDashboard, ListTree, Layers, BookMarked, Lightbulb, Archive, Settings, Puzzle,
+  LayoutDashboard, ListTree, Layers, BookMarked, Lightbulb, Archive, Settings, BookOpen, Puzzle,
 };
 
 /** 获取 lucide 图标组件 */
@@ -165,6 +166,7 @@ function useNavItems(): NavItem[] {
       { id: "manuscript", label: "灵感", icon: "Lightbulb", kind: "builtin", pinned: true },
       { id: "material", label: "素材库", icon: "Archive", kind: "builtin", pinned: true },
       { id: "__settings__", label: "设置", icon: "Settings", kind: "builtin", pinned: true },
+      { id: "tutorial", label: "教程", icon: "BookOpen", kind: "builtin", pinned: true },
     );
 
     // 2. 自定义模块
@@ -334,7 +336,7 @@ export function AppShell({ children }: AppShellProps) {
   } {
     if (!shards) return { volumes: [], chapters: [] };
     const items = Object.entries(shards)
-      .map(([id, ch]) => ({ id, ...(ch as Record<string, unknown>) }))
+      .map(([id, ch]): Record<string, unknown> => ({ id, ...(ch as Record<string, unknown>) }))
       .sort((a, b) => ((a.number as number) || 0) - ((b.number as number) || 0));
     if (items.length === 0) return { volumes: [], chapters: [] };
 
@@ -359,7 +361,7 @@ export function AppShell({ children }: AppShellProps) {
     const volumes: Record<string, unknown>[] = [];
     const chapters: Record<string, unknown>[] = [];
     let volIdx = 0;
-    for (const [segId, info] of volMap) {
+    for (const [, info] of volMap) {
       const vid = `exp-vol-${volIdx++}`;
       volumes.push({ id: vid, title: info.title || `第 ${volIdx} 卷` });
       for (const chId of info.ids) {

@@ -6,7 +6,7 @@ export type ProjectStage =
   | "completed";
 
 /** 内置模块 ID */
-export type ModuleId = "overview" | "outline" | "beats" | "writing" | "story-bible" | "manuscript" | "material";
+export type ModuleId = "overview" | "outline" | "beats" | "writing" | "story-bible" | "manuscript" | "material" | "tutorial";
 
 /** 所有可导航的目标：内置模块 | 自定义模块 | 动态页面 */
 export type NavTarget = ModuleId | "custom" | "dynamic";
@@ -423,6 +423,7 @@ export const MODULE_LABEL: Record<ModuleId, string> = {
   "story-bible": "故事圣经",
   manuscript: "灵感",
   material: "素材库",
+  tutorial: "教程",
 };
 
 export const OVERVIEW_SECTION_LABEL: Record<OverviewSection, string> = {

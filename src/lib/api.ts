@@ -18,26 +18,45 @@ import type {
   TimelineNode,
   Volume,
   WorldTerm,
-  StyleGuide,
-  StoryBible,
-  ChapterSummary,
 } from "@/types";
 
 import { MODEL_TO_PROVIDER } from "./model-config";
 import { mockInvoke, realAiCompleteStream, mockAiCompleteStream } from "./mock-backend";
+import { recordError } from "./diagnostics";
+import { auditRecord } from "./audit-log";
 
 export const isTauri = () =>
   typeof window !== "undefined" &&
   !!(window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
 
 async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
-  if (isTauri()) {
-    // EXE 模式：走 Tauri Rust 后端（SQLite 持久化）
-    const { invoke } = await import("@tauri-apps/api/core");
-    return invoke<T>(cmd, args ?? {});
+  try {
+    let result: T;
+    if (isTauri()) {
+      const { invoke } = await import("@tauri-apps/api/core");
+      result = await invoke<T>(cmd, args ?? {});
+    } else {
+      result = await mockInvoke<T>(cmd, args);
+    }
+    // 审计：记录成功的 API 调用
+    auditRecord("api." + cmd, {
+      entityType: String(args?.entityType || args?.projectId || "").slice(0, 20),
+      summary: cmd,
+      ok: true,
+    });
+    return result;
+  } catch (e) {
+    // 记录 API 失败
+    recordError("error", "api", `API 调用失败: ${cmd}`, {
+      cmd, args, error: e instanceof Error ? e.message : String(e),
+    });
+    auditRecord("api." + cmd, {
+      summary: `失败: ${e instanceof Error ? e.message : String(e)}`,
+      ok: false,
+      detail: { cmd, error: String(e) },
+    });
+    throw e;
   }
-  // 浏览器模式：走 localStorage mock 后端
-  return mockInvoke<T>(cmd, args);
 }
 
 export const api = {
@@ -185,4 +204,7 @@ export const api = {
   /** 通用设置写入（通过 app_settings 表） */
   setSetting: (key: string, value: string) =>
     call<void>("set_setting", { key, value }),
+  /** 通用设置删除（通过 app_settings 表） */
+  deleteSetting: (key: string) =>
+    call<void>("delete_setting", { key }),
 };

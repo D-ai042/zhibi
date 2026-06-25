@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ReactFlow, Background, MiniMap,
+  ReactFlow, Background, MiniMap, SelectionMode,
   useNodesState, useEdgesState, addEdge,
   type Connection, type Node, type Edge, type NodeTypes, type EdgeTypes,
 } from "@xyflow/react";
@@ -60,7 +60,7 @@ function rebuildEdges(
 }
 
 export function CharactersModule() {
-  const { currentProject, setSelectedEntity, characterBump, saveAllBump, characterGroups, setCharacterGroups, characterZoneEnabled, setCharacterZoneEnabled, focusGroupBump } = useAppStore();
+  const { currentProject, setSelectedEntity, characterBump, saveAllBump, setCharacterGroups, characterZoneEnabled, setCharacterZoneEnabled, focusGroupBump } = useAppStore();
   const rfRef = useRef<any>(null);
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
@@ -95,6 +95,7 @@ export function CharactersModule() {
   const [groupCtx, setGroupCtx] = useState<{ x: number; y: number; gid: string; name: string } | null>(null);
   const [renameDlg, setRenameDlg] = useState<{ gid: string; name: string } | null>(null);
   const restoringRef = useRef(false);
+  const deletedIdsRef = useRef<Set<string>>(new Set());
 
   /** 撤回恢复 */
   const handleRestore = useCallback(
@@ -130,8 +131,27 @@ export function CharactersModule() {
   const handleDelete = useCallback(async (id: string) => {
     pushSnapshot();
     await api.deleteCharacter(id);
-    const store = useAppStore.getState(); store.bumpCharacters();
-  }, [pushSnapshot]);
+    if (currentProject) {
+      const groups = loadGroups(currentProject.id);
+      let dirty = false;
+      for (const g of groups) {
+        const before = g.childIds.length;
+        g.childIds = g.childIds.filter(cid => cid !== id);
+        if (g.childIds.length !== before) dirty = true;
+      }
+      if (dirty) {
+        const cleaned = groups.filter(g => g.childIds.length > 0);
+        saveGroups(currentProject.id, cleaned);
+        setCharacterGroups(cleaned.map(g => ({ id: g.id, name: g.name, locked: g.locked })));
+      }
+    }
+    setChars(prev => prev.filter(c => c.id !== id));
+    setNodes(prev => prev.filter(n => n.id !== id));
+    setEdges(prev => prev.filter(e => e.source !== id && e.target !== id));
+    setSelIds(prev => prev.filter(x => x !== id));
+    if (selectedChar?.id === id) setSelectedChar(null);
+    deletedIdsRef.current.add(id);
+  }, [pushSnapshot, currentProject, setCharacterGroups, setNodes, setEdges, selectedChar?.id]);
 
   // 用 ref 打破 handleEdgeDelete / handleEdgeUpdate 相互引用
   const edgeDeleteRef = useRef<(rels: RelationshipEdge[]) => void>(async () => { });
@@ -243,6 +263,16 @@ export function CharactersModule() {
     });
   }, []);
 
+  const findOpenSpot = useCallback((anchorX: number, anchorY: number, occupied: { x: number; y: number }[], radius = 150) => {
+    const angles = [-90, -30, 30, 90, 150, 210, 270, 330].map(d => d * Math.PI / 180);
+    const candidates = angles.map(a => ({ x: anchorX + Math.cos(a) * radius, y: anchorY + Math.sin(a) * radius }));
+    const score = (p: { x: number; y: number }) => {
+      if (occupied.length === 0) return Number.MAX_SAFE_INTEGER;
+      return Math.min(...occupied.map(o => Math.hypot(o.x - p.x, o.y - p.y)));
+    };
+    return candidates.sort((a, b) => score(b) - score(a))[0] ?? { x: anchorX, y: anchorY };
+  }, []);
+
   const load = useCallback(async () => {
     if (!currentProject) return;
     const [loadedChars, rels] = await Promise.all([
@@ -259,9 +289,17 @@ export function CharactersModule() {
     setCharacterGroups(groups.map(g => ({ id: g.id, name: g.name, locked: g.locked })));
     // 快照按年龄升序排列，小左大右
     for (const c of loadedChars) {
-      if (c.snapshots?.length > 1) {
-        c.snapshots.sort((a, b) => parseInt(a.age) - parseInt(b.age));
+      const snapshots = c.snapshots;
+      if (snapshots && snapshots.length > 1) {
+        snapshots.sort((a, b) => parseInt(a.age) - parseInt(b.age));
       }
+    }
+    // 过滤掉本地已删除的角色（防止后端缓存/竞态导致复活）
+    const filtered = loadedChars.filter((c: any) => !deletedIdsRef.current.has(c.id));
+    deletedIdsRef.current.clear();
+    if (filtered.length !== loadedChars.length) {
+      loadedChars.length = 0;
+      loadedChars.push(...filtered);
     }
     setChars(loadedChars);
     const hasCustom = loadedChars.some(c => c.layout_x > 0 || c.layout_y > 0);
@@ -300,9 +338,9 @@ export function CharactersModule() {
             // 出现在关联角色附近（偏移一定角度）
             const avgX = relatedPositions.reduce((s, p) => s + p.x, 0) / relatedPositions.length;
             const avgY = relatedPositions.reduce((s, p) => s + p.y, 0) / relatedPositions.length;
-            const angle = Math.random() * 2 * Math.PI;
-            const dist = 120 + Math.random() * 40;
-            pos[idx] = { x: avgX + dist * Math.cos(angle) - 50, y: avgY + dist * Math.sin(angle) - 50 };
+            pos[idx] = findOpenSpot(avgX, avgY, positioned, 150);
+            positioned.push(pos[idx]);
+            posMap.set(c.id, pos[idx]);
           } else {
             unplacedIndices.push(idx);
           }
@@ -311,7 +349,10 @@ export function CharactersModule() {
         for (let j = 0; j < unplacedIndices.length; j++) {
           const angle = (2 * Math.PI * j) / unplacedIndices.length - Math.PI / 2;
           const dist = cr + 60;
-          pos[unplacedIndices[j]] = { x: cx + dist * Math.cos(angle) - 50, y: cy + dist * Math.sin(angle) - 50 };
+          const idx = unplacedIndices[j];
+          pos[idx] = findOpenSpot(cx + dist * Math.cos(angle) - 50, cy + dist * Math.sin(angle) - 50, positioned, 120);
+          positioned.push(pos[idx]);
+          posMap.set(loadedChars[idx].id, pos[idx]);
         }
       }
       // 持久化新分配的位置，防止切换页面后重新随机
@@ -380,10 +421,15 @@ export function CharactersModule() {
         style: { stroke: color, strokeWidth: 1.5, strokeDasharray: rels.some(r => r.is_secret) ? "5,5" : undefined },
       };
     }));
-  }, [currentProject, setNodes, setEdges, circleLayout, handleUpdate, handleSelect, handleDelete]);
+  }, [currentProject, setNodes, setEdges, circleLayout, findOpenSpot, handleUpdate, handleSelect, handleDelete]);
 
   useEffect(() => { load(); }, [load]);
-  useEffect(() => { if (characterBump > 0) load(); }, [characterBump]);
+  useEffect(() => {
+    if (characterBump > 0) {
+      if (restoringRef.current) { restoringRef.current = false; return; }
+      load();
+    }
+  }, [characterBump]);
 
   // 左侧编组栏点击跳转到编组
   useEffect(() => {
@@ -484,17 +530,16 @@ export function CharactersModule() {
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
       if ((e.key === "Backspace" || e.key === "Delete") && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)) {
+        e.preventDefault();
         const toDelete = selIds.filter(id => nodes.find(n => n.id === id)?.type === "characterNode");
         if (toDelete.length > 0 && window.confirm(`确定删除选中的 ${toDelete.length} 个角色？`)) {
-          pushSnapshot();
-          toDelete.forEach(id => api.deleteCharacter(id));
-          const store = useAppStore.getState(); store.bumpCharacters();
+          toDelete.forEach(id => handleDelete(id).catch(e => console.error("deleteCharacter failed:", e)));
           setSelIds([]);
         }
       }
     };
     window.addEventListener("keydown", h); return () => window.removeEventListener("keydown", h);
-  }, [selIds, nodes, pushSnapshot]);
+  }, [selIds, nodes, handleDelete]);
 
   // 创建编组（支持超级编组 = 编组 + 角色混合选择）
   const doGroup = useCallback(() => {
@@ -609,18 +654,18 @@ export function CharactersModule() {
       const gs = loadGroups(currentProject.id);
       const g = gs.find(x => x.id === node.id);
       if (g) {
-        const dx = node.position.x - g.x;
-        const dy = node.position.y - g.y;
         g.x = node.position.x; g.y = node.position.y; saveGroups(currentProject.id, gs);
         for (const cid of g.childIds) {
           const c = chars.find(x => x.id === cid);
-          if (c) {
-            const nx = c.layout_x + dx;
-            const ny = c.layout_y + dy;
-            const newZone = zoneFromPos(ny);
+          const childNode = nodes.find(n => n.id === cid);
+          if (c && childNode) {
+            const nx = node.position.x + childNode.position.x;
+            const ny = node.position.y + childNode.position.y;
+            const newZone = zoneFromPos(ny + 36);
             const u = { ...c, layout_x: nx, layout_y: ny, zone: newZone };
             setChars(p => p.map(x => x.id === u.id ? u : x));
             setNodes(nds => nds.map(n => n.id === u.id ? { ...n, data: { ...n.data, character: u } } : n));
+            if (selectedChar?.id === u.id) setSelectedChar(u);
             api.saveNodeLayout("character", cid, nx, ny).catch(e => console.error("saveNodeLayout failed:", e));
             if (c.zone !== newZone) {
               api.saveCharacter(u as Character).catch(() => { });
@@ -649,7 +694,7 @@ export function CharactersModule() {
         }
       }
     }
-  }, [currentProject, chars, zoneFromPos, setChars, setNodes, selIds, nodes]);
+  }, [currentProject, chars, zoneFromPos, setChars, setNodes, selIds, nodes, selectedChar]);
 
   // ===== 连线 =====
   const onConnect = useCallback(async (conn: Connection) => {
@@ -732,13 +777,6 @@ export function CharactersModule() {
   // ===== nodeTypes =====
   const nts: NodeTypes = useMemo(() => ({ characterNode: CharacterNode as any, group: CharGroupNode as any }), []);
   const ets: EdgeTypes = useMemo(() => ({ customEdge: CustomEdge }), []);
-
-  const btnStyle: React.CSSProperties = {
-    width: 28, height: 28,
-    display: "flex", alignItems: "center", justifyContent: "center",
-    border: "none", background: "none", cursor: "pointer",
-    borderRadius: 6, fontSize: 16, color: "#64748b", lineHeight: 1,
-  };
 
   if (!currentProject) return null;
 
@@ -955,7 +993,7 @@ export function CharactersModule() {
                       />
                     ) : (
                       <div style={{ color: "#475569", fontSize: 11, lineHeight: 1.6 }}>
-                        {displayChar[section.key] ? displayChar[section.key].split("，").map((item, i) => (
+                        {displayChar[section.key] ? displayChar[section.key].split("，").map((item: string, i: number) => (
                           <div key={i}>{section.icon} {item}</div>
                         )) : <div style={{ color: "#94a3b8" }}>暂缺</div>}
                       </div>
@@ -981,7 +1019,7 @@ export function CharactersModule() {
                       />
                     ) : (
                       <div style={{ color: "#475569", fontSize: 11, lineHeight: 1.6 }}>
-                        {displayChar[section.key] ? displayChar[section.key].split("，").map((item, i) => (
+                        {displayChar[section.key] ? displayChar[section.key].split("，").map((item: string, i: number) => (
                           <div key={i}>{section.icon} {item}</div>
                         )) : <div style={{ color: "#94a3b8" }}>暂缺</div>}
                       </div>
@@ -1003,7 +1041,7 @@ export function CharactersModule() {
                     />
                   ) : (
                     <div style={{ color: "#475569", fontSize: 11, lineHeight: 1.6 }}>
-                      {displayChar.interests ? displayChar.interests.split("，").map((item, i) => (
+                      {displayChar.interests ? displayChar.interests.split("，").map((item: string, i: number) => (
                         <div key={i}>• {item}</div>
                       )) : <div style={{ color: "#94a3b8", textAlign: "center" }}>暂缺</div>}
                     </div>
@@ -1059,7 +1097,7 @@ export function CharactersModule() {
           fitView minZoom={0.1} maxZoom={3}
           nodesDraggable elementsSelectable
           panOnDrag={[2]} selectionOnDrag
-          selectionMode="partial"
+          selectionMode={SelectionMode.Partial}
           multiSelectionKeyCode="Shift"
         >
           <Background className="!opacity-30" color="#e2e8f0" gap={24} size={1} />
@@ -1094,7 +1132,7 @@ export function CharactersModule() {
             <button className="hover:bg-violet-50 rounded px-1.5 py-0.5 text-violet-700" onClick={() => { setPendSel([...selIds]); setGName(""); setShowDlg(true); }}>编组</button>
             <button className="hover:bg-violet-50 rounded px-1.5 py-0.5 text-violet-500" onClick={() => doUngroup()}>解散</button>
             <span style={{ width: 1, height: 14, background: "#e2e8f0" }} />
-            <button className="hover:bg-red-50 rounded px-1.5 py-0.5 text-red-600" onClick={() => { const ids = selIds.filter(id => nodes.find(n => n.id === id)?.type === "characterNode"); if (ids.length > 0 && window.confirm("Delete " + ids.length + " characters?")) { pushSnapshot(); ids.forEach(id => api.deleteCharacter(id)); const store = useAppStore.getState(); store.bumpCharacters(); setSelIds([]); } }}>X</button>
+            <button className="hover:bg-red-50 rounded px-1.5 py-0.5 text-red-600" onClick={() => { const ids = selIds.filter(id => nodes.find(n => n.id === id)?.type === "characterNode"); if (ids.length > 0 && window.confirm("Delete " + ids.length + " characters?")) { ids.forEach(id => handleDelete(id).catch(e => console.error("deleteCharacter failed:", e))); setSelIds([]); } }}>X</button>
           </div>
         )}
 
