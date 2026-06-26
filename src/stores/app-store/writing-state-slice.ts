@@ -1,8 +1,9 @@
-﻿// writing-state-slice.ts — 聊天 + API 配置分片（T10）
+// writing-state-slice.ts — 聊天 + API 配置分片（T10）
 import type { StateCreator } from "zustand";
 import type { ChatMessage, ApiConfig } from "@/types";
 import type { AppStore } from "./types";
 import { getJSONSync, setJSONSync } from "@/lib/storage";
+import { reportDiagnostic } from "@/lib/diagnostics";
 
 export interface WritingStateSlice {
   chatMessages: ChatMessage[];
@@ -29,7 +30,7 @@ export const createWritingStateSlice: StateCreator<AppStore, [], [], WritingStat
       const payload = { _projectId: currentProject.id, _projectName: currentProject.name, messages: msgs };
       setJSONSync("novel-workbench-chat-" + currentProject.id, payload);
       setJSONSync("novel-workbench-chat-name:" + currentProject.name, payload);
-    } catch { /* ignore */ }
+    } catch (e) { reportDiagnostic("error", "聊天记录保存失败", { error: String(e) }); }
   },
   loadChat: (projectId: string) => {
     try {

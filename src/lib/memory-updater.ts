@@ -14,7 +14,7 @@
 
 import { uuid } from "@/lib/uuid";
 import { api } from "./api";
-import { getJSONSync, setJSONSync, setSync, getSync, saveJSON } from "./storage";
+import { getJSONSync, setJSONSync, setSync, getSync, saveJSON, removeSync } from "./storage";
 import { loadAllChapters } from "./chapter-store";
 import { getAllProjectKeys } from "./backup";
 import { useAppStore } from "@/stores/app-store";
@@ -721,7 +721,7 @@ export function deleteSnapshot(projectId: string, snapId: string): boolean {
         setJSONSync(SNAP_IDX_KEY(projectId), filtered);
         // 清理分片数据
         for (const kind of ["chapters", "characters", "misc"]) {
-            try { localStorage.removeItem(shardKey(projectId, snapId, kind)); } catch { }
+            try { removeSync(shardKey(projectId, snapId, kind)); } catch { }
         }
         return true;
     } catch { return false; }

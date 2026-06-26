@@ -4,6 +4,7 @@ import type { CustomModule } from "@/types";
 import { renderMarkdown } from "@/lib/markdown";
 import * as LucideIcons from "lucide-react";
 import { uuid } from "@/lib/uuid";
+import { confirmDialog } from "@/lib/confirm";
 
 /** 解析 AI 回复中的 JSON 代码块，提取模块定义 */
 export function parseModuleFromResponse(content: string): {
@@ -87,7 +88,7 @@ export function CustomModuleRenderer({ mod }: Props) {
                     </button>
                     <button
                         type="button"
-                        onClick={() => { if (window.confirm(`确定删除模块「${mod.name || mod.id}」？`)) removeCustomModule(mod.id); }}
+                        onClick={() => { confirmDialog(`确定删除模块「${mod.name || mod.id}」？`).then(ok => { if (ok) removeCustomModule(mod.id); }) }}
                         className="flex items-center gap-1 rounded-md border border-red-200 px-2.5 py-1 text-xs text-red-600 hover:bg-red-50"
                         title="删除此模块"
                     >

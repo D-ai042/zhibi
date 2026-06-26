@@ -1,5 +1,6 @@
 // ChapterTree.tsx — 章节树组件（T6 拆分，JSX 原样从 WritingModule 提取）
 import { Plus, FileText, Trash2 } from "lucide-react";
+import { confirmDialog } from "@/lib/confirm";
 
 interface ChapterTreeProps {
     sidebarWidth: number;
@@ -144,8 +145,8 @@ export function ChapterTree(props: ChapterTreeProps) {
                                                 )}
                                             </button>
                                             {!selectMode && (
-                                                <button onClick={() => {
-                                                    if (window.confirm(`确定删除「第${ch.number}章 ${ch.title}」？`)) onDeleteChapter(ch.id);
+                                                <button onClick={async () => {
+                                                    if (await confirmDialog(`确定删除「第${ch.number}章 ${ch.title}」？`)) onDeleteChapter(ch.id);
                                                 }}
                                                     className="ml-1 hidden group-hover:block text-red-400 hover:text-red-600" title="删除章节">
                                                     <Trash2 size={14} />

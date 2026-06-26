@@ -3,6 +3,7 @@ import { useAppStore } from "@/stores/app-store";
 import { useState } from "react";
 import type { OutlineSection } from "@/types";
 import { OUTLINE_SECTION_LABEL } from "@/types";
+import { getJSONSync, setJSONSync } from "@/lib/storage";
 import { WorldviewPanel } from "./WorldviewPanel";
 import { CharactersPanel } from "./CharactersPanel";
 import { PlotDirectionPanel } from "./PlotDirectionPanel";
@@ -18,14 +19,14 @@ function updateGroupName(gid: string, newName: string) {
   if (!pid) return;
   // worldview groups
   const wKey = "worldview-groups-" + pid;
-  const wSaved = JSON.parse(localStorage.getItem(wKey) || "[]");
+  const wSaved = getJSONSync<any[]>(wKey, []);
   const wIdx = wSaved.findIndex((g: any) => g.id === gid);
-  if (wIdx >= 0) { wSaved[wIdx].name = newName; localStorage.setItem(wKey, JSON.stringify(wSaved)); }
+  if (wIdx >= 0) { wSaved[wIdx].name = newName; setJSONSync(wKey, wSaved); }
   // character groups
   const cKey = "char-groups-" + pid;
-  const cSaved = JSON.parse(localStorage.getItem(cKey) || "[]");
+  const cSaved = getJSONSync<any[]>(cKey, []);
   const cIdx = cSaved.findIndex((g: any) => g.id === gid);
-  if (cIdx >= 0) { cSaved[cIdx].name = newName; localStorage.setItem(cKey, JSON.stringify(cSaved)); }
+  if (cIdx >= 0) { cSaved[cIdx].name = newName; setJSONSync(cKey, cSaved); }
 }
 
 function removeGroup(gid: string) {
@@ -33,12 +34,12 @@ function removeGroup(gid: string) {
   if (!pid) return;
   // worldview groups
   const wKey = "worldview-groups-" + pid;
-  const wSaved = JSON.parse(localStorage.getItem(wKey) || "[]");
-  localStorage.setItem(wKey, JSON.stringify(wSaved.filter((g: any) => g.id !== gid)));
+  const wSaved = getJSONSync<any[]>(wKey, []);
+  setJSONSync(wKey, wSaved.filter((g: any) => g.id !== gid));
   // character groups
   const cKey = "char-groups-" + pid;
-  const cSaved = JSON.parse(localStorage.getItem(cKey) || "[]");
-  localStorage.setItem(cKey, JSON.stringify(cSaved.filter((g: any) => g.id !== gid)));
+  const cSaved = getJSONSync<any[]>(cKey, []);
+  setJSONSync(cKey, cSaved.filter((g: any) => g.id !== gid));
 }
 
 export function OutlineModule() {

@@ -3,6 +3,7 @@ import { Plus, Trash2, Lightbulb } from "lucide-react";
 import { useAppStore } from "@/stores/app-store";
 import { uuid } from "@/lib/uuid";
 import { getJSONSync, setJSONSync } from "@/lib/storage";
+import { confirmDialog } from "@/lib/confirm";
 
 // ===== 灵感卡片 =====
 interface InspirationCard {
@@ -147,7 +148,7 @@ export function InspirationPanel() {
                                         <span className="ml-2 whitespace-nowrap text-xs text-slate-400">{card.createdAt}</span>
                                         <button
                                             onClick={() => {
-                                                if (window.confirm("确定删除这条灵感？")) deleteCard(card.id);
+                                                confirmDialog("确定删除这条灵感？").then(ok => { if (ok) deleteCard(card.id); });
                                             }}
                                             className="ml-2 opacity-0 transition-opacity group-hover:opacity-100 text-red-400 hover:text-red-600"
                                             title="删除"

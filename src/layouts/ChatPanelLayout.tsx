@@ -2,6 +2,7 @@
 import { useEffect } from "react";
 import { Sparkles, FileText, Trash2, Square, Mic, MicOff, Paperclip, Send, X } from "lucide-react";
 import { renderMarkdown } from "@/lib/markdown";
+import { confirmDialog } from "@/lib/confirm";
 import type { ChatMessage, MemoryEntry, WorldTerm } from "@/types";
 import { ChatMessageBubble } from "./ChatMessageBubble";
 import { CharacterApplyButton } from "./CharacterApplyButton";
@@ -87,7 +88,7 @@ export function ChatPanelLayout(props: ChatPanelLayoutProps) {
                 <div className="flex items-center gap-2"><Sparkles className="h-4 w-4 text-violet-600" /><span className="text-sm font-semibold">AI 创作助手</span></div>
                 <div className="flex items-center gap-1">
                     <button type="button" title="记忆" onClick={() => onToggleMemory(!memoryTab)} className={`rounded p-1 hover:bg-slate-100 ${memoryTab ? "text-amber-600 bg-amber-50" : "text-slate-400"}`}><FileText className="h-4 w-4" />{memoryEntries.length > 0 && <span className="ml-0.5 text-[9px] font-medium">{memoryEntries.length}</span>}</button>
-                    <button type="button" title="清空对话" onClick={() => { if (window.confirm('确定清空全部对话记录？此操作不可撤销。')) onClearChat(); }} className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"><Trash2 className="h-4 w-4" /></button>
+                    <button type="button" title="清空对话" onClick={() => { confirmDialog('确定清空全部对话记录？此操作不可撤销。').then(ok => { if (ok) onClearChat(); }); }} className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"><Trash2 className="h-4 w-4" /></button>
                 </div>
             </div>
             <p className="border-b bg-slate-50/80 px-3 py-1 text-[10px] text-slate-400">{contextHint}</p>

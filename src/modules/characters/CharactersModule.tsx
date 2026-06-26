@@ -14,6 +14,7 @@ import CharGroupNode from "./CharGroupNode";
 import { useUndoRedo } from "./useUndoRedo";
 import { uuid } from "@/lib/uuid";
 import { getJSONSync, setJSONSync } from "@/lib/storage";
+import { confirmDialog } from "@/lib/confirm";
 
 const STORAGE_KEY = "novel-workbench-mock";
 
@@ -528,11 +529,11 @@ export function CharactersModule() {
 
   // Backspace/Delete 删除选中角色（一次性快照 + 确认）
   useEffect(() => {
-    const h = (e: KeyboardEvent) => {
+    const h = async (e: KeyboardEvent) => {
       if ((e.key === "Backspace" || e.key === "Delete") && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)) {
         e.preventDefault();
         const toDelete = selIds.filter(id => nodes.find(n => n.id === id)?.type === "characterNode");
-        if (toDelete.length > 0 && window.confirm(`确定删除选中的 ${toDelete.length} 个角色？`)) {
+        if (toDelete.length > 0 && await confirmDialog(`确定删除选中的 ${toDelete.length} 个角色？`)) {
           toDelete.forEach(id => handleDelete(id).catch(e => console.error("deleteCharacter failed:", e)));
           setSelIds([]);
         }
@@ -1132,7 +1133,7 @@ export function CharactersModule() {
             <button className="hover:bg-violet-50 rounded px-1.5 py-0.5 text-violet-700" onClick={() => { setPendSel([...selIds]); setGName(""); setShowDlg(true); }}>编组</button>
             <button className="hover:bg-violet-50 rounded px-1.5 py-0.5 text-violet-500" onClick={() => doUngroup()}>解散</button>
             <span style={{ width: 1, height: 14, background: "#e2e8f0" }} />
-            <button className="hover:bg-red-50 rounded px-1.5 py-0.5 text-red-600" onClick={() => { const ids = selIds.filter(id => nodes.find(n => n.id === id)?.type === "characterNode"); if (ids.length > 0 && window.confirm("Delete " + ids.length + " characters?")) { ids.forEach(id => handleDelete(id).catch(e => console.error("deleteCharacter failed:", e))); setSelIds([]); } }}>X</button>
+            <button className="hover:bg-red-50 rounded px-1.5 py-0.5 text-red-600" onClick={() => { const ids = selIds.filter(id => nodes.find(n => n.id === id)?.type === "characterNode"); if (ids.length > 0) confirmDialog("Delete " + ids.length + " characters?").then(ok => { if (ok) { ids.forEach(id => handleDelete(id).catch(e => console.error("deleteCharacter failed:", e))); setSelIds([]); } }); }}>X</button>
           </div>
         )}
 

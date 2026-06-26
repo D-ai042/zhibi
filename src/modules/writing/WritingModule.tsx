@@ -7,6 +7,7 @@ import { AiWritingDialog } from "@/components/editor/AiWritingDialog";
 import { AiWriteChapterDialog } from "@/components/editor/AiWriteChapterDialog";
 import { renderMarkdown } from "@/lib/markdown";
 import { getJSONSync, setJSONSync } from "@/lib/storage";
+import { confirmDialog } from "@/lib/confirm";
 import { loadAllChapters, saveChapter, saveAllChapters, deleteChapter as deleteStoredChapter, type Chapter as PlotChapter } from "@/lib/chapter-store";
 import type { ChapterSummary, BeatCard } from "@/types";
 import { uuid } from "@/lib/uuid";
@@ -90,7 +91,7 @@ export function WritingModule() {
         const sortedBright = getSortedBrightIds(pid); const vo = new Map<string, number>(); sortedBright.forEach((id, i) => vo.set(id, i));
         const sorted = [...filtered].sort((a, b) => { const oa = vo.get(a.volumeSegmentId) ?? 999; const ob = vo.get(b.volumeSegmentId) ?? 999; if (oa !== ob) return oa - ob; return a.number - b.number; });
         const renumbered = sorted.map((ch, idx) => { const nn = idx + 1; if (ch.number !== nn) { changed = true; return { ...ch, number: nn }; } return ch; });
-        if (changed) saveAllChapters(pid, renumbered); setChapters(renumbered);
+        if (changed) { const r = saveAllChapters(pid, renumbered); if (!r.ok) useAppStore.getState().setAutosaveStatus("⚠ 章节迁移保存失败"); } setChapters(renumbered);
     }, [pid]);
 
     const _skipNextChapterEffect = useRef(false);
@@ -108,14 +109,14 @@ export function WritingModule() {
     const [ctxStyleNarrative, setCtxStyleNarrative] = useState("");
     const [ctxStyleTone, setCtxStyleTone] = useState("");
     const [ctxCollapsed, setCtxCollapsed] = useState(true);
-    let loadGen = 0;
+    const loadGenRef = useRef(0);
     async function loadCtx(projectId: string, chapterNumber: number, chapterId: string) {
-        const gen = ++loadGen;
+        const gen = ++loadGenRef.current;
         try {
-            const [summaries, beatCards, styleGuide] = await Promise.all([api.getChapterSummaries(projectId).catch(() => [] as any[]), api.listBeatCards(chapterId).catch(() => [] as any[]), api.getStyleGuide(projectId).catch(() => null)]); if (gen !== loadGen) return; setCtxSummaries(summaries.filter((s: any) => s.chapter_number < chapterNumber && s.chapter_number >= chapterNumber - 5).sort((a: any, b: any) => a.chapter_number - b.chapter_number)); setCtxBeatCards(beatCards); if (styleGuide) { setCtxStyleRedlines((styleGuide as any).writing_rules || ""); setCtxStyleNarrative((styleGuide as any).narrative_style || ""); setCtxStyleTone((styleGuide as any).writing_tone || ""); } else { setCtxStyleRedlines(""); setCtxStyleNarrative(""); setCtxStyleTone(""); }
-            try { const store = getJSONSync(`novel-workbench-log-${projectId}`, {} as any); const states = store?.characterStates || []; if (gen === loadGen) setCtxCharacters(states.filter((s: any) => s.last_active_chapter >= chapterNumber - 10).map((s: any) => ({ name: s.character_name, status: s.current_status }))); } catch { }
-            try { if (gen === loadGen) { const allTerms = await api.listWorldTerms(projectId); const rules = allTerms.filter(t => t.term_type === "rule").map(t => `· ${t.title}：${t.one_liner || ""}`); setCtxWorldRules(rules.slice(0, 8)); } } catch { setCtxWorldRules([]); }
-            try { if (gen === loadGen) { const allChapters = loadAllChapters(projectId); const prev = allChapters.find((ch: any) => ch.number === chapterNumber - 1); if (prev?.content) { const clean = prev.content.replace(/<[^>]+>/g, '').trim(); if (clean) setCtxPrevContent({ number: prev.number, title: prev.title || "", content: clean.slice(-3000) }); else setCtxPrevContent(null); } else setCtxPrevContent(null); } } catch { setCtxPrevContent(null); }
+            const [summaries, beatCards, styleGuide] = await Promise.all([api.getChapterSummaries(projectId).catch(() => [] as any[]), api.listBeatCards(chapterId).catch(() => [] as any[]), api.getStyleGuide(projectId).catch(() => null)]); if (gen !== loadGenRef.current) return; setCtxSummaries(summaries.filter((s: any) => s.chapter_number < chapterNumber && s.chapter_number >= chapterNumber - 5).sort((a: any, b: any) => a.chapter_number - b.chapter_number)); setCtxBeatCards(beatCards); if (styleGuide) { setCtxStyleRedlines((styleGuide as any).writing_rules || ""); setCtxStyleNarrative((styleGuide as any).narrative_style || ""); setCtxStyleTone((styleGuide as any).writing_tone || ""); } else { setCtxStyleRedlines(""); setCtxStyleNarrative(""); setCtxStyleTone(""); }
+            try { const store = getJSONSync(`novel-workbench-log-${projectId}`, {} as any); const states = store?.characterStates || []; if (gen === loadGenRef.current) setCtxCharacters(states.filter((s: any) => s.last_active_chapter >= chapterNumber - 10).map((s: any) => ({ name: s.character_name, status: s.current_status }))); } catch { }
+            try { if (gen === loadGenRef.current) { const allTerms = await api.listWorldTerms(projectId); const rules = allTerms.filter(t => t.term_type === "rule").map(t => `· ${t.title}：${t.one_liner || ""}`); setCtxWorldRules(rules.slice(0, 8)); } } catch { setCtxWorldRules([]); }
+            try { if (gen === loadGenRef.current) { const allChapters = loadAllChapters(projectId); const prev = allChapters.find((ch: any) => ch.number === chapterNumber - 1); if (prev?.content) { const clean = prev.content.replace(/<[^>]+>/g, '').trim(); if (clean) setCtxPrevContent({ number: prev.number, title: prev.title || "", content: clean.slice(-3000) }); else setCtxPrevContent(null); } else setCtxPrevContent(null); } } catch { setCtxPrevContent(null); }
         } catch { }
     }
 
@@ -135,12 +136,12 @@ export function WritingModule() {
     useEffect(() => { if (!editingContent || !selectedChapterId || !pid) return; const t = setTimeout(() => { setJSONSync(DRAFT_KEY(pid, selectedChapterId), { content: editingContent, savedAt: new Date().toISOString() }); }, 2000); return () => clearTimeout(t); }, [editingContent, selectedChapterId, pid]);
     useEffect(() => { if (selectedChapterId && pid) { const draft = getJSONSync(DRAFT_KEY(pid, selectedChapterId), null as { content: string; savedAt: string } | null); if (draft && draft.content !== savedContentRef.current) setPendingDraft(draft); else setPendingDraft(null); } }, [selectedChapterId, pid]);
 
-    const addChapter = useCallback((volumeSegmentId: string) => { if (!pid) return; setChapters(prev => { const gm = prev.reduce((m, c) => Math.max(m, c.number), 0); const ch: PlotChapter = { id: uuid(), volumeSegmentId, number: gm + 1, title: newChapterTitle.trim(), content: "" }; const saved = saveChapter(pid, ch); if (!saved.ok) { useAppStore.getState().setAutosaveStatus("⚠ 保存失败，请重试"); return prev; } setShowAddDlg(null); setNewChapterTitle(""); setSelectedChapterId(ch.id); return [...prev, ch]; }); }, [pid, newChapterTitle]);
-    const deleteChapter = useCallback((chId: string) => { if (!pid) return; const ch = chapters.find(c => c.id === chId); if (!window.confirm(`确定删除「${ch?.title || chId}」？章节内容将永久丢失。`)) return; deleteStoredChapter(pid, chId); setChapters(prev => prev.filter(c => c.id !== chId)); if (selectedChapterId === chId) { setSelectedChapterId(null); setEditingContent(""); } }, [pid, selectedChapterId, chapters]);
-    const renameChapter = useCallback((chId: string, newTitle: string) => { if (!pid) return; setChapters(prev => { const upd = prev.map(c => c.id === chId ? { ...c, title: newTitle } : c); const renamed = upd.find(c => c.id === chId); if (renamed) saveChapter(pid, renamed); return upd; }); }, [pid]);
+    const addChapter = useCallback((volumeSegmentId: string) => { if (!pid) return; const gm = chapters.reduce((m, c) => Math.max(m, c.number), 0); const ch: PlotChapter = { id: uuid(), volumeSegmentId, number: gm + 1, title: newChapterTitle.trim(), content: "" }; const saved = saveChapter(pid, ch); if (!saved.ok) { useAppStore.getState().setAutosaveStatus("⚠ 保存失败，请重试"); return; } setChapters(prev => [...prev, ch]); setShowAddDlg(null); setNewChapterTitle(""); setSelectedChapterId(ch.id); }, [pid, chapters, newChapterTitle]);
+    const deleteChapter = useCallback(async (chId: string) => { if (!pid) return; const ch = chapters.find(c => c.id === chId); if (!await confirmDialog(`确定删除「${ch?.title || chId}」？章节内容将永久丢失。`)) return; deleteStoredChapter(pid, chId); setChapters(prev => prev.filter(c => c.id !== chId)); if (selectedChapterId === chId) { setSelectedChapterId(null); setEditingContent(""); } }, [pid, selectedChapterId, chapters]);
+    const renameChapter = useCallback((chId: string, newTitle: string) => { if (!pid) return; const renamed = chapters.find(c => c.id === chId); if (renamed) { const r = saveChapter(pid, { ...renamed, title: newTitle }); if (!r.ok) useAppStore.getState().setAutosaveStatus("⚠ 重命名保存失败"); } setChapters(prev => prev.map(c => c.id === chId ? { ...c, title: newTitle } : c)); }, [pid, chapters]);
 
     // AI writing hook — all handlers extracted to useAiWriting.ts
-    const persistAiChapters = useCallback((projectId: string, chs: PlotChapter[]) => { const current = selectedChapterId ? chs.find(c => c.id === selectedChapterId) : undefined; if (current) saveChapter(projectId, current); else saveAllChapters(projectId, chs); }, [selectedChapterId]);
+    const persistAiChapters = useCallback((projectId: string, chs: PlotChapter[]) => { const current = selectedChapterId ? chs.find(c => c.id === selectedChapterId) : undefined; const r = current ? saveChapter(projectId, current) : saveAllChapters(projectId, chs); if (!r.ok) useAppStore.getState().setAutosaveStatus("⚠ AI 内容保存失败"); }, [selectedChapterId]);
     const { aiWriting, aiError, humanizing, polishing, writeDlg, setWriteDlg, lastWriteParamsRef, handleAiWriteChapter, handleHumanize, handlePolish } = useAiWriting(pid, selectedChapter, editingContent, pushUndo, setEditingContent, (updater) => setChapters(prev => { const upd = updater(prev); persistAiChapters(pid!, upd); return upd; }), persistAiChapters, syncEditorHTML);
 
     const handleRebase = useCallback(async () => { if (!pid) return; setRebaseRunning(true); setRebaseProgress(null); try { await rebaseMemory(pid, staleInfo?.fromChapter || 1, (c, t) => setRebaseProgress({ current: c, total: t })); setStaleInfo(null); useAppStore.getState().setAutosaveStatus("✅ 级联重跑完成"); if (selectedChapterId) { const ch = chapters.find(c => c.id === selectedChapterId); if (ch) loadCtx(pid, ch.number, selectedChapterId); } } catch { useAppStore.getState().setAutosaveStatus("⚠ 级联重跑失败"); } finally { setRebaseRunning(false); setRebaseProgress(null); } }, [pid, selectedChapterId, chapters, staleInfo]);

@@ -54,6 +54,10 @@ export function useProjectBootstrap() {
     }).then(() => {
       // 迁移完成后刷新数据
       refresh();
+      // prewarm 完成后重新读取 UI 偏好（store 初始化早于 prewarm，EXE 模式下此时才能读到 SQLite 数据）
+      const store = useAppStore.getState();
+      store.setCharacterZoneEnabled?.({ ...store.characterZoneEnabled, ...getJSONSync("ui-character-zone-enabled", {}) });
+      store.setWorldviewZoneEnabled?.({ ...store.worldviewZoneEnabled, ...getJSONSync("ui-worldview-zone-enabled", {}) });
     }).catch((e) => {
       reportDiagnostic("error", "项目启动数据预热/迁移失败", { error: String(e) });
       refresh();

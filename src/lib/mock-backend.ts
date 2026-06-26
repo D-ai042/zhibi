@@ -72,9 +72,40 @@ let _mockStoreCache: MockStore | null = null;
 function load(): MockStore {
   if (_mockStoreCache) return _mockStoreCache;
 
+  const defaultStore: MockStore = {
+    projects: [],
+    volumes: [],
+    chapters: [],
+    timelineNodes: [],
+    plotEvents: [],
+    characters: [],
+    edges: [],
+    beatCards: [],
+    chapterContents: [],
+    lockedFields: [],
+    worldTerms: [],
+    apiConfig: {
+      api_base_url: "https://api.deepseek.com",
+      api_model: "deepseek-chat",
+      has_api_key: false,
+      provider_keys: {},
+      provider_base_urls: {},
+      provider_models: {},
+      stt: { activeProvider: "openai", providers: { openai: { api_key: "", secret_key: "", base_url: "https://api.openai.com/v1", model: "whisper-1" } }, enabled: false },
+    },
+    currentProjectId: null,
+  };
+
   const raw = localStorage.getItem(STORAGE_KEY);
   if (raw) {
-    const data = JSON.parse(raw) as MockStore;
+    let data: MockStore;
+    try {
+      data = JSON.parse(raw) as MockStore;
+    } catch {
+      localStorage.removeItem(STORAGE_KEY);
+      _mockStoreCache = defaultStore;
+      return defaultStore;
+    }
     // ★ 防御：apiConfig 可能不存在或损坏
     if (!data.apiConfig) data.apiConfig = {
       api_base_url: "https://api.deepseek.com",
@@ -148,29 +179,6 @@ function load(): MockStore {
     return data;
   }
 
-  const defaultStore: MockStore = {
-    projects: [],
-    volumes: [],
-    chapters: [],
-    timelineNodes: [],
-    plotEvents: [],
-    characters: [],
-    edges: [],
-    beatCards: [],
-    chapterContents: [],
-    lockedFields: [],
-    worldTerms: [],
-    apiConfig: {
-      api_base_url: "https://api.deepseek.com",
-      api_model: "deepseek-chat",
-      has_api_key: false,
-      provider_keys: {},
-      provider_base_urls: {},
-      provider_models: {},
-      stt: { activeProvider: "openai", providers: { openai: { api_key: "", secret_key: "", base_url: "https://api.openai.com/v1", model: "whisper-1" } }, enabled: false },
-    },
-    currentProjectId: null,
-  };
   _mockStoreCache = defaultStore;
   return defaultStore;
 }

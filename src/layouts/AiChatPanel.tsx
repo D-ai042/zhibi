@@ -1,8 +1,9 @@
-﻿// AiChatPanel.tsx — AI 对话面板壳（T7 拆分，按业务拆分）
+// AiChatPanel.tsx — AI 对话面板壳（T7 拆分，按业务拆分）
 import { useRef, useEffect, useState, useCallback } from "react";
 // lucide icons are used in ChatPanelLayout, not here
 import { useSttRecorder } from "@/lib/use-stt";
 import { api } from "@/lib/api";
+import { confirmDialog } from "@/lib/confirm";
 import { useAiChatStream, type AiChatStreamCallbacks } from "./useAiChatStream";
 import { useAppStore } from "@/stores/app-store";
 import { MemoryEngine } from "@/lib/memory-engine";
@@ -177,7 +178,7 @@ export function AiChatPanel() {
         setPendingRemoveEdges={setPendingRemoveEdges} setPendingSnapshots={setPendingSnapshots}
         chatContainerRef={chatContainerRef} bottomRef={bottomRef} fileInputRef={fileInputRef}
         stt={stt} sttLoading={sttLoading} contextHint={contextHint()}
-        onClearChat={() => { if (window.confirm('确定清空全部对话记录？此操作不可撤销。')) clearChat(); }}
+        onClearChat={() => { confirmDialog('确定清空全部对话记录？此操作不可撤销。').then(ok => { if (ok) clearChat(); }); }}
         onToggleMemory={setMemoryTab}
         onStartEdit={(id: string, content: string) => { setEditingMsgId(id); setEditingContent(content); }}
         onCommitEdit={handleConfirmEdit} onCancelEdit={() => { setEditingMsgId(null); setEditingContent(''); }}

@@ -104,7 +104,7 @@ export function saveAllChapters(pid: string, chapters: Chapter[]): SaveResult {
 /** 删除单个章节（同步更新索引） */
 export function deleteChapter(pid: string, chapterId: string): void {
     const key = `chapter-${pid}-${chapterId}`;
-    try { setJSONSync(key, null); } catch { /* ignore */ }
+    try { removeSync(key); } catch { /* ignore */ }
     const ids: string[] = getJSONSync(`chapter-index-${pid}`, []);
     const newIds = ids.filter(id => id !== chapterId);
     if (newIds.length !== ids.length) {

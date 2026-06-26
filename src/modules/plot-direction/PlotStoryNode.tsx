@@ -2,6 +2,7 @@ import { memo, useState, useRef, useCallback, useEffect } from "react";
 import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
 import { Trash2, ChevronUp, Plus, X } from "lucide-react";
 import { uuid } from "@/lib/uuid";
+import { confirmDialog } from "@/lib/confirm";
 
 export interface PlotBeat {
     id: string;
@@ -288,11 +289,12 @@ function PlotStoryNode({ data, selected }: NodeProps<Node<PlotStoryNodeData>>) {
     };
     const batchDeleteBeats = () => {
         if (selectedBeatIds.size === 0) return;
-        if (!window.confirm(`确定删除选中的 ${selectedBeatIds.size} 个细纲？此操作不可撤销。`)) return;
+        confirmDialog(`确定删除选中的 ${selectedBeatIds.size} 个细纲？此操作不可撤销。`).then(ok => { if (!ok) return;
         const remaining = beats.filter(b => !selectedBeatIds.has(b.id));
         const renumbered = remaining.map((b, i) => ({ ...b, number: i + 1 }));
         onUpdate({ ...segment, beats: renumbered });
         setSelectedBeatIds(new Set());
+        });
     };
 
     // 找到替身中心点最近的目标卡片

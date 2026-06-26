@@ -20,6 +20,7 @@ import {
 import { useAppStore } from "@/stores/app-store";
 import { api } from "@/lib/api";
 import { getJSONSync } from "@/lib/storage";
+import { alertDialog } from "@/lib/confirm";
 import type { NavItem, NavTarget, ProjectStage } from "@/types";
 import { MODULE_LABEL } from "@/types";
 
@@ -418,7 +419,7 @@ export function AppShell({ children }: AppShellProps) {
         }, currentProject.id);
       }
     } catch (e) {
-      alert(`导出失败: ${e instanceof Error ? e.message : String(e)}`);
+      alertDialog(`导出失败: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setExporting(false);
     }
@@ -451,7 +452,7 @@ export function AppShell({ children }: AppShellProps) {
         chapterContents: mergedContents,
       }, currentProject.id);
     } catch (e) {
-      alert(`导出失败: ${e instanceof Error ? e.message : String(e)}`);
+      alertDialog(`导出失败: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setExporting(false);
     }

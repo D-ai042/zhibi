@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { BookOpen, FolderOpen, Plus, Settings, Trash2, Edit3, Check, X } from "lucide-react";
 import { api } from "@/lib/api";
-import { setJSONSync } from "@/lib/storage";
+import { removeSync } from "@/lib/storage";
+import { alertDialog } from "@/lib/confirm";
 import { useAppStore } from "@/stores/app-store";
 import type { Project } from "@/types";
 
@@ -25,14 +26,20 @@ export function WelcomeScreen({ onOpenProject }: Props) {
       const list = await api.getProjects();
       setProjects(list);
       onOpenProject(p);
+    } catch (e) {
+      alertDialog(`创建项目失败: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setCreating(false);
     }
   };
 
   const open = async (p: Project) => {
-    await api.openProject(p.id);
-    onOpenProject(p);
+    try {
+      await api.openProject(p.id);
+      onOpenProject(p);
+    } catch (e) {
+      alertDialog(`打开项目失败: ${e instanceof Error ? e.message : String(e)}`);
+    }
   };
 
   const startRename = (p: Project) => {
@@ -42,15 +49,19 @@ export function WelcomeScreen({ onOpenProject }: Props) {
 
   const confirmRename = async () => {
     if (!renamingId || !renameValue.trim()) return;
-    await api.renameProject(renamingId, renameValue.trim());
-    const list = await api.getProjects();
-    setProjects(list);
-    // 如果当前打开的项目被改名，同步更新
-    const store = useAppStore.getState();
-    if (store.currentProject?.id === renamingId) {
-      store.setCurrentProject({ ...store.currentProject, name: renameValue.trim() });
+    try {
+      await api.renameProject(renamingId, renameValue.trim());
+      const list = await api.getProjects();
+      setProjects(list);
+      // 如果当前打开的项目被改名，同步更新
+      const store = useAppStore.getState();
+      if (store.currentProject?.id === renamingId) {
+        store.setCurrentProject({ ...store.currentProject, name: renameValue.trim() });
+      }
+      setRenamingId(null);
+    } catch (e) {
+      alertDialog(`重命名失败: ${e instanceof Error ? e.message : String(e)}`);
     }
-    setRenamingId(null);
   };
 
   const cancelRename = () => {
@@ -60,24 +71,29 @@ export function WelcomeScreen({ onOpenProject }: Props) {
   const confirmDelete = async (pid: string) => {
     const store = useAppStore.getState();
     const projName = store.projects.find(p => p.id === pid)?.name;
-    await api.deleteProject(pid);
-    // 清理 localStorage 中的聊天记录（遍历 key 是收口文件 backup/migrate 模式，保留）
-    for (let i = localStorage.length - 1; i >= 0; i--) {
-      const key = localStorage.key(i);
-      if (key?.startsWith(`novel-workbench-chat-${pid}`)) {
-        try { setJSONSync(key, null as any); localStorage.removeItem(key); } catch { }
+    try {
+      await api.deleteProject(pid);
+      // 清理 localStorage 中的聊天记录（遍历 key 是收口文件 backup/migrate 模式，保留）
+      for (let i = localStorage.length - 1; i >= 0; i--) {
+        const key = localStorage.key(i);
+        if (key?.startsWith(`novel-workbench-chat-${pid}`)) {
+          try { removeSync(key); } catch { }
+        }
       }
+      if (projName) {
+        try { removeSync(`novel-workbench-chat-name:${projName}`); } catch { }
+      }
+      const list = await api.getProjects();
+      setProjects(list);
+      // 如果删除的是当前打开的项目，回到欢迎页
+      if (store.currentProject?.id === pid) {
+        store.setCurrentProject(null);
+      }
+      setDeletingId(null);
+    } catch (e) {
+      alertDialog(`删除项目失败: ${e instanceof Error ? e.message : String(e)}`);
+      setDeletingId(null);
     }
-    if (projName) {
-      try { localStorage.removeItem(`novel-workbench-chat-name:${projName}`); } catch { }
-    }
-    const list = await api.getProjects();
-    setProjects(list);
-    // 如果删除的是当前打开的项目，回到欢迎页
-    if (store.currentProject?.id === pid) {
-      store.setCurrentProject(null);
-    }
-    setDeletingId(null);
   };
 
   return (
@@ -176,7 +192,7 @@ export function WelcomeScreen({ onOpenProject }: Props) {
         onClick={() => setSettingsOpen(true)}
         className="mt-6 flex items-center gap-2 text-sm text-slate-600 hover:text-amber-700"
       >
-        <Settings className="h-4 w-4" /> API 设置（DeepSeek）
+        <Settings className="h-4 w-4" /> 设置
       </button>
     </div>
   );

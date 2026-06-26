@@ -1,10 +1,11 @@
 // DataMigrateTab.tsx — 数据导入导出标签页（T9）
 import { useState, useCallback } from "react";
-import { Download, Upload, FileDown, AlertTriangle } from "lucide-react";
+import { Download, Upload, FileDown, AlertTriangle, X } from "lucide-react";
 import { getSync, getJSONSync } from "@/lib/storage";
 import { useAppStore } from "@/stores/app-store";
 import { runIntegrityCheck } from "@/lib/diagnostics";
-import { migrateImport } from "@/lib/data-migrate";
+import { api } from "@/lib/api";
+import { setSync, setJSONSync } from "@/lib/storage";
 import { clearMockStoreCache } from "@/lib/mock-backend";
 
 interface ImportResult {
@@ -32,8 +33,8 @@ export function DataMigrateTab() {
     const [importCheckIssues, setImportCheckIssues] = useState<number>(0);
 
 
-    /** 核心导出逻辑：收集指定前缀的 keys → JSON → Blob → download */
-    const doExport = useCallback((label: string, keyFilter: (k: string) => boolean) => {
+    /** 核心导出逻辑：收集指定前缀的 keys → JSON → Tauri 弹窗或 Blob 下载 */
+    const doExport = useCallback(async (label: string, keyFilter: (k: string) => boolean) => {
         setExporting(true); setMsg("");
         try {
             const collected: { key: string; value: string }[] = [];
@@ -46,23 +47,41 @@ export function DataMigrateTab() {
             }
             const data = { version: "2.0", exportedAt: new Date().toISOString(), keys: collected };
             const jsonStr = JSON.stringify(data, null, 2);
-            const blob = new Blob([jsonStr], { type: "application/json" });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement("a");
-            a.href = url;
-            a.download = `${label}_${new Date().toLocaleDateString("zh-CN").replace(/\//g, "-")}.json`;
-            a.click();
-            URL.revokeObjectURL(url);
+            const fileName = `${label}_${new Date().toLocaleDateString("zh-CN").replace(/\//g, "-")}.json`;
+            let saved = false;
+            try {
+                const blob = new Blob([jsonStr], { type: "application/json" });
+                const { save } = await import("@tauri-apps/plugin-dialog");
+                const { invoke } = await import("@tauri-apps/api/core");
+                const filePath = await save({ defaultPath: fileName, filters: [{ name: "JSON", extensions: ["json"] }] });
+                if (filePath) {
+                    const buf = await blob.arrayBuffer();
+                    const bytes = new Uint8Array(buf);
+                    let binary = "";
+                    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+                    await invoke("save_export_file", { projectId: pid || "", filename: fileName, dataBase64: btoa(binary), filePath });
+                    saved = true;
+                }
+            } catch { /* 降级到浏览器下载 */ }
+            if (!saved) {
+                const blob = new Blob([jsonStr], { type: "application/json" });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = fileName;
+                a.click();
+                URL.revokeObjectURL(url);
+            }
             setMsg(`✅ ${label}已导出（${collected.length} 条）`); setTimeout(() => setMsg(""), 2500);
         } catch (e) { setMsg(`❌ 导出失败：${e}`); }
         setExporting(false);
-    }, []);
+    }, [pid]);
 
     /** 导出全部数据（所有 localStorage keys） */
     const handleExportAll = useCallback(() => doExport("全部数据备份", () => true), [doExport]);
 
     /** 导出当前项目（只含当前 projectId 的 key + 从 mock 中提取的项目数据） */
-    const handleExportProject = useCallback(() => {
+    const handleExportProject = useCallback(async () => {
         if (!pid) { setMsg("⚠️ 请先打开一个项目"); setTimeout(() => setMsg(""), 2000); return; }
         setExporting(true); setMsg("");
         try {
@@ -70,7 +89,7 @@ export function DataMigrateTab() {
             // 1. 收集所有属于当前项目的分片 key
             for (let i = 0; i < localStorage.length; i++) {
                 const key = localStorage.key(i);
-                if (!key || key === "novel-workbench-mock") continue; // 全局 key 单独处理
+                if (!key || key === "novel-workbench-mock") continue;
                 if (!key.includes(pid)) continue;
                 const value = getSync(key);
                 if (value !== null) collected.push({ key, value });
@@ -85,7 +104,6 @@ export function DataMigrateTab() {
                     edges: (mock.edges || []).filter((e: any) => e.project_id === pid),
                     volumes: (mock.volumes || []).filter((v: any) => v.project_id === pid),
                 };
-                // 收集被引用到的章节
                 const volIds = new Set((projSlice.volumes || []).map((v: any) => v.id));
                 projSlice.chapters = (mock.chapters || []).filter((c: any) => volIds.has(c.volume_id));
                 const chIds = new Set((projSlice.chapters || []).map((c: any) => c.id));
@@ -99,13 +117,31 @@ export function DataMigrateTab() {
             }
             const data = { version: "2.0", exportedAt: new Date().toISOString(), pid, keys: collected };
             const jsonStr = JSON.stringify(data, null, 2);
-            const blob = new Blob([jsonStr], { type: "application/json" });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement("a");
-            a.href = url;
-            a.download = `项目「${currentProject?.name || pid}」_${new Date().toLocaleDateString("zh-CN").replace(/\//g, "-")}.json`;
-            a.click();
-            URL.revokeObjectURL(url);
+            const fileName = `项目「${currentProject?.name || pid}」_${new Date().toLocaleDateString("zh-CN").replace(/\//g, "-")}.json`;
+            let saved = false;
+            try {
+                const blob = new Blob([jsonStr], { type: "application/json" });
+                const { save } = await import("@tauri-apps/plugin-dialog");
+                const { invoke } = await import("@tauri-apps/api/core");
+                const filePath = await save({ defaultPath: fileName, filters: [{ name: "JSON", extensions: ["json"] }] });
+                if (filePath) {
+                    const buf = await blob.arrayBuffer();
+                    const bytes = new Uint8Array(buf);
+                    let binary = "";
+                    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+                    await invoke("save_export_file", { projectId: pid, filename: fileName, dataBase64: btoa(binary), filePath });
+                    saved = true;
+                }
+            } catch { /* 降级到浏览器下载 */ }
+            if (!saved) {
+                const blob = new Blob([jsonStr], { type: "application/json" });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = fileName;
+                a.click();
+                URL.revokeObjectURL(url);
+            }
             setMsg(`✅ 项目已导出（${collected.length} 条）`); setTimeout(() => setMsg(""), 2500);
         } catch (e) { setMsg(`❌ 导出失败：${e}`); }
         setExporting(false);
@@ -201,16 +237,109 @@ export function DataMigrateTab() {
                 }
             }
 
-            // ★ 用迁移引擎处理
-            const migResult = migrateImport(entries);
-            result.projectsFound = migResult.projectsFound;
-            result.chaptersMigrated = migResult.chaptersMigrated;
-            result.charactersMigrated = migResult.charactersMigrated;
-            result.worldTermsMigrated = migResult.worldTermsMigrated;
-            result.edgesMigrated = migResult.edgesMigrated;
-            result.volumesMigrated = migResult.volumesMigrated;
-            result.keysWritten = migResult.keysWritten.length;
-            result.errors.push(...migResult.errors);
+            // ★ 导入项目：从 mock store 提取项目，走 API 创建新书
+            const pidMap: Record<string, string> = {};
+            const extraKeys: { key: string; value: string }[] = [];
+            const mockStores: any[] = [];
+
+            for (const e of entries) {
+                if (e.key === "novel-workbench-mock") {
+                    try { mockStores.push(JSON.parse(e.value)); } catch { /* skip */ }
+                } else {
+                    extraKeys.push(e);
+                }
+            }
+
+            for (const mock of mockStores) {
+                const projects = mock.projects || [];
+                for (const proj of projects) {
+                    const oldPid = proj.id;
+                    if (!oldPid) continue;
+                    const projChars = (mock.characters || []).filter((c: any) => c.project_id === oldPid);
+                    const projTerms = (mock.worldTerms || []).filter((t: any) => t.project_id === oldPid);
+                    const projEdges = (mock.edges || []).filter((e: any) => e.project_id === oldPid);
+                    const projEvents = (mock.plotEvents || []).filter((e: any) => e.project_id === oldPid);
+                    const projNodes = (mock.timelineNodes || []).filter((n: any) => n.project_id === oldPid);
+                    const projVols = (mock.volumes || []).filter((v: any) => v.project_id === oldPid);
+                    const volIds = new Set(projVols.map((v: any) => v.id));
+                    const projChs = (mock.chapters || []).filter((c: any) => volIds.has(c.volume_id));
+                    const chIds = new Set(projChs.map((c: any) => c.id));
+                    const projBeats = (mock.beatCards || []).filter((b: any) => chIds.has(b.chapter_id));
+                    const projContents = (mock.chapterContents || []).filter((cc: any) => chIds.has(cc.chapter_id));
+                    const importData: Record<string, unknown> = {
+                        project: proj,
+                        worldTerms: projTerms,
+                        characters: projChars,
+                        relationships: projEdges,
+                        plotEvents: projEvents,
+                        timelineNodes: projNodes,
+                        volumes: projVols,
+                        chapters: projChs,
+                        beatCards: projBeats,
+                        chapterContents: projContents,
+                    };
+                    try {
+                        const newPid = await api.importProject(importData, "new");
+                        pidMap[oldPid] = newPid;
+                        result.projectsFound++;
+                        result.charactersMigrated += projChars.length;
+                        result.worldTermsMigrated += projTerms.length;
+                        result.edgesMigrated += projEdges.length;
+                        result.volumesMigrated += projVols.length;
+                        result.chaptersMigrated += projChs.length;
+
+                        // 重建章节分片 key（chapter-{pid}-{chId}），确保写作台能读取正文
+                        const hasChapterIndex = extraKeys.some(k => k.key === `chapter-index-${oldPid}`);
+                        if (!hasChapterIndex && projChs.length > 0) {
+                            const contentMap = new Map<string, string>();
+                            for (const cc of projContents) {
+                                try {
+                                    const body = JSON.parse((cc as any).body_json || "{}");
+                                    if (body.content) contentMap.set(cc.chapter_id, body.content);
+                                } catch { /* skip */ }
+                            }
+                            const shardIds: string[] = [];
+                            for (const ch of projChs) {
+                                const chId = ch.id;
+                                const content = contentMap.get(chId) || "";
+                                const shard = {
+                                    id: chId,
+                                    volumeSegmentId: ch.volume_id,
+                                    number: ch.number ?? 0,
+                                    title: ch.title || "",
+                                    content,
+                                };
+                                setJSONSync(`chapter-${newPid}-${chId}`, shard);
+                                localStorage.setItem(`chapter-${newPid}-${chId}`, JSON.stringify(shard));
+                                shardIds.push(chId);
+                                result.keysWritten++;
+                            }
+                            setJSONSync(`chapter-index-${newPid}`, shardIds);
+                            localStorage.setItem(`chapter-index-${newPid}`, JSON.stringify(shardIds));
+                            result.keysWritten++;
+                        }
+                    } catch (e) {
+                        result.errors.push(`导入项目「${proj.name || oldPid}」失败: ${e}`);
+                    }
+                }
+            }
+
+            // 写入额外 key（含 PID 重映射）
+            for (const { key, value } of extraKeys) {
+                try {
+                    let finalKey = key;
+                    for (const [oldPid, newPid] of Object.entries(pidMap)) {
+                        if (key.includes(oldPid)) {
+                            finalKey = key.replace(new RegExp(oldPid.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), "g"), newPid);
+                            break;
+                        }
+                    }
+                    setSync(finalKey, value);
+                    result.keysWritten++;
+                } catch (e) {
+                    result.errors.push(`${key}: ${e}`);
+                }
+            }
 
             // ★ 导入后完整性检查
             if (result.keysWritten > 0 || result.chaptersMigrated > 0) {
@@ -220,11 +349,10 @@ export function DataMigrateTab() {
                 if (errCount > 0) result.warnings.push(`导入后完整性检查发现 ${errCount} 个错误（请在诊断日志中查看详情）`);
             }
 
-            // ★ 刷新
+            // ★ 刷新缓存（不再自动 reload，用户手动关闭提示后返回欢迎页即可看到新项目）
             if (result.keysWritten > 0 || result.chaptersMigrated > 0 || result.charactersMigrated > 0) {
                 useAppStore.getState().bumpSaveAll();
                 clearMockStoreCache();
-                setTimeout(() => window.location.reload(), 1000);
             }
         } catch (e) {
             result.ok = false;
@@ -268,6 +396,12 @@ export function DataMigrateTab() {
                 </label>
                 {importResult && (
                     <div className="mt-3 space-y-1">
+                        <div className="flex items-start justify-between">
+                            <span className="text-xs font-medium text-slate-600">导入结果</span>
+                            <button type="button" onClick={() => { setImportResult(null); window.location.reload(); }} className="rounded p-0.5 text-slate-400 hover:text-slate-600" title="关闭并刷新">
+                                <X className="h-3.5 w-3.5" />
+                            </button>
+                        </div>
                         <div className={`rounded p-2 text-xs ${importResult.ok ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700"}`}>
                             {importResult.chaptersMigrated > 0 || importResult.charactersMigrated > 0 ? (
                                 <>

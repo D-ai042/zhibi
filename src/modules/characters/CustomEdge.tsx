@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { confirmDialog } from "@/lib/confirm";
 import {
     BaseEdge,
     EdgeLabelRenderer,
@@ -79,10 +80,10 @@ function CustomEdge({
 
     // 双击线段 → 删除
     const handlePathDblClick = useCallback(
-        (e: React.MouseEvent) => {
+        async (e: React.MouseEvent) => {
             e.stopPropagation();
             if (d?.onDelete && d?.rels && d.rels.length > 0) {
-                if (window.confirm(`确定删除关系「${d.label}」？`)) {
+                if (await confirmDialog(`确定删除关系「${d.label}」？`)) {
                     d.onDelete(d.rels);
                 }
             }

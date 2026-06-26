@@ -318,7 +318,7 @@ async function downloadDoc(doc: Document, filename: string, projectId?: string) 
             dataBase64: base64,
             filePath,
         });
-        alert(`文档已导出：${filePath}`);
+        (await import("@/lib/confirm")).alertDialog(`文档已导出：${filePath}`);
         return;
     } catch {
         // Tauri 不可用时（浏览器环境），降级到浏览器下载

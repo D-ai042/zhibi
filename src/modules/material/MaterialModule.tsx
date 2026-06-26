@@ -6,6 +6,7 @@ import {
 } from "lucide-react";
 import { uuid } from "@/lib/uuid";
 import { getJSONSync, setJSONSync } from "@/lib/storage";
+import { confirmDialog, alertDialog } from "@/lib/confirm";
 
 // ===== 支持上传的文件类型 =====
 const TEXT_EXTS = [".txt", ".md", ".json", ".csv", ".yaml", ".yml", ".xml", ".html", ".htm", ".css", ".js", ".ts", ".py", ".java", ".c", ".cpp", ".h", ".rs", ".go", ".rb", ".sh", ".bat", ".ps1", ".env", ".cfg", ".ini", ".toml", ".tex", ".rtf", ".log"];
@@ -121,10 +122,10 @@ export function MaterialModule() {
 
     const deleteSelectedItems = useCallback(() => {
         if (!pid || selectedIds.size === 0) return;
-        if (!window.confirm(`确定删除选中的 ${selectedIds.size} 项素材？此操作不可恢复。`)) return;
+        confirmDialog(`确定删除选中的 ${selectedIds.size} 项素材？此操作不可恢复。`).then(ok => { if (!ok) return;
         persist(groups, items.filter(i => !selectedIds.has(i.id)));
         if (selectedId && selectedIds.has(selectedId)) { setSelectedId(null); setEditingContent(""); }
-        setSelectedIds(new Set());
+        setSelectedIds(new Set()); });
     }, [pid, groups, items, selectedIds, selectedId, persist]);
 
     const toggleSelectGroup = useCallback((itemIds: string[]) => {
@@ -205,7 +206,7 @@ export function MaterialModule() {
     const analyzeStructure = useCallback(async (item: MaterialItem) => {
         if (!pid) return;
         if (!item.content || item.content.length < 500) {
-            alert("素材内容不足 500 字，无法分析结构");
+            alertDialog("素材内容不足 500 字，无法分析结构");
             return;
         }
         setAnalyzingId(item.id);
@@ -252,10 +253,10 @@ ${sample}
                 persist(groups, updatedItems);
                 // 注意：不覆盖 editingContent —— 编辑区始终保留原文，分析结果只展示在结构分析折叠区
             } else {
-                alert("分析失败：" + (res.error || "未知错误"));
+                alertDialog("分析失败：" + (res.error || "未知错误"));
             }
         } catch (e: any) {
-            alert("分析失败：" + (e.message || "未知错误"));
+            alertDialog("分析失败：" + (e.message || "未知错误"));
         } finally {
             setAnalyzingId(null);
         }
@@ -269,7 +270,7 @@ ${sample}
         for (const file of Array.from(files)) {
             const ext = extName(file.name);
             if (!ALL_EXTS.includes(ext)) {
-                alert(`不支持的文件类型「${ext}」`);
+                alertDialog(`不支持的文件类型「${ext}」`);
                 continue;
             }
             if (IMAGE_EXTS.includes(ext)) {
@@ -294,7 +295,7 @@ ${sample}
                         type: "upload", groupId: targetGroup, fileType: ext, fileSize: file.size,
                         createdAt: new Date().toLocaleString("zh-CN"),
                     });
-                } catch { alert(`解析 Word 文档「${file.name}」失败`); }
+                } catch { alertDialog(`解析 Word 文档「${file.name}」失败`); }
             } else {
                 const content = await file.text();
                 newItems.push({
@@ -638,7 +639,7 @@ ${sample}
                             className="hidden shrink-0 rounded p-0.5 text-slate-300 hover:text-amber-500 group-hover:inline" title="重命名">
                             <FileText size={12} />
                         </button>
-                        <button onClick={() => { if (window.confirm(`确定删除「${item.name}」？`)) deleteItem(item.id); }}
+                        <button onClick={() => { confirmDialog(`确定删除「${item.name}」？`).then(ok => { if (ok) deleteItem(item.id); }) }}
                             className="ml-0.5 shrink-0 rounded p-1 text-red-300 hover:bg-red-50 hover:text-red-500" title="删除">
                             <Trash2 size={14} />
                         </button>

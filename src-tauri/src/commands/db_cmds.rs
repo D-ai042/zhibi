@@ -281,6 +281,7 @@ pub fn rename_project(
     name: String,
     state: State<'_, DbState>,
 ) -> Result<Project, String> {
+    open_project_db(&project_id, &state).map_err(|e| e.to_string())?;
     let t = now();
     with_conn(&state, |conn| {
         conn.execute(

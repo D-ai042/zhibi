@@ -24,6 +24,7 @@ const TC: Record<string, { bg: string; border: string }> = {
 
 // ==== storage ====
 import { getJSONSync, setJSONSync } from "@/lib/storage";
+import { confirmDialog } from "@/lib/confirm";
 function ek(pid: string) { return "worldview-edges-" + pid; }
 function gk(pid: string) { return "worldview-groups-" + pid; }
 function loadEdges(pid: string): Edge[] { return getJSONSync(ek(pid), []); }
@@ -204,7 +205,7 @@ export function WorldviewPanel() {
     pushHRef.current();
     // 找回词条名称用于确认对话框
     const term = terms.find(t => t.id === id);
-    if (!window.confirm(`确定删除词条「${term?.title || id}」？此操作不可撤销。`)) return;
+    if (!await confirmDialog(`确定删除词条「${term?.title || id}」？此操作不可撤销。`)) return;
     await api.deleteWorldTerm(id);
     setTerms(p => p.filter(t => t.id !== id));
     // remove edges pointing to/from this node
@@ -1243,7 +1244,7 @@ export function WorldviewPanel() {
             <button className="hover:bg-violet-50 rounded px-1.5 py-0.5 text-violet-700" onClick={() => { setPendSel([...selIds]); setGName("新编组"); setShowDlg(true); }} style={{ border: "none", background: "none", cursor: "pointer" }}>编组</button>
             <button className="hover:bg-violet-50 rounded px-1.5 py-0.5 text-violet-500" onClick={() => doUngroup()} style={{ border: "none", background: "none", cursor: "pointer" }}>解散</button>
             <span style={{ width: 1, height: 14, background: "#e2e8f0" }} />
-            <button className="hover:bg-red-50 rounded px-1.5 py-0.5 text-red-600" onClick={() => { const targetIds = selIds.filter(id => nodes.find(x => x.id === id)?.type === "worldviewTerm"); if (targetIds.length === 0) return; if (window.confirm(`确定一次性删除选中的 ${targetIds.length} 个词条？此操作不可撤销。`)) { pushH(); const p = currentProject; for (const id of targetIds) { api.deleteWorldTerm(id); setTerms(p2 => p2.filter(t => t.id !== id)); if (p) { const gs = loadGroups(p.id); let dirty = false; for (const g of gs) { const idx = g.childIds.indexOf(id); if (idx >= 0) { g.childIds.splice(idx, 1); dirty = true; } } if (dirty) saveGroups(p.id, gs.filter(g => g.childIds.length > 0)); } } setEdges(eds => { const u = eds.filter(e => !targetIds.includes(e.source) && !targetIds.includes(e.target)); if (p) saveEdges(p.id, u); return u; }); setNodes(nds => nds.filter(n => !targetIds.includes(n.id))); setSelIds([]); } }} style={{ border: "none", background: "none", cursor: "pointer" }}>X</button>
+            <button className="hover:bg-red-50 rounded px-1.5 py-0.5 text-red-600" onClick={() => { const targetIds = selIds.filter(id => nodes.find(x => x.id === id)?.type === "worldviewTerm"); if (targetIds.length === 0) return; confirmDialog(`确定一次性删除选中的 ${targetIds.length} 个词条？此操作不可撤销。`).then(ok => { if (!ok) return; pushH(); const p = currentProject; for (const id of targetIds) { api.deleteWorldTerm(id); setTerms(p2 => p2.filter(t => t.id !== id)); if (p) { const gs = loadGroups(p.id); let dirty = false; for (const g of gs) { const idx = g.childIds.indexOf(id); if (idx >= 0) { g.childIds.splice(idx, 1); dirty = true; } } if (dirty) saveGroups(p.id, gs.filter(g => g.childIds.length > 0)); } } setEdges(eds => { const u = eds.filter(e => !targetIds.includes(e.source) && !targetIds.includes(e.target)); if (p) saveEdges(p.id, u); return u; }); setNodes(nds => nds.filter(n => !targetIds.includes(n.id))); setSelIds([]); }); }} style={{ border: "none", background: "none", cursor: "pointer" }}>X</button>
           </div>
         )}
       </div>

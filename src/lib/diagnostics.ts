@@ -131,22 +131,25 @@ export function runIntegrityCheck(): IntegrityIssue[] {
     try {
         const storageUsage = getLocalStorageUsage();
 
-        // 1. mock-backend 可解析
-        const raw = localStorage.getItem("novel-workbench-mock");
-        if (raw) {
-            try {
-                const data = JSON.parse(raw);
-                if (typeof data !== "object" || data === null) {
-                    issues.push({ type: "data-format", severity: "error", message: "novel-workbench-mock 格式异常（非对象）" });
-                } else {
-                    // 检查关键字段
-                    if (!Array.isArray(data.projects)) issues.push({ type: "data-schema", severity: "error", message: "projects 字段缺失或非数组" });
-                    if (!Array.isArray(data.characters)) issues.push({ type: "data-schema", severity: "warning", message: "characters 字段缺失" });
-                    if (!Array.isArray(data.worldTerms)) issues.push({ type: "data-schema", severity: "warning", message: "worldTerms 字段缺失" });
-                    if (!data.apiConfig) issues.push({ type: "data-schema", severity: "warning", message: "apiConfig 字段缺失" });
+        // 1. mock-backend 可解析（仅浏览器模式检查；EXE 下数据在 SQLite）
+        const isExe = typeof window !== "undefined" && !!(window as any).__TAURI_INTERNALS__;
+        if (!isExe) {
+            const raw = localStorage.getItem("novel-workbench-mock");
+            if (raw) {
+                try {
+                    const data = JSON.parse(raw);
+                    if (typeof data !== "object" || data === null) {
+                        issues.push({ type: "data-format", severity: "error", message: "novel-workbench-mock 格式异常（非对象）" });
+                    } else {
+                        // 检查关键字段
+                        if (!Array.isArray(data.projects)) issues.push({ type: "data-schema", severity: "error", message: "projects 字段缺失或非数组" });
+                        if (!Array.isArray(data.characters)) issues.push({ type: "data-schema", severity: "warning", message: "characters 字段缺失" });
+                        if (!Array.isArray(data.worldTerms)) issues.push({ type: "data-schema", severity: "warning", message: "worldTerms 字段缺失" });
+                        if (!data.apiConfig) issues.push({ type: "data-schema", severity: "warning", message: "apiConfig 字段缺失" });
+                    }
+                } catch {
+                    issues.push({ type: "data-parse", severity: "error", message: "novel-workbench-mock JSON 解析失败" });
                 }
-            } catch {
-                issues.push({ type: "data-parse", severity: "error", message: "novel-workbench-mock JSON 解析失败" });
             }
         }
 
@@ -223,10 +226,10 @@ export function runIntegrityCheck(): IntegrityIssue[] {
             } catch { /* skip */ }
         }
 
-        // 5. localStorage 用量预警 + 大 key 排名
-        if (storageUsage.totalBytes > 4 * 1024 * 1024) {
+        // 5. localStorage 用量预警（仅浏览器模式；EXE 下数据存 SQLite，无此限制）
+        if (!isExe && storageUsage.totalBytes > 4 * 1024 * 1024) {
             issues.push({ type: "storage-capacity", severity: "error", message: `localStorage 用量 ${storageUsage.totalMB}MB，接近 5MB 上限，可能导致保存失败` });
-        } else if (storageUsage.totalBytes > 3 * 1024 * 1024) {
+        } else if (!isExe && storageUsage.totalBytes > 3 * 1024 * 1024) {
             issues.push({ type: "storage-capacity", severity: "warning", message: `localStorage 用量 ${storageUsage.totalMB}MB，建议导出备份` });
         }
         for (const item of storageUsage.items.slice(0, 8)) {
@@ -402,7 +405,7 @@ export async function autoFix(issues: IntegrityIssue[]): Promise<FixResult[]> {
                 results.push({ type: "orphan-index", ok: true, message: `章节索引 ${key} 发现 ${iss.length} 个悬空引用，已跳过自动修复（数据可能仍存在于 SQLite，建议运行深度检查确认）` });
             } else if (iss[0].type === "dangling-edge") {
                 // 修复悬空边：删除引用了不存在实体的边
-                const badEdgeIds = new Set(iss.map(i => i.fixContext?.edgeId).filter(Boolean));
+                const badEdgeIds = new Set(iss.map(i => i.fixContext?.edgeId).filter((id): id is string => !!id));
                 if (badEdgeIds.size === 0) continue;
                 const edges = getJSONSync(key, [] as any[]);
                 const fixed = edges.filter((e: any) => !badEdgeIds.has(e.id));
@@ -433,7 +436,7 @@ export async function autoFix(issues: IntegrityIssue[]): Promise<FixResult[]> {
                 }
             } else if (iss[0].type === "character-dangling-edge") {
                 // 修复指向已删除人物的关系边：通过 API 删除（EXE 下删除 SQLite relationship_edges 表记录）
-                const badEdgeIds = new Set(iss.map(i => i.fixContext?.edgeId).filter(Boolean));
+                const badEdgeIds = new Set(iss.map(i => i.fixContext?.edgeId).filter((id): id is string => !!id));
                 if (badEdgeIds.size === 0) continue;
                 let deletedCount = 0;
                 try {

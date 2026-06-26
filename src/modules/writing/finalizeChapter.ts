@@ -149,12 +149,8 @@ export async function finalizeChapter(
     }
 
     // 步骤7：AI 角色识别（fire-and-forget，不影响定稿结果）
-    try {
-        aiExtractNewCharacters(pid, chapterNumber, chapterContent);
-        steps.push({ name: "角色识别", ok: true });
-    } catch (e) {
-        steps.push({ name: "角色识别", ok: false, error: String(e) });
-    }
+    aiExtractNewCharacters(pid, chapterNumber, chapterContent).catch(() => { /* 角色识别失败不影响定稿 */ });
+    steps.push({ name: "角色识别", ok: true });
 
     // 步骤8：更新项目阶段
     try {
