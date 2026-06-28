@@ -76,15 +76,13 @@ describe("saveJSON", () => {
         errSpy.mockRestore();
     });
 
-    it("写后验证失败（读回不一致）返回 false", () => {
-        // mock setItem 成功但 getItem 返回不一致的值
+    it("写后验证已移除：setSync 成功即返回 true（不再读回比对）", () => {
+        // 写后验证已移除（EXE 模式验证内存缓存无意义），setSync 不抛错即返回 true
         const setSpy = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { });
-        const getSpy = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => "WRONG");
         const errSpy = vi.spyOn(console, "error").mockImplementation(() => { });
-        expect(saveJSON("verify-fail", { a: 1 })).toBe(false);
-        expect(errSpy).toHaveBeenCalled();
+        expect(saveJSON("verify-removed", { a: 1 })).toBe(true);
+        expect(errSpy).not.toHaveBeenCalled();
         setSpy.mockRestore();
-        getSpy.mockRestore();
         errSpy.mockRestore();
     });
 

@@ -1,6 +1,6 @@
-﻿// SettingsModal.tsx — 设置弹窗壳（T9 拆分，组合4个Tab子组件）
+// SettingsModal.tsx — 设置弹窗壳（T9 拆分，组合4个Tab子组件）
 import { useEffect, useState } from "react";
-import { X, Settings2, Mic, History, Download, Bug } from "lucide-react";
+import { X, Settings2, Mic, History, Download, Bug, Monitor } from "lucide-react";
 import { useAppStore } from "@/stores/app-store";
 import { getCurrentVersion, checkForUpdate, markDismissed, type VersionInfo } from "@/lib/version-check";
 import { ApiConfigTab } from "./ApiConfigTab";
@@ -8,8 +8,9 @@ import { SttConfigTab } from "./SttConfigTab";
 import { SnapshotManagerTab } from "./SnapshotManagerTab";
 import { DataMigrateTab } from "./DataMigrateTab";
 import { DiagnosticsTab } from "./DiagnosticsTab";
+import { DisplayTab } from "./DisplayTab";
 
-type TabName = "api" | "stt" | "snapshots" | "migrate" | "diagnostics" | "about";
+type TabName = "api" | "stt" | "snapshots" | "migrate" | "diagnostics" | "display" | "about";
 
 export function SettingsModal() {
   const { settingsOpen, setSettingsOpen } = useAppStore();
@@ -59,6 +60,10 @@ export function SettingsModal() {
             className={`flex items-center gap-1.5 px-4 py-2.5 font-medium ${tab === "diagnostics" ? "border-b-2 border-amber-500 text-amber-700" : "text-slate-500 hover:text-slate-700"}`}>
             <Bug size={15} /> 诊断日志
           </button>
+          <button type="button" onClick={() => setTab("display")}
+            className={`flex items-center gap-1.5 px-4 py-2.5 font-medium ${tab === "display" ? "border-b-2 border-amber-500 text-amber-700" : "text-slate-500 hover:text-slate-700"}`}>
+            <Monitor size={15} /> 显示
+          </button>
           <button type="button" onClick={() => setTab("about")}
             className={`flex items-center gap-1.5 px-4 py-2.5 font-medium ${tab === "about" ? "border-b-2 border-amber-500 text-amber-700" : "text-slate-500 hover:text-slate-700"}`}>
             <History size={15} /> 关于
@@ -71,6 +76,7 @@ export function SettingsModal() {
           {tab === "snapshots" && <SnapshotManagerTab />}
           {tab === "migrate" && <DataMigrateTab />}
           {tab === "diagnostics" && <DiagnosticsTab />}
+          {tab === "display" && <DisplayTab />}
           {tab === "about" && (
             <div className="space-y-3">
               <p className="text-sm font-semibold">执笔 · 先定章法，再落笔墨</p>

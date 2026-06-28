@@ -16,7 +16,7 @@
 
 import { api } from "./api";
 import { getJSONSync, setJSONSync } from "./storage";
-import { loadAllChapters } from "./chapter-store";
+import { loadAllChapters, loadChapter } from "./chapter-store";
 import type {
     Chapter,
     ChapterSummary,
@@ -339,9 +339,7 @@ export async function buildChatContext(projectId: string): Promise<string> {
 /** 从 chapter-store（写作台卷章树）读取章节，这是章节数据的唯一真实来源 */
 function findChapterFromStore(projectId: string, chapterId: string): { id: string; number: number; title: string; volumeName: string } | null {
     try {
-        const chapters = loadAllChapters(projectId);
-        if (!chapters || chapters.length === 0) return null;
-        const ch = chapters.find((c: any) => c.id === chapterId);
+        const ch = loadChapter(projectId, chapterId);
         if (!ch) return null;
         // 从剧情走向中找卷名
         let volumeName = "";
@@ -469,6 +467,12 @@ function extractKeywordsFromBeat(target: Set<string>, beat: any) {
 function assembleP0(projectId: string, _styleGuide: StyleGuide | null, storyBible: StoryBible | null, worldTerms: WorldTerm[], currentChapterNumber?: number): string {
     const parts: string[] = ["━━━━ P0 · 世界观背景（不可违反） ━━━━"];
 
+    // 预加载章节和段落数据，避免后续重复 loadAllChapters
+    let _chapsCache: any[] | null = null;
+    let _segsCache: any[] | null = null;
+    function getChaps() { if (!_chapsCache) { try { _chapsCache = loadAllChapters(projectId); } catch { _chapsCache = []; } } return _chapsCache; }
+    function getSegs() { if (!_segsCache) { try { _segsCache = getJSONSync(`plot-segments-${projectId}`, [] as any[]); } catch { _segsCache = []; } } return _segsCache; }
+
     const terms = worldTerms.length > 0 ? worldTerms : loadWorldTerms(projectId);
     if (terms.length > 0) {
         // ★ 四象限分组
@@ -499,8 +503,8 @@ function assembleP0(projectId: string, _styleGuide: StyleGuide | null, storyBibl
         // 第一章保底：用 beat 直接引用的词条兜底
         if (currentChapterNumber && termActivityForChapter.length === 0) {
             try {
-                const chaps = loadAllChapters(projectId);
-                const segs = getJSONSync(`plot-segments-${projectId}`, [] as any[]);
+                const chaps = getChaps();
+                const segs = getSegs();
                 const currentChap = chaps.find((c: any) => c.number === currentChapterNumber);
                 if (currentChap) {
                     const vol = segs.find((s: any) => s.id === currentChap.volumeSegmentId && s.type === "bright");
@@ -524,8 +528,8 @@ function assembleP0(projectId: string, _styleGuide: StyleGuide | null, storyBibl
         const otherKeywords = new Set<string>();
         if (currentChapterNumber) {
             try {
-                const chaps = loadAllChapters(projectId);
-                const segs = getJSONSync(`plot-segments-${projectId}`, [] as any[]);
+                const chaps = getChaps();
+                const segs = getSegs();
                 const currentChap = chaps.find((c: any) => c.number === currentChapterNumber);
                 if (currentChap) {
                     const vol = segs.find((s: any) => s.id === currentChap.volumeSegmentId && s.type === "bright");

@@ -35,5 +35,15 @@ export const useAppStore = create<AppStore>()((...a) => ({
   saveAllBump: 0,
   bumpSaveAll: () => a[0]((s) => ({ saveAllBump: s.saveAllBump + 1 })),
   setTriggerAutosave: (fn) => a[0]({ triggerAutosave: fn }),
+  qualityJumpTarget: null,
+  triggerQualityJump: (target) => a[0]((s) => ({
+    qualityJumpTarget: {
+      chapterId: target.chapterId,
+      chapterNumber: target.chapterNumber,
+      location: target.location,
+      quote: target.quote,
+      bump: (s.qualityJumpTarget?.bump ?? 0) + 1,
+    },
+  })),
 }));
 

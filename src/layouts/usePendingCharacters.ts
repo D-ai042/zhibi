@@ -39,13 +39,32 @@ export function usePendingCharacters(currentProjectId: string | undefined, pendi
     const [pendingPlotBeats, setPendingPlotBeats] = useState<{ segmentTitle: string; beat: { title: string; characters: string; location: string; time: string; event: string; chapters: string } }[]>([]);
     const [pendingChapters, setPendingChapters] = useState<{ volumeTitle: string; number: number; title: string }[]>([]);
 
+    // loadedRef 保持 boolean 以兼容外部（handleCharacterInsert 设 false 表示强制下次重载）
     const loadedRef = useRef(false);
+    // ★ 内部按项目跟踪：A 本加载过不代表 B 本也加载过（原 bug：loadedRef 是全局单例，
+    //   A 本定稿后置 true，B 本 loadPending 直接 return，导致 B 本数据加载被拦截）
+    const loadedProjRef = useRef<string | null>(null);
+    // raw 字符串增量比对：bump 多次触发时避免重复 JSON.parse
+    const lastRawRef = useRef<string>("");
 
     const loadPending = useCallback(() => {
-        if (!currentProjectId || loadedRef.current) return;
+        if (!currentProjectId) return;
+        // 同项目已加载则跳过（loadedRef 由外部 bump 重置为 false 强制重载）
+        if (loadedRef.current && loadedProjRef.current === currentProjectId) return;
         try {
             const raw = getJSONSync(`ai-pending-chars-${currentProjectId}`, null) as string | null;
-            if (!raw) return;
+            // 增量比对：raw 未变化则跳过
+            if (raw === lastRawRef.current) {
+                loadedProjRef.current = currentProjectId;
+                loadedRef.current = true;
+                return;
+            }
+            lastRawRef.current = raw || "";
+            if (!raw) {
+                loadedProjRef.current = currentProjectId;
+                loadedRef.current = true;
+                return;
+            }
             const data = JSON.parse(raw);
             if (data.chars?.length > 0) {
                 setPendingChars(prev => {
@@ -61,17 +80,30 @@ export function usePendingCharacters(currentProjectId: string | undefined, pendi
                     return [...prev, ...newEdges];
                 });
             }
+            loadedProjRef.current = currentProjectId;
             loadedRef.current = true;
         } catch { /* ignore */ }
+    }, [currentProjectId]);
+
+    // ★ 项目切换时清空所有 pending 状态，避免跨项目数据污染（按钮失效根因）
+    // AiChatPanel 常驻不卸载，React state 默认跨项目保留：B 本定稿 pending 后切到 A 本，
+    // pendingChars 仍是 B 本数据，点击「应用到星图」会把 B 本角色插入 A 本 → 角色错位/按钮失效。
+    useEffect(() => {
+        setPendingTerms([]); setPendingEdges([]);
+        setPendingChars([]); setPendingCharEdges([]); setPendingRemoveEdges([]); setPendingSnapshots([]);
+        setPendingPlotSegments([]); setPendingPlotEdges([]); setPendingPlotBeats([]); setPendingChapters([]);
+        loadedRef.current = false;
+        loadedProjRef.current = null;
+        lastRawRef.current = "";
     }, [currentProjectId]);
 
     // 挂载时检查
     useEffect(() => { loadPending(); }, [loadPending]);
 
-    // bump 触发刷新
+    // bump 触发刷新（外部定稿后 bumpPendingAiChars）
     useEffect(() => {
         if (!currentProjectId || pendingAiCharsBump <= 0) return;
-        loadedRef.current = false;
+        loadedRef.current = false; // 强制重载
         loadPending();
     }, [pendingAiCharsBump, currentProjectId, loadPending]);
 

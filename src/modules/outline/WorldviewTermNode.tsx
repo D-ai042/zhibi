@@ -26,7 +26,8 @@ export interface WorldviewTermData {
     term: WorldTerm;
     onUpdate: (term: WorldTerm) => void;
     onSelect: (term: WorldTerm) => void;
-    onDelete: (id: string) => void;
+    /** ★ 传入 title 避免 WorldviewPanel 侧 terms 闭包过期导致显示 id */
+    onDelete: (id: string, title: string) => void;
     editing?: boolean;
 }
 
@@ -37,7 +38,7 @@ function WorldviewTermNode({ data }: NodeProps<Node<WorldviewTermData>>) {
 
     const safeUpdate = (u: WorldTerm) => { if (typeof callbacks.current.onUpdate === "function") callbacks.current.onUpdate(u); };
     const safeSelect = () => { if (typeof callbacks.current.onSelect === "function") callbacks.current.onSelect(term); };
-    const safeDelete = () => { if (typeof callbacks.current.onDelete === "function") callbacks.current.onDelete(term.id); };
+    const safeDelete = () => { if (typeof callbacks.current.onDelete === "function") callbacks.current.onDelete(term.id, term.title); };
     const colors = TYPE_COLORS[term.term_type] ?? TYPE_COLORS.other;
     const typeLabel = TYPE_LABEL[term.term_type] ?? "其他";
     const [editingTitle, setEditingTitle] = useState(false);

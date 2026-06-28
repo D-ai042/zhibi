@@ -19,6 +19,9 @@ import { auditRecord } from "./audit-log";
 /** SQLite → localStorage 的键值缓存，供 getJSONSync/getSync 回退使用 */
 const _sqliteCache = new Map<string, string>();
 
+/** JSON 解析缓存：避免同一 key 重复 JSON.parse（对 novel-workbench-mock 等大 key 尤为重要） */
+const _jsonCache = new Map<string, { raw: string; value: unknown }>();
+
 function shouldMirrorSqliteKeyToLocalStorage(key: string): boolean {
     if (key.startsWith("chapter-index-")) return false;
     if (key.startsWith("chapter-")) return false;
@@ -130,6 +133,8 @@ export function getSync(key: string): string | null {
 export function setSync(key: string, value: string): void {
     // 审计：记录存储写入（静默，不影响性能）
     auditRecord("storage.set", { entityType: key.split("-")[0] || "unknown", summary: key, ok: true });
+    // 失效 JSON 解析缓存
+    _jsonCache.delete(key);
     // 在 EXE 模式下异步同步写入 SQLite（fire-and-forget，不阻塞 UI）
     if (isTauri()) {
         _sqliteCache.set(key, value);
@@ -154,6 +159,7 @@ export function setSync(key: string, value: string): void {
 export function removeSync(key: string): void {
     try { localStorage.removeItem(key); } catch { /* ignore */ }
     _sqliteCache.delete(key);
+    _jsonCache.delete(key);
     if (isTauri()) {
         api.deleteSetting(key).catch((e) => {
             reportDiagnostic("warn", `SQLite 删除失败: ${key}`, { key, error: String(e) });
@@ -168,21 +174,38 @@ export function getJSONSync<T>(key: string, def: T): T {
     // 1. 先试 localStorage
     const raw = localStorage.getItem(key);
     if (raw) {
-        try { return JSON.parse(raw) as T; } catch { return def; }
+        // 命中 JSON 解析缓存（raw 未变时直接返回已解析值，避免重复 JSON.parse）
+        const cached = _jsonCache.get(key);
+        if (cached && cached.raw === raw) {
+            return cached.value as T;
+        }
+        try {
+            const value = JSON.parse(raw) as T;
+            _jsonCache.set(key, { raw, value });
+            return value;
+        } catch { return def; }
     }
 
     // 2. EXE 模式：回退到内存缓存（预暖自 SQLite）
     if (isTauri()) {
-        const cached = _sqliteCache.get(key);
-        if (cached !== undefined) {
+        const sqliteCached = _sqliteCache.get(key);
+        if (sqliteCached !== undefined) {
+            // 同样检查 JSON 解析缓存
+            const jsonCached = _jsonCache.get(key);
+            if (jsonCached && jsonCached.raw === sqliteCached) {
+                return jsonCached.value as T;
+            }
             try {
                 if (shouldMirrorSqliteKeyToLocalStorage(key)) {
                     // 只对小型设置写回 localStorage 加速；大数据留在 SQLite + 内存缓存
-                    localStorage.setItem(key, cached);
+                    // ★ setItem 单独 try-catch：配额满时不影响 JSON.parse（否则会返回 def 导致数据"丢失"）
+                    try { localStorage.setItem(key, sqliteCached); } catch { /* quota full, ignore */ }
                 } else {
                     removeLocalCacheOnly(key);
                 }
-                return JSON.parse(cached) as T;
+                const value = JSON.parse(sqliteCached) as T;
+                _jsonCache.set(key, { raw: sqliteCached, value });
+                return value;
             } catch { return def; }
         }
     }
@@ -199,19 +222,15 @@ export function getJSONSync<T>(key: string, def: T): T {
 export const loadJSON = getJSONSync;
 
 /**
- * 写入 JSON 到 localStorage，含写后验证。
+ * 写入 JSON 到 localStorage。
  * 成功返回 true；失败调用 reportDiagnostic 并返回 false。
+ * 注：EXE 模式下 setSync 是 fire-and-forget 写 SQLite，写后读回验证的是内存缓存
+ * 而非实际持久化结果，验证无实际价值且增加 IO，已移除。
  */
 export function saveJSON(key: string, value: unknown): boolean {
     try {
         const raw = JSON.stringify(value);
         setSync(key, raw);
-        // T1.4: 写后验证 —— 读回比对，不一致则报告失败
-        const readBack = getSync(key);
-        if (readBack !== raw) {
-            reportDiagnostic("error", `存储写入验证失败: ${key}`, { key });
-            return false;
-        }
         return true;
     } catch (e) {
         reportDiagnostic("error", `存储写入失败: ${key}`, { key, error: String(e) });

@@ -2,7 +2,8 @@ import { useMemo } from "react";
 import { useAppStore } from "@/stores/app-store";
 import type { CustomModule } from "@/types";
 import { renderMarkdown } from "@/lib/markdown";
-import * as LucideIcons from "lucide-react";
+import { RefreshCw, Trash2 } from "lucide-react";
+import { resolveIcon } from "@/components/common/icon-registry";
 import { uuid } from "@/lib/uuid";
 import { confirmDialog } from "@/lib/confirm";
 
@@ -44,7 +45,7 @@ interface Props {
 export function CustomModuleRenderer({ mod }: Props) {
     const { removeCustomModule, navigateTo, customModules } = useAppStore();
     const IconComponent = useMemo(
-        () => (LucideIcons as unknown as Record<string, React.ComponentType<{ className?: string }>>)[mod.icon],
+        () => resolveIcon(mod.icon),
         [mod.icon]
     );
 
@@ -83,7 +84,7 @@ export function CustomModuleRenderer({ mod }: Props) {
                         className="flex items-center gap-1 rounded-md border px-2.5 py-1 text-xs hover:bg-slate-50"
                         title="让 AI 刷新此模块"
                     >
-                        <LucideIcons.RefreshCw className="h-3.5 w-3.5" />
+                        <RefreshCw className="h-3.5 w-3.5" />
                         刷新
                     </button>
                     <button
@@ -92,7 +93,7 @@ export function CustomModuleRenderer({ mod }: Props) {
                         className="flex items-center gap-1 rounded-md border border-red-200 px-2.5 py-1 text-xs text-red-600 hover:bg-red-50"
                         title="删除此模块"
                     >
-                        <LucideIcons.Trash2 className="h-3.5 w-3.5" />
+                        <Trash2 className="h-3.5 w-3.5" />
                         移除
                     </button>
                 </div>
@@ -133,9 +134,7 @@ export function CustomModuleRenderer({ mod }: Props) {
                             {customModules
                                 .filter((m) => m.id !== mod.id)
                                 .map((m) => {
-                                    const OtherIcon = (LucideIcons as unknown as Record<string, React.ComponentType<{ className?: string }>>)[
-                                        m.icon
-                                    ];
+                                    const OtherIcon = resolveIcon(m.icon);
                                     return (
                                         <button
                                             key={m.id}

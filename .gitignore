@@ -13,3 +13,4 @@ diff-*.cjs
 check-*.cjs
 _exe_*
 src/test-*
+.backup_*/

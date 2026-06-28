@@ -1,19 +1,22 @@
-import { startTransition, useCallback, type ReactNode } from "react";
+import { startTransition, useCallback, lazy, Suspense, type ReactNode } from "react";
 import { AppShell } from "@/layouts/AppShell";
 import { SettingsModal } from "@/components/settings/SettingsModal";
 import { WelcomeScreen } from "@/components/welcome/WelcomeScreen";
-import { CustomModuleRenderer } from "@/components/custom-module/CustomModuleRenderer";
-import { DynamicPageRenderer } from "@/components/dynamic-page/DynamicPageRenderer";
 import { useProjectBootstrap } from "@/hooks/use-project-data";
 import { useAppStore } from "@/stores/app-store";
 import type { Project } from "@/types";
-import { OverviewModule } from "@/modules/overview/OverviewModule";
-import { OutlineModule } from "@/modules/outline/OutlineModule";
-import { WritingModule } from "@/modules/writing/WritingModule";
-import { ManuscriptModule } from "@/modules/manuscript/ManuscriptModule";
-import { MaterialModule } from "@/modules/material/MaterialModule";
-import { StoryBibleModule } from "@/modules/story-bible/StoryBibleModule";
-import { TutorialModule } from "@/modules/tutorial/TutorialModule";
+
+// 路由级代码分割：模块按需加载，首屏只加载当前模块代码
+const OverviewModule = lazy(() => import("@/modules/overview/OverviewModule").then(m => ({ default: m.OverviewModule })));
+const OutlineModule = lazy(() => import("@/modules/outline/OutlineModule").then(m => ({ default: m.OutlineModule })));
+const WritingModule = lazy(() => import("@/modules/writing/WritingModule").then(m => ({ default: m.WritingModule })));
+const ManuscriptModule = lazy(() => import("@/modules/manuscript/ManuscriptModule").then(m => ({ default: m.ManuscriptModule })));
+const MaterialModule = lazy(() => import("@/modules/material/MaterialModule").then(m => ({ default: m.MaterialModule })));
+const StoryBibleModule = lazy(() => import("@/modules/story-bible/StoryBibleModule").then(m => ({ default: m.StoryBibleModule })));
+const TutorialModule = lazy(() => import("@/modules/tutorial/TutorialModule").then(m => ({ default: m.TutorialModule })));
+// 自定义模块/动态页延迟加载：它们引用 icon-registry（含 ~100 个图标），延迟加载可把图标移出首屏
+const CustomModuleRenderer = lazy(() => import("@/components/custom-module/CustomModuleRenderer").then(m => ({ default: m.CustomModuleRenderer })));
+const DynamicPageRenderer = lazy(() => import("@/components/dynamic-page/DynamicPageRenderer").then(m => ({ default: m.DynamicPageRenderer })));
 
 /** 渲染错误边界 — 捕获子组件渲染异常，防止整棵树白屏 */
 import { Component } from "react";
@@ -82,7 +85,7 @@ function ModuleRouter() {
 }
 
 export default function App() {
-  const { currentProject, setCurrentProject } = useAppStore();
+  const { currentProject, setCurrentProject, eyeCareMode, theme } = useAppStore();
   const { refresh } = useProjectBootstrap();
   const handleOpen = useCallback(
     (p: Project) => {
@@ -92,22 +95,26 @@ export default function App() {
     },
     [setCurrentProject, refresh]
   );
+  // 根 class：eye-care-mode(总开关) + theme-*(主题配色)；仅总开关开启时生效
+  const rootClassName = eyeCareMode ? `eye-care-mode theme-${theme}` : "";
   if (!currentProject) {
     return (
-      <>
+      <div className={rootClassName}>
         <WelcomeScreen onOpenProject={handleOpen} />
         <SettingsModal />
-      </>
+      </div>
     );
   }
   return (
-    <>
+    <div className={rootClassName}>
       <AppShell>
         <ErrorBoundary>
-          <ModuleRouter />
+          <Suspense fallback={<div className="flex h-full items-center justify-center text-slate-400 text-sm">加载中...</div>}>
+            <ModuleRouter />
+          </Suspense>
         </ErrorBoundary>
       </AppShell>
       <SettingsModal />
-    </>
+    </div>
   );
 }

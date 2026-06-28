@@ -69,7 +69,8 @@ export function migrateImport(entries: { key: string; value: string }[]): Migrat
         const projects = store.projects || [];
         const charactersItems = store.characters || [];
         const worldTermsItems = store.worldTerms || [];
-        const edgesItems = store.edges || [];
+        // ★ 字段名兼容：旧版后端导出用 relationships，新版 mock store 用 edges
+        const edgesItems = store.edges || store.relationships || [];
         const volumesItems = store.volumes || [];
         const chaptersItems = store.chapters || [];
         const beatCardsItems = store.beatCards || [];

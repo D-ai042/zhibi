@@ -16,6 +16,8 @@ import {
   Lightbulb,
   Archive,
   RefreshCw,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 import { useAppStore } from "@/stores/app-store";
 import { api } from "@/lib/api";
@@ -223,6 +225,8 @@ export function AppShell({ children }: AppShellProps) {
     customModules,
     apiConfig,
     setApiConfig,
+    eyeCareMode,
+    setEyeCareMode,
   } = useAppStore();
 
   const [modelOpen, setModelOpen] = useState(false);
@@ -544,6 +548,21 @@ export function AppShell({ children }: AppShellProps) {
           >
             <RefreshCw className="h-3.5 w-3.5" />
             刷新
+          </button>
+        )}
+
+        {/* 护眼模式切换按钮（紧邻刷新按钮） */}
+        {currentProject && (
+          <button
+            type="button"
+            onClick={() => setEyeCareMode(!eyeCareMode)}
+            className={`flex items-center gap-1 rounded px-2 py-1 text-xs hover:bg-slate-100 ${
+              eyeCareMode ? "text-emerald-700 bg-emerald-50" : "text-slate-500 hover:text-slate-700"
+            }`}
+            title={eyeCareMode ? "关闭护眼模式" : "开启护眼模式"}
+          >
+            {eyeCareMode ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
+            护眼
           </button>
         )}
 

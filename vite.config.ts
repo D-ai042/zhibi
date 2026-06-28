@@ -36,5 +36,18 @@ export default defineConfig({
     target: process.env.TAURI_ENV_PLATFORM === "windows" ? "chrome105" : "safari13",
     minify: !process.env.TAURI_ENV_DEBUG ? "esbuild" : false,
     sourcemap: !!process.env.TAURI_ENV_DEBUG,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          "react-vendor": ["react", "react-dom", "zustand"],
+          "tiptap-vendor": ["@tiptap/react", "@tiptap/starter-kit", "@tiptap/extension-placeholder"],
+          "xyflow-vendor": ["@xyflow/react"],
+          // docx/mammoth 移除：均经 dynamic import 加载，rollup 会自动各分独立 chunk
+          //   （export-doc.ts 动态导入，MaterialModule 内 await import("mammoth")）
+          // lucide-react 移除：原 `import * as` 全量打包 803KB，改用 icon-registry 显式注册后
+          //   具名导入可 tree-shake，rollup 自动把共享图标提到 vendor chunk
+        },
+      },
+    },
   },
 });

@@ -29,6 +29,8 @@ export interface SaveResult {
 export function loadAllChapters(pid: string): Chapter[] {
     const ids: string[] = getJSONSync(`chapter-index-${pid}`, []);
     const legacyKey = `plot-chapters-${pid}`;
+    // ★ 诊断：记录读取来源（localStorage / _sqliteCache / 空）
+    const idxInLocal = localStorage.getItem(`chapter-index-${pid}`) !== null;
     if (ids.length > 0) {
         if (getSync(legacyKey) !== null) removeSync(legacyKey);
     }
@@ -45,6 +47,9 @@ export function loadAllChapters(pid: string): Chapter[] {
             reportDiagnostic("warn", "已迁移旧章节聚合数据到分片存储", { pid, chapters: old.length });
             return old;
         }
+        reportDiagnostic("warn", "[chapter-store] loadAllChapters 返回空", {
+            pid: pid?.slice(0, 8), idxInLocal, hasLegacy: old !== null,
+        });
         return [];
     }
     const chapters: Chapter[] = [];
@@ -52,6 +57,9 @@ export function loadAllChapters(pid: string): Chapter[] {
         const ch = getJSONSync(`chapter-${pid}-${id}`, null as Chapter | null);
         if (ch) chapters.push(ch);
     }
+    reportDiagnostic("warn", "[chapter-store] loadAllChapters 加载完成", {
+        pid: pid?.slice(0, 8), idxInLocal, ids: ids.length, loaded: chapters.length,
+    });
     return chapters;
 }
 
@@ -65,11 +73,6 @@ export function saveChapter(pid: string, chapter: Chapter): SaveResult {
     try {
         const raw = JSON.stringify(chapter);
         setSync(`chapter-${pid}-${chapter.id}`, raw);
-        // 写后验证
-        const readBack = getSync(`chapter-${pid}-${chapter.id}`);
-        if (readBack !== raw) {
-            return { ok: false, error: "写后验证失败" };
-        }
         // 更新索引
         const ids: string[] = getJSONSync(`chapter-index-${pid}`, []);
         if (!ids.includes(chapter.id)) {

@@ -47,6 +47,12 @@ export interface AppStore {
     /** 画布四象限勾选状态 true=发送给AI */
     worldviewZoneEnabled: Record<string, boolean>;
     setWorldviewZoneEnabled: (z: Record<string, boolean>) => void;
+    /** 护眼模式总开关（持久化）；关闭时所有护眼配置不生效 */
+    eyeCareMode: boolean;
+    setEyeCareMode: (v: boolean) => void;
+    /** 主题预设（仅 eyeCareMode=true 时生效） */
+    theme: "default" | "warm-apricot" | "forest-dark" | "slate-blue" | "milk-tea" | "mint";
+    setTheme: (v: "default" | "warm-apricot" | "forest-dark" | "slate-blue" | "milk-tea" | "mint") => void;
     navigateTo: (t: NavTarget, extraId?: string) => void;
     setOutlineSection: (s: OutlineSection) => void; setOverviewSection: (s: OverviewSection) => void;
     setManuscriptSection: (s: ManuscriptSection) => void;
@@ -73,4 +79,7 @@ export interface AppStore {
     memoryBump: number; plotBump: number; saveAllBump: number;
     bumpMemory: () => void; bumpPlot: () => void; bumpSaveAll: () => void;
     triggerAutosave?: () => void; setTriggerAutosave: (fn: () => void) => void;
+    /** 质检结果跳转目标（含 bump 触发 ChapterEditor 滚动高亮） */
+    qualityJumpTarget: { chapterId: string; chapterNumber: number; location: string; quote?: string; bump: number } | null;
+    triggerQualityJump: (target: { chapterId: string; chapterNumber: number; location: string; quote?: string }) => void;
 }

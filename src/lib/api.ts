@@ -25,9 +25,17 @@ import { mockInvoke, realAiCompleteStream, mockAiCompleteStream } from "./mock-b
 import { recordError } from "./diagnostics";
 import { auditRecord } from "./audit-log";
 
-export const isTauri = () =>
-  typeof window !== "undefined" &&
-  !!(window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+// EXE 启动后 __TAURI_INTERNALS__ 不会变化，缓存一次避免热路径重复属性查找
+// （setSync/getSync 每次读写都调用 isTauri，编辑器 autosave 高频场景受益）
+let _isTauriCached: boolean | null = null;
+export const isTauri = (): boolean => {
+  if (_isTauriCached === null) {
+    _isTauriCached =
+      typeof window !== "undefined" &&
+      !!(window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+  }
+  return _isTauriCached;
+};
 
 async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   try {
@@ -185,6 +193,13 @@ export const api = {
       beatCards: Record<string, unknown>[];
       chapterContents: Record<string, unknown>[];
       charGroups: Record<string, unknown>[];
+      // ★ Rust 端 export_project 实际返回这些字段（从 app_settings 表读取）
+      plotSegments?: Record<string, unknown>[];
+      plotEdges?: Record<string, unknown>[];
+      /** chapter-{pid}-{chId} 分片：key=chapterId, value=Chapter 对象 */
+      chapterShards?: Record<string, Record<string, unknown>>;
+      /** chapter-index-{pid} 章节ID顺序数组 */
+      chapterIndex?: string[];
     }>("export_project", { projectId }),
 
   /** 保存导出文件（Tauri 模式） */

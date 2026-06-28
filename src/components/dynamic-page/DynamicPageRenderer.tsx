@@ -1,16 +1,15 @@
 import { useMemo } from "react";
 import { useAppStore } from "@/stores/app-store";
 import { renderMarkdown } from "@/lib/markdown";
-import * as LucideIcons from "lucide-react";
+import { Trash2 } from "lucide-react";
+import { resolveIcon } from "@/components/common/icon-registry";
 
 /** 动态页面 — AI 通过对话直接写入中间栏的内容 */
 export function DynamicPageRenderer({ pageId }: { pageId: string }) {
     const { dynamicPages, removeDynamicPage, navigateTo, navItems } = useAppStore();
     const content = dynamicPages[pageId] ?? "";
     const navItem = navItems.find((n) => n.id === pageId);
-    const IconComponent = navItem
-        ? (LucideIcons as unknown as Record<string, React.ComponentType<{ className?: string }>>)[navItem.icon]
-        : null;
+    const IconComponent = navItem ? resolveIcon(navItem.icon) : null;
 
     const htmlContent = useMemo(() => {
         if (!content) return "<p style='color:#94a3b8;'>（空内容）</p>";
@@ -38,7 +37,7 @@ export function DynamicPageRenderer({ pageId }: { pageId: string }) {
                         }}
                         className="flex items-center gap-1 rounded-md border border-red-200 px-2.5 py-1 text-xs text-red-600 hover:bg-red-50"
                     >
-                        <LucideIcons.Trash2 className="h-3.5 w-3.5" />
+                        <Trash2 className="h-3.5 w-3.5" />
                         移除
                     </button>
                 </div>

@@ -118,9 +118,27 @@ export async function finalizeChapter(
     // 步骤4：质量检查
     try {
         const qcResult = await runQualityCheck({ projectId: pid, chapterId, chapterNumber, chapterContent });
-        if (!qcResult.passed) {
-            const errors = qcResult.checks.filter(c => c.severity === "error");
-            if (errors.length > 0) useAppStore.getState().addChatMessage({ id: uuid(), role: "system", content: `⚠️ 质量检查发现 ${errors.length} 个问题：\n${errors.map(e => `· ${e.message}`).join("\n")}`, created_at: new Date().toISOString() });
+        // ★ 持久化质检结果到 LogStore（按章节号存储），供工具栏「质检」按钮查看 + 跳转
+        try {
+            const logKey = `novel-workbench-log-${pid}`;
+            const logStore = getJSONSync(logKey, {} as any);
+            logStore.qualityChecks = logStore.qualityChecks || {};
+            logStore.qualityChecks[chapterNumber] = {
+                checkedAt: new Date().toISOString(),
+                passed: qcResult.passed,
+                checks: qcResult.checks,
+            };
+            setJSONSync(logKey, logStore);
+        } catch { /* 持久化失败不影响定稿 */ }
+        // 简化聊天通知：仅汇报数量，详细结果在工具栏「质检」按钮查看
+        const errors = qcResult.checks.filter(c => c.severity === "error");
+        const warnings = qcResult.checks.filter(c => c.severity === "warning");
+        if (errors.length > 0 || warnings.length > 0) {
+            useAppStore.getState().addChatMessage({
+                id: uuid(), role: "system",
+                content: `⚠️ 质量检查完成：${errors.length} 个错误、${warnings.length} 个警告。\n点击编辑器工具栏「质检」按钮查看详情并跳转修复。`,
+                created_at: new Date().toISOString(),
+            });
         }
         steps.push({ name: "质量检查", ok: true });
     } catch (e) {

@@ -200,12 +200,13 @@ export function WorldviewPanel() {
   const pushHRef = useRef<() => void>(() => { });
   const handleUpdate = useCallback(async (u: WorldTerm) => { pushHRef.current(); await api.saveWorldTerm(u); setTerms(p => p.map(t => t.id === u.id ? u : t)); setNodes(nds => nds.map(n => n.id === u.id ? { ...n, draggable: !u.is_locked, data: { ...n.data, term: u } } : n)); }, [setNodes]);
   const handleSelect = useCallback((t: WorldTerm) => { setSelectedEntity({ type: "world_term", id: t.id, name: t.title }); }, [setSelectedEntity]);
-  const delRef = useRef<(id: string) => void>(() => { });
-  delRef.current = useCallback(async (id: string) => {
+  const delRef = useRef<(id: string, title: string) => void>(() => { });
+  delRef.current = useCallback(async (id: string, title: string) => {
     pushHRef.current();
-    // 找回词条名称用于确认对话框
+    // ★ 优先使用节点传入的 title（避免 terms 闭包过期导致显示 id）
     const term = terms.find(t => t.id === id);
-    if (!await confirmDialog(`确定删除词条「${term?.title || id}」？此操作不可撤销。`)) return;
+    const displayTitle = title || term?.title || id;
+    if (!await confirmDialog(`确定删除词条「${displayTitle}」？此操作不可撤销。`)) return;
     await api.deleteWorldTerm(id);
     setTerms(p => p.filter(t => t.id !== id));
     // remove edges pointing to/from this node

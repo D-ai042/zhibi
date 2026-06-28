@@ -6,7 +6,6 @@
  */
 
 import { api } from "./api";
-import { getJSONSync } from "./storage";
 import type { StoryBible, StyleGuide } from "@/types";
 
 // ===== 接口 =====
@@ -20,7 +19,7 @@ export interface QualityCheckResult {
 }
 
 export interface QualityCheckItem {
-    type: "bible" | "character" | "foreshadow" | "version" | "plot_logic";
+    type: "bible" | "character" | "foreshadow" | "plot_logic";
     severity: "pass" | "warning" | "error";
     message: string;
     detail: string;
@@ -46,25 +45,23 @@ export async function runQualityCheck(input: QualityCheckInput): Promise<Quality
     ]);
 
     // ★ AI 全文检查（分段发送避免超 token）
+    // 并行检查所有分段：原串行 for-await 多段时延迟翻倍，改为 Promise.all 并行执行。
+    // 顺序由 map 索引保持，结果按段顺序合并。通常 2-3 段，并行不会触发 API 限流。
     const chunks = splitContent(chapterContent, MAX_CHARS_PER_CHUNK);
-    const aiResults: QualityCheckItem[] = [];
-    for (let i = 0; i < chunks.length; i++) {
-        const chunkLabel = chunks.length > 1 ? `（第${i + 1}/${chunks.length}段）` : "";
-        const res = await aiQualityCheck(
-            chapterNumber, chunks[i], chunkLabel, bible, styleGuide, prevSummaries
-        );
-        aiResults.push(...res);
-    }
+    const aiResults = await Promise.all(
+        chunks.map((chunk, i) => {
+            const chunkLabel = chunks.length > 1 ? `（第${i + 1}/${chunks.length}段）` : "";
+            return aiQualityCheck(chapterNumber, chunk, chunkLabel, bible, styleGuide, prevSummaries);
+        })
+    );
 
-    // 版本检查（不依赖 AI）
-    const versionCheck = checkChapterVersion(projectId, chapterNumber);
-    checks.push(...versionCheck);
-
-    // 合并 AI 结果
-    checks.push(...aiResults);
+    // 合并 AI 结果（保持分段顺序）
+    checks.push(...aiResults.flat());
 
     const errors = checks.filter((c) => c.severity === "error");
-    return { passed: errors.length === 0, checks };
+    const warnings = checks.filter((c) => c.severity === "warning");
+    // passed 仅当无错误且无警告时为 true（警告也算未通过）
+    return { passed: errors.length === 0 && warnings.length === 0, checks };
 }
 
 /** 将正文按 MAX_CHARS 分割，尽量在段落边界断开 */
@@ -161,21 +158,6 @@ ${chapterContent}
     } catch (e) {
         return [{ type: "bible", severity: "error", message: "质量检查失败", detail: e instanceof Error ? e.message : String(e) }];
     }
-}
-
-// ===== 版本检查（不依赖 AI） =====
-
-function checkChapterVersion(projectId: string, chapterNumber: number): QualityCheckItem[] {
-    const store = getJSONSync(`novel-workbench-log-${projectId}`, {} as any);
-    const deps = store.dependencies || [];
-    const staleForThis = deps.filter((d: any) => {
-        const depCh = parseInt(d.dependsOnChapter);
-        return depCh <= chapterNumber && d.status === "stale";
-    });
-    if (staleForThis.length > 0) {
-        return [{ type: "version", severity: "error", message: `⚠️ ${staleForThis.length} 条数据基于旧版本`, detail: "前章已修改，请重新生成摘要。" }];
-    }
-    return [{ type: "version", severity: "pass", message: "✅ 版本检查通过", detail: "" }];
 }
 
 // ===== 辅助加载 =====

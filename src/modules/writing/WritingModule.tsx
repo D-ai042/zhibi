@@ -1,7 +1,7 @@
 // WritingModule.tsx — 写作台主组件（T6 拆分薄壳，逻辑全保留）
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAppStore } from "@/stores/app-store";
-import { api } from "@/lib/api";
+import { api, isTauri } from "@/lib/api";
 import { rebaseMemory } from "@/lib/memory-updater";
 import { AiWritingDialog } from "@/components/editor/AiWritingDialog";
 import { AiWriteChapterDialog } from "@/components/editor/AiWriteChapterDialog";
@@ -9,6 +9,7 @@ import { renderMarkdown } from "@/lib/markdown";
 import { getJSONSync, setJSONSync } from "@/lib/storage";
 import { confirmDialog } from "@/lib/confirm";
 import { loadAllChapters, saveChapter, saveAllChapters, deleteChapter as deleteStoredChapter, type Chapter as PlotChapter } from "@/lib/chapter-store";
+import { reportDiagnostic } from "@/lib/diagnostics";
 import type { ChapterSummary, BeatCard } from "@/types";
 import { uuid } from "@/lib/uuid";
 import { ChapterTree } from "./ChapterTree";
@@ -31,7 +32,7 @@ const CN_NUMS = ['零', '一', '二', '三', '四', '五', '六', '七', '八', 
 function migrateTitle(ch: PlotChapter): string { const ap = `第${ch.number}章`; if (ch.title.startsWith(ap)) return ch.title.slice(ap.length).replace(/^\s*/, ''); const cp = `第${CN_NUMS[ch.number] ?? ch.number}章`; if (ch.title.startsWith(cp)) return ch.title.slice(cp.length).replace(/^\s*/, ''); return ch.title; }
 
 export function WritingModule() {
-    const { currentProject, chapterSelectMode: selectMode, selectedChapterIds: storeSelIds, setChapterSelectMode, setSelectedChapterIds: storeSetSelIds, pendingInsertContent, insertTextBump } = useAppStore();
+    const { currentProject, chapterSelectMode: selectMode, selectedChapterIds: storeSelIds, setChapterSelectMode, setSelectedChapterIds: storeSetSelIds, pendingInsertContent, insertTextBump, qualityJumpTarget } = useAppStore();
     const [chapters, setChapters] = useState<PlotChapter[]>([]);
     const [selectedChapterId, setSelectedChapterId] = useState<string | null>(null);
     const [editingContent, setEditingContent] = useState("");
@@ -44,6 +45,8 @@ export function WritingModule() {
     const [staleInfo, setStaleInfo] = useState<{ count: number; chapters: string; fromChapter: number } | null>(null);
     const [rebaseRunning, setRebaseRunning] = useState(false);
     const [rebaseProgress, setRebaseProgress] = useState<{ current: number; total: number } | null>(null);
+    /** ★ 定稿中状态：防止重复点击定稿按钮 */
+    const [finalizing, setFinalizing] = useState(false);
     const selIdSet = new Set(storeSelIds);
     const [volCollapsed, setVolCollapsed] = useState<Record<string, boolean>>({});
     const editorRef = useRef<HTMLDivElement>(null);
@@ -70,12 +73,13 @@ export function WritingModule() {
     const pid = currentProject?.id;
 
     const volumes = useMemo(() => {
-        if (!pid) return []; const segs = loadSegments(pid); const edges = loadEdges(pid); const bright = segs.filter(s => s.type === "bright"); const dark = segs.filter(s => s.type === "dark"); const brightMap = new Map(bright.map(b => [b.id, b])); const idMap = new Map(segs.map(s => [s.id, s])); const sortedIds = getSortedBrightIds(pid);
+        if (!pid) return []; const segs = loadSegments(pid); const edges = loadEdges(pid); const bright = segs.filter(s => s.type === "bright"); const dark = segs.filter(s => s.type === "dark"); const brightMap = new Map(bright.map(b => [b.id, b])); const idMap = new Map(segs.map(s => [s.id, s])); const sortedIds = getSortedBrightIds(segs, edges);
         return sortedIds.map(id => { const b = brightMap.get(id)!; const connectedDarkIds = new Set<string>(); for (const e of edges) { const src = idMap.get(e.source); const tgt = idMap.get(e.target); if (src?.id === b.id && tgt?.type === "dark") connectedDarkIds.add(tgt.id); if (tgt?.id === b.id && src?.type === "dark") connectedDarkIds.add(src.id); } const darkSegs = dark.filter(d => connectedDarkIds.has(d.id)); const suffix = darkSegs.length > 0 ? "—" + darkSegs.map(d => d.title).join("、") : ""; return { id: b.id, title: b.title + suffix, brightTitle: b.title, darkTitles: darkSegs.map(d => d.title) }; });
     }, [pid]);
 
-    function getSortedBrightIds(projectId: string): string[] {
-        const segs = loadSegments(projectId); const edges = loadEdges(projectId); const bright = segs.filter(s => s.type === "bright"); if (!bright.length) return []; const bi = new Set(bright.map(b => b.id)); const idg = new Map<string, number>(); const adj = new Map<string, string[]>(); for (const b of bright) { idg.set(b.id, 0); adj.set(b.id, []); }
+    // 拓扑排序明线段：改为接收已加载的 segs/edges，避免内部重复 loadSegments+loadEdges
+    function getSortedBrightIds(segs: PlotSegment[], edges: { source: string; target: string }[]): string[] {
+        const bright = segs.filter(s => s.type === "bright"); if (!bright.length) return []; const bi = new Set(bright.map(b => b.id)); const idg = new Map<string, number>(); const adj = new Map<string, string[]>(); for (const b of bright) { idg.set(b.id, 0); adj.set(b.id, []); }
         for (const e of edges) { if (bi.has(e.source) && bi.has(e.target)) { adj.get(e.source)?.push(e.target); idg.set(e.target, (idg.get(e.target) || 0) + 1); } }
         const q: string[] = []; const sorted: string[] = []; for (const [id, deg] of idg) { if (deg === 0) q.push(id); }
         while (q.length > 0) { q.sort((a, b) => bright.findIndex(x => x.id === a) - bright.findIndex(x => x.id === b)); const id = q.shift()!; sorted.push(id); for (const n of adj.get(id) || []) { const nd = (idg.get(n) || 1) - 1; idg.set(n, nd); if (nd === 0) q.push(n); } }
@@ -84,20 +88,121 @@ export function WritingModule() {
     }
 
     useEffect(() => {
-        if (!pid) return; let loaded = loadAllChapters(pid); let changed = false;
-        const migrated = loaded.map(ch => { const n = migrateTitle(ch); if (n !== ch.title) { changed = true; return { ...ch, title: n }; } return ch; });
-        const segs = loadSegments(pid); const bright = segs.filter(s => s.type === "bright"); const vvi = new Set(bright.map(b => b.id));
-        const filtered = migrated.filter(ch => vvi.has(ch.volumeSegmentId)); if (filtered.length < migrated.length) changed = true;
-        const sortedBright = getSortedBrightIds(pid); const vo = new Map<string, number>(); sortedBright.forEach((id, i) => vo.set(id, i));
-        const sorted = [...filtered].sort((a, b) => { const oa = vo.get(a.volumeSegmentId) ?? 999; const ob = vo.get(b.volumeSegmentId) ?? 999; if (oa !== ob) return oa - ob; return a.number - b.number; });
-        const renumbered = sorted.map((ch, idx) => { const nn = idx + 1; if (ch.number !== nn) { changed = true; return { ...ch, number: nn }; } return ch; });
-        if (changed) { const r = saveAllChapters(pid, renumbered); if (!r.ok) useAppStore.getState().setAutosaveStatus("⚠ 章节迁移保存失败"); } setChapters(renumbered);
+        if (!pid) return;
+        let cancelled = false;
+
+        // ★ 章节处理核心逻辑（同步）：迁移标题、安全网、过滤、排序、renumber、保存、setChapters
+        function processAndSetChapters(loaded: PlotChapter[]): void {
+            let changed = false;
+            const migrated = loaded.map(ch => { const n = migrateTitle(ch); if (n !== ch.title) { changed = true; return { ...ch, title: n }; } return ch; });
+            let segs = loadSegments(pid!); let edges = loadEdges(pid!); let bright = segs.filter(s => s.type === "bright"); let vvi = new Set(bright.map(b => b.id));
+            // ★ 安全网：如果章节存在但没有 bright segment，所有章节会被过滤掉。
+            // 自动创建默认 bright segment 并重新关联章节，确保用户能看到数据。
+            if (migrated.length > 0 && bright.length === 0) {
+                const fallbackId = `default-vol-${pid}`;
+                const fallbackSeg = { id: fallbackId, project_id: pid!, type: "bright" as const, title: "正文", characters: "", location: "", time: "", event: "" };
+                segs = [...segs, fallbackSeg];
+                setJSONSync(`plot-segments-${pid}`, segs);
+                bright = [fallbackSeg];
+                vvi = new Set([fallbackId]);
+                for (const ch of migrated) { if (!vvi.has(ch.volumeSegmentId)) { ch.volumeSegmentId = fallbackId; changed = true; } }
+                reportDiagnostic("warn", "[写作台] 检测到章节存在但无明线段，已自动创建默认卷「正文」", { pid: pid?.slice(0, 8), chapters: migrated.length });
+            }
+            const filtered = migrated.filter(ch => vvi.has(ch.volumeSegmentId)); if (filtered.length < migrated.length) changed = true;
+            if (loaded.length > 0 || segs.length > 0) {
+                const droppedSamples = migrated.filter(ch => !vvi.has(ch.volumeSegmentId)).slice(0, 2).map(ch => ({ id: ch.id, volSegId: ch.volumeSegmentId, title: ch.title }));
+                reportDiagnostic("warn", "[写作台] 章节加载诊断", {
+                    pid: pid?.slice(0, 8), loaded: loaded.length, segments: segs.length,
+                    brightCount: bright.length, brightIds: bright.map(b => b.id).slice(0, 5),
+                    filtered: filtered.length, dropped: migrated.length - filtered.length,
+                    droppedSamples,
+                });
+            }
+            const sortedBright = getSortedBrightIds(segs, edges); const vo = new Map<string, number>(); sortedBright.forEach((id, i) => vo.set(id, i));
+            const sorted = [...filtered].sort((a, b) => { const oa = vo.get(a.volumeSegmentId) ?? 999; const ob = vo.get(b.volumeSegmentId) ?? 999; if (oa !== ob) return oa - ob; return a.number - b.number; });
+            const renumbered = sorted.map((ch, idx) => { const nn = idx + 1; if (ch.number !== nn) { changed = true; return { ...ch, number: nn }; } return ch; });
+            if (changed) { const r = saveAllChapters(pid!, renumbered); if (!r.ok) useAppStore.getState().setAutosaveStatus("⚠ 章节迁移保存失败"); }
+            setChapters(renumbered);
+        }
+
+        // 1. 同步加载章节
+        const loaded = loadAllChapters(pid);
+        processAndSetChapters(loaded);
+
+        // 2. ★ Fallback：同步加载为空且 Tauri 模式时，直接从 SQL 表读取 chapterShards 重建章节
+        //    解决 prewarm 时序竞争：_sqliteCache 在 loadAllChapters 调用时可能尚未填充，
+        //    导致 chapter-index-*/chapter-* key 读到空。api.exportProject 直接走 Rust 读 SQL 表，
+        //    绕过 _sqliteCache，能拿到真实数据。重建后 saveAllChapters 会同步更新 _sqliteCache。
+        if (loaded.length === 0 && isTauri()) {
+            (async () => {
+                try {
+                    const pd = await api.exportProject(pid) as any;
+                    if (cancelled) return;
+                    const shards = pd?.chapterShards as Record<string, any> | undefined;
+                    const pdSegs = pd?.plotSegments as any[] | undefined;
+                    const pdChs = pd?.chapters as any[] | undefined;
+                    // ★ 详细诊断：记录 exportProject 返回的关键字段
+                    reportDiagnostic("warn", "[写作台] fallback exportProject 返回", {
+                        pid: pid?.slice(0, 8),
+                        hasProject: !!pd?.project,
+                        projId: pd?.project?.id?.slice(0, 8),
+                        shardsCount: shards ? Object.keys(shards).length : 0,
+                        plotSegs: pdSegs?.length || 0,
+                        chapters: pdChs?.length || 0,
+                        chapterContents: pd?.chapterContents?.length || 0,
+                    });
+                    if (!shards || Object.keys(shards).length === 0) return;
+
+                    // 从 shards 创建新的章节对象（直接读取数据解析）
+                    const recovered: PlotChapter[] = Object.values(shards).map((s: any) => ({
+                        id: String(s.id || ""),
+                        volumeSegmentId: String(s.volumeSegmentId || ""),
+                        number: Number(s.number ?? 0),
+                        title: String(s.title || ""),
+                        content: String(s.content || ""),
+                    })).filter(ch => ch.id);
+
+                    if (recovered.length === 0 || cancelled) return;
+
+                    // 写回分片存储（同时更新 _sqliteCache + SQLite，修复后续读取链路）
+                    const r = saveAllChapters(pid, recovered);
+                    if (!r.ok) {
+                        reportDiagnostic("error", "[写作台] fallback 写回章节失败", { pid: pid.slice(0, 8), error: r.error });
+                        return;
+                    }
+
+                    // plotSegments 也缺失时，从 exportProject 恢复（确保 bright segment 存在）
+                    if (pdSegs && pdSegs.length > 0) {
+                        setJSONSync(`plot-segments-${pid}`, pdSegs);
+                        reportDiagnostic("warn", "[写作台] fallback 恢复 plot-segments", {
+                            pid: pid?.slice(0, 8), segs: pdSegs.length,
+                        });
+                    }
+
+                    if (cancelled) return;
+
+                    // 重新执行加载和处理（_sqliteCache 已通过 saveAllChapters 更新）
+                    const reloaded = loadAllChapters(pid);
+                    processAndSetChapters(reloaded);
+
+                    reportDiagnostic("warn", "[写作台] 通过 fallback 从 SQL 表恢复章节", {
+                        pid: pid?.slice(0, 8),
+                        recovered: recovered.length,
+                        reloaded: reloaded.length,
+                    });
+                } catch (e) {
+                    reportDiagnostic("error", "[写作台] fallback 读取章节失败", { pid: pid.slice(0, 8), error: String(e) });
+                }
+            })();
+        }
+
+        return () => { cancelled = true; };
     }, [pid]);
 
     const _skipNextChapterEffect = useRef(false);
     useEffect(() => {
         if (_skipNextChapterEffect.current) { _skipNextChapterEffect.current = false; return; }
-        if (selectedChapterId && pid) { const ch = chapters.find(c => c.id === selectedChapterId); if (ch) { const indent = "\u3000\u3000"; const raw = ch.content ?? ""; const content = raw.length === 0 ? indent : raw.startsWith(indent) ? raw : indent + raw; setEditingContent(content); savedContentRef.current = content; setIsDirty(false); setSelectionRange(null); const stale = detectStaleAhead(pid, ch.number); setStaleInfo(stale.count > 0 ? stale : null); setTimeout(() => syncEditorHTML(content), 0); loadCtx(pid, ch.number, selectedChapterId); } }
+        if (selectedChapterId && pid) { const ch = chapters.find(c => c.id === selectedChapterId); if (ch) { const indent = "\u3000\u3000"; const raw = ch.content ?? ""; const content = raw.length === 0 ? indent : raw.startsWith(indent) ? raw : indent + raw; setEditingContent(content); savedContentRef.current = content; setIsDirty(false); setSelectionRange(null); const stale = detectStaleAhead(pid, ch.number); setStaleInfo(stale.count > 0 ? stale : null); setTimeout(() => syncEditorHTML(content), 0); loadCtx(pid, ch.number, selectedChapterId, chapters); } }
     }, [selectedChapterId, chapters]);
 
     const [ctxSummaries, setCtxSummaries] = useState<ChapterSummary[]>([]);
@@ -110,13 +215,13 @@ export function WritingModule() {
     const [ctxStyleTone, setCtxStyleTone] = useState("");
     const [ctxCollapsed, setCtxCollapsed] = useState(true);
     const loadGenRef = useRef(0);
-    async function loadCtx(projectId: string, chapterNumber: number, chapterId: string) {
+    async function loadCtx(projectId: string, chapterNumber: number, chapterId: string, currentChapters: PlotChapter[]) {
         const gen = ++loadGenRef.current;
         try {
             const [summaries, beatCards, styleGuide] = await Promise.all([api.getChapterSummaries(projectId).catch(() => [] as any[]), api.listBeatCards(chapterId).catch(() => [] as any[]), api.getStyleGuide(projectId).catch(() => null)]); if (gen !== loadGenRef.current) return; setCtxSummaries(summaries.filter((s: any) => s.chapter_number < chapterNumber && s.chapter_number >= chapterNumber - 5).sort((a: any, b: any) => a.chapter_number - b.chapter_number)); setCtxBeatCards(beatCards); if (styleGuide) { setCtxStyleRedlines((styleGuide as any).writing_rules || ""); setCtxStyleNarrative((styleGuide as any).narrative_style || ""); setCtxStyleTone((styleGuide as any).writing_tone || ""); } else { setCtxStyleRedlines(""); setCtxStyleNarrative(""); setCtxStyleTone(""); }
             try { const store = getJSONSync(`novel-workbench-log-${projectId}`, {} as any); const states = store?.characterStates || []; if (gen === loadGenRef.current) setCtxCharacters(states.filter((s: any) => s.last_active_chapter >= chapterNumber - 10).map((s: any) => ({ name: s.character_name, status: s.current_status }))); } catch { }
             try { if (gen === loadGenRef.current) { const allTerms = await api.listWorldTerms(projectId); const rules = allTerms.filter(t => t.term_type === "rule").map(t => `· ${t.title}：${t.one_liner || ""}`); setCtxWorldRules(rules.slice(0, 8)); } } catch { setCtxWorldRules([]); }
-            try { if (gen === loadGenRef.current) { const allChapters = loadAllChapters(projectId); const prev = allChapters.find((ch: any) => ch.number === chapterNumber - 1); if (prev?.content) { const clean = prev.content.replace(/<[^>]+>/g, '').trim(); if (clean) setCtxPrevContent({ number: prev.number, title: prev.title || "", content: clean.slice(-3000) }); else setCtxPrevContent(null); } else setCtxPrevContent(null); } } catch { setCtxPrevContent(null); }
+            try { if (gen === loadGenRef.current) { const prev = currentChapters.find((ch: any) => ch.number === chapterNumber - 1); if (prev?.content) { const clean = prev.content.replace(/<[^>]+>/g, '').trim(); if (clean) setCtxPrevContent({ number: prev.number, title: prev.title || "", content: clean.slice(-3000) }); else setCtxPrevContent(null); } else setCtxPrevContent(null); } } catch { setCtxPrevContent(null); }
         } catch { }
     }
 
@@ -126,6 +231,15 @@ export function WritingModule() {
 
     const selectedChapter = chapters.find(c => c.id === selectedChapterId);
     const selectedVolume = volumes.find(v => v.id === selectedChapter?.volumeSegmentId);
+
+    // ★ 跨章节质检跳转：监听 qualityJumpTarget.bump，目标章节 != 当前章节时自动切换
+    useEffect(() => {
+        if (!qualityJumpTarget) return;
+        if (qualityJumpTarget.chapterId !== selectedChapterId) {
+            const target = chapters.find(c => c.id === qualityJumpTarget.chapterId);
+            if (target) setSelectedChapterId(target.id);
+        }
+    }, [qualityJumpTarget?.bump]);
 
     const saveContent = useCallback(() => { if (!pid || !selectedChapterId || !selectedChapter) return; pushUndo(); const updatedChapter = { ...selectedChapter, content: editingContent }; const nextChapters = chapters.map(c => c.id === selectedChapterId ? updatedChapter : c); try { _skipNextChapterEffect.current = true; const saved = saveChapter(pid, updatedChapter); if (!saved.ok) throw new Error(saved.error || "保存失败"); setChapters(nextChapters); savedContentRef.current = editingContent; setIsDirty(false); bumpSavedChapterVersion(pid, selectedChapter.number); useAppStore.getState().setAutosaveStatus("✅ 已保存"); const tid = setTimeout(() => useAppStore.getState().setAutosaveStatus("已就绪"), 2000); timeoutIdsRef.current.push(tid); } catch (e) { useAppStore.getState().setAutosaveStatus("⚠ 保存失败，请重试"); } }, [pid, selectedChapterId, selectedChapter, editingContent, chapters]);
     const saveContentRef = useRef(saveContent); saveContentRef.current = saveContent;
@@ -144,7 +258,7 @@ export function WritingModule() {
     const persistAiChapters = useCallback((projectId: string, chs: PlotChapter[]) => { const current = selectedChapterId ? chs.find(c => c.id === selectedChapterId) : undefined; const r = current ? saveChapter(projectId, current) : saveAllChapters(projectId, chs); if (!r.ok) useAppStore.getState().setAutosaveStatus("⚠ AI 内容保存失败"); }, [selectedChapterId]);
     const { aiWriting, aiError, humanizing, polishing, writeDlg, setWriteDlg, lastWriteParamsRef, handleAiWriteChapter, handleHumanize, handlePolish } = useAiWriting(pid, selectedChapter, editingContent, pushUndo, setEditingContent, (updater) => setChapters(prev => { const upd = updater(prev); persistAiChapters(pid!, upd); return upd; }), persistAiChapters, syncEditorHTML);
 
-    const handleRebase = useCallback(async () => { if (!pid) return; setRebaseRunning(true); setRebaseProgress(null); try { await rebaseMemory(pid, staleInfo?.fromChapter || 1, (c, t) => setRebaseProgress({ current: c, total: t })); setStaleInfo(null); useAppStore.getState().setAutosaveStatus("✅ 级联重跑完成"); if (selectedChapterId) { const ch = chapters.find(c => c.id === selectedChapterId); if (ch) loadCtx(pid, ch.number, selectedChapterId); } } catch { useAppStore.getState().setAutosaveStatus("⚠ 级联重跑失败"); } finally { setRebaseRunning(false); setRebaseProgress(null); } }, [pid, selectedChapterId, chapters, staleInfo]);
+    const handleRebase = useCallback(async () => { if (!pid) return; setRebaseRunning(true); setRebaseProgress(null); try { await rebaseMemory(pid, staleInfo?.fromChapter || 1, (c, t) => setRebaseProgress({ current: c, total: t })); setStaleInfo(null); useAppStore.getState().setAutosaveStatus("✅ 级联重跑完成"); if (selectedChapterId) { const ch = chapters.find(c => c.id === selectedChapterId); if (ch) loadCtx(pid, ch.number, selectedChapterId, chapters); } } catch { useAppStore.getState().setAutosaveStatus("⚠ 级联重跑失败"); } finally { setRebaseRunning(false); setRebaseProgress(null); } }, [pid, selectedChapterId, chapters, staleInfo]);
 
     const handleReadToAI = useCallback(() => { if (!pid || storeSelIds.length === 0) return; const selSet = new Set(storeSelIds); const sel = chapters.filter(ch => selSet.has(ch.id)).sort((a, b) => a.number - b.number); const parts = sel.map(ch => { const body = (ch.content || '').replace(/<[^>]+>/g, '').trim(); return `【第${ch.number}章「${ch.title}」】\n${body ? body.slice(0, 3000) : "（暂无正文）"}`; }); useAppStore.getState().setEphemeralChapterContext(`===== 选取的章节正文 =====\n${parts.join("\n\n")}`); useAppStore.getState().setAutosaveStatus(`✅ 已读取 ${sel.length} 章到 AI 上下文`); }, [pid, chapters, storeSelIds]);
 
@@ -152,7 +266,17 @@ export function WritingModule() {
 
     if (!currentProject || !pid) return <div className="flex h-full items-center justify-center text-slate-400 text-sm">请先选择或创建项目</div>;
 
-    const handleFinalize = useCallback(async () => { if (!pid || !selectedChapter || !selectedChapterId) return; saveContent(); const result = await finalizeChapter(pid, selectedChapterId, selectedChapter.number, selectedChapter.title, editingContent); if (!result.ok) { const failedSteps = result.steps.filter(s => !s.ok); const msg = failedSteps.map(s => `· ${s.name}：${s.error || "失败"}`).join("\n"); useAppStore.getState().addChatMessage({ id: uuid(), role: "system", content: `⚠️ 定稿部分步骤失败：\n${msg}`, created_at: new Date().toISOString() }); } }, [pid, selectedChapter, selectedChapterId, editingContent, saveContent]);
+    const handleFinalize = useCallback(async () => {
+        if (!pid || !selectedChapter || !selectedChapterId || finalizing) return;
+        setFinalizing(true);
+        try {
+            saveContent();
+            const result = await finalizeChapter(pid, selectedChapterId, selectedChapter.number, selectedChapter.title, editingContent);
+            if (!result.ok) { const failedSteps = result.steps.filter(s => !s.ok); const msg = failedSteps.map(s => `· ${s.name}：${s.error || "失败"}`).join("\n"); useAppStore.getState().addChatMessage({ id: uuid(), role: "system", content: `⚠️ 定稿部分步骤失败：\n${msg}`, created_at: new Date().toISOString() }); }
+        } finally {
+            setFinalizing(false);
+        }
+    }, [pid, selectedChapter, selectedChapterId, editingContent, saveContent, finalizing]);
 
     return (
         <div className="flex h-full">
@@ -184,7 +308,7 @@ export function WritingModule() {
                 editingContent={editingContent} isDirty={isDirty}
                 aiWriting={aiWriting} humanizing={humanizing} polishing={polishing} aiError={aiError}
                 fontSize={fontSize} staleInfo={staleInfo} rebaseRunning={rebaseRunning} rebaseProgress={rebaseProgress}
-                canUndo={canUndo} canRedo={canRedo} selectionRange={selectionRange}
+                canUndo={canUndo} canRedo={canRedo} finalizing={finalizing} selectionRange={selectionRange}
                 lastWriteParams={lastWriteParamsRef.current} editorRef={editorRef}
                 onAiWrite={() => setWriteDlg({ wordCount: 2000, plotDirection: "" })}
                 onHumanize={handleHumanize} onPolish={handlePolish}
@@ -196,6 +320,8 @@ export function WritingModule() {
                 onEditorInput={e => { const text = (e.currentTarget as HTMLElement).innerText || ""; if (text !== editingContent) { if (!_ignoreNextInput.current) pushUndo(); _ignoreNextInput.current = false; setEditingContent(text); } }}
                 onEditorMouseUp={e => { if (insertLockRef.current) return; const sel = window.getSelection(); if (!sel || !sel.rangeCount) return; const st = sel.toString(); if (st) { const idx = editingContent.indexOf(st); if (idx >= 0) setAiDialog({ start: idx, end: idx + st.length, text: st, mouseX: e.clientX, mouseY: e.clientY }); } }}
                 onEditorKeyDown={e => { if ((e.ctrlKey || e.metaKey) && e.key === "z" && !e.shiftKey) { e.preventDefault(); handleUndo(); } if ((e.ctrlKey || e.metaKey) && (e.key === "y" || (e.key === "z" && e.shiftKey))) { e.preventDefault(); handleRedo(); } }}
+                jumpTarget={qualityJumpTarget}
+                projectId={pid}
             />
             {writeDlg && selectedChapter && (
                 <AiWriteChapterDialog chapterNumber={selectedChapter.number} chapterTitle={selectedChapter.title}

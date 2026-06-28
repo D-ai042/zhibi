@@ -79,3 +79,165 @@ body {
   border-left: 3px solid #a855f7;
   padding-left: 8px;
 }
+
+/* ===== 护眼主题（总开关 .eye-care-mode + 主题 class .theme-*）=====
+ * 仅当根 div 应用 .eye-care-mode 时，主题配色才生效。
+ * 6 个主题：.theme-default | .theme-warm-apricot | .theme-forest-dark | .theme-slate-blue | .theme-milk-tea | .theme-mint
+ * 每个主题定义一套完整 CSS 变量：背景/表面/文字/边框/悬浮/主色调/正文背景。
+ */
+
+/* ---------- 主题：默认（保持原版浅色 UI + 白底正文） ---------- */
+.eye-care-mode.theme-default {
+  --ec-bg: #f5f6fa;
+  --ec-surface: #ffffff;
+  --ec-surface-alt: #f1f5f9;
+  --ec-text: #1a1a2e;
+  --ec-text-muted: #64748b;
+  --ec-border: #e2e8f0;
+  --ec-hover: #f1f5f9;
+  --ec-accent: #f59e0b;
+  --editor-bg: #fafaf9;
+  --editor-text: #292524;
+}
+
+/* ---------- 主题：暖杏色纸张 ---------- */
+.eye-care-mode.theme-warm-apricot {
+  --ec-bg: #F5ECD7;
+  --ec-surface: #FAF3E0;
+  --ec-surface-alt: #EFE3C5;
+  --ec-text: #3E3427;
+  --ec-text-muted: #7A6A55;
+  --ec-border: #D9CBA8;
+  --ec-hover: #EFE3C5;
+  --ec-accent: #D4A017;
+  --editor-bg: #F5ECD7;
+  --editor-text: #3E3427;
+}
+
+/* ---------- 主题：深森林绿暗色 ---------- */
+.eye-care-mode.theme-forest-dark {
+  --ec-bg: #1A2E22;
+  --ec-surface: #243828;
+  --ec-surface-alt: #2D4533;
+  --ec-text: #B8CDB8;
+  --ec-text-muted: #7A9080;
+  --ec-border: #2D4533;
+  --ec-hover: #2D4533;
+  --ec-accent: #2D6A4F;
+  --editor-bg: #1A2E22;
+  --editor-text: #B8CDB8;
+}
+
+/* ---------- 主题：灰蓝低饱和 ---------- */
+.eye-care-mode.theme-slate-blue {
+  --ec-bg: #E8ECF0;
+  --ec-surface: #F2F5F8;
+  --ec-surface-alt: #DDE3EA;
+  --ec-text: #2E3D48;
+  --ec-text-muted: #5A6B78;
+  --ec-border: #C8D1DB;
+  --ec-hover: #DDE3EA;
+  --ec-accent: #475569;
+  --editor-bg: #E8ECF0;
+  --editor-text: #2E3D48;
+}
+
+/* ---------- 主题：奶茶棕暖调 ---------- */
+.eye-care-mode.theme-milk-tea {
+  --ec-bg: #E8DDD0;
+  --ec-surface: #F0E8DC;
+  --ec-surface-alt: #DDCFBE;
+  --ec-text: #3D2E1E;
+  --ec-text-muted: #6F5A45;
+  --ec-border: #C9B89E;
+  --ec-hover: #DDCFBE;
+  --ec-accent: #8B5A2B;
+  --editor-bg: #E8DDD0;
+  --editor-text: #3D2E1E;
+}
+
+/* ---------- 主题：浅薄荷清凉 ---------- */
+.eye-care-mode.theme-mint {
+  --ec-bg: #EEF5F2;
+  --ec-surface: #F5FAF7;
+  --ec-surface-alt: #E0EDE7;
+  --ec-text: #2A3F38;
+  --ec-text-muted: #5A7268;
+  --ec-border: #C8DDD4;
+  --ec-hover: #E0EDE7;
+  --ec-accent: #10B981;
+  --editor-bg: #EEF5F2;
+  --editor-text: #2A3F38;
+}
+
+/* ---------- 主题应用：覆盖 Tailwind 常见背景/文字/边框类 ---------- */
+.eye-care-mode .bg-white,
+.eye-care-mode .bg-slate-50,
+.eye-care-mode .bg-slate-100,
+.eye-care-mode .bg-gray-50,
+.eye-care-mode .bg-gray-100 {
+  background-color: var(--ec-surface) !important;
+}
+
+.eye-care-mode .bg-slate-200,
+.eye-care-mode .bg-gray-200 {
+  background-color: var(--ec-surface-alt) !important;
+}
+
+.eye-care-mode .text-slate-700,
+.eye-care-mode .text-slate-800,
+.eye-care-mode .text-slate-900,
+.eye-care-mode .text-gray-700,
+.eye-care-mode .text-gray-800,
+.eye-care-mode .text-gray-900 {
+  color: var(--ec-text) !important;
+}
+
+.eye-care-mode .text-slate-500,
+.eye-care-mode .text-slate-600,
+.eye-care-mode .text-gray-500,
+.eye-care-mode .text-gray-600 {
+  color: var(--ec-text-muted) !important;
+}
+
+.eye-care-mode .border-slate-200,
+.eye-care-mode .border-slate-300,
+.eye-care-mode .border-gray-200,
+.eye-care-mode .border-gray-300 {
+  border-color: var(--ec-border) !important;
+}
+
+.eye-care-mode .hover\:bg-slate-50:hover,
+.eye-care-mode .hover\:bg-slate-100:hover,
+.eye-care-mode .hover\:bg-gray-50:hover,
+.eye-care-mode .hover\:bg-gray-100:hover {
+  background-color: var(--ec-hover) !important;
+}
+
+.eye-care-mode {
+  background: var(--ec-bg) !important;
+  color: var(--ec-text) !important;
+}
+
+/* ---------- 章节正文编辑区（关键：覆盖 bg-stone-50 + text-stone-800） ---------- */
+.eye-care-mode .chapter-editor-surface {
+  background-color: var(--editor-bg) !important;
+  color: var(--editor-text) !important;
+}
+
+/* ---------- 质检跳转高亮脉冲动画 ---------- */
+/* 应用到 contentEditable 编辑器内的目标段落（块级子元素）
+   设计要点：背景极淡（不遮文字）+ 内嵌左侧色条标记位置（不影响布局） */
+.chapter-editor-surface .quality-jump-highlight {
+  animation: quality-jump-pulse 1.4s ease-in-out 2;
+  background-color: rgba(250, 204, 21, 0.18) !important;
+  box-shadow: inset 3px 0 0 0 rgba(245, 158, 11, 0.85);
+  border-radius: 2px;
+  transition: background-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+@keyframes quality-jump-pulse {
+  0%   { background-color: rgba(250, 204, 21, 0.08); box-shadow: inset 3px 0 0 0 rgba(245, 158, 11, 0.4); }
+  50%  { background-color: rgba(250, 204, 21, 0.28); box-shadow: inset 4px 0 0 0 rgba(245, 158, 11, 1.0); }
+  100% { background-color: rgba(250, 204, 21, 0.18); box-shadow: inset 3px 0 0 0 rgba(245, 158, 11, 0.85); }
+}

@@ -6,6 +6,11 @@ import { getJSONSync, setJSONSync } from "@/lib/storage";
 
 const WORLDVIEW_ZONE_KEY = "ui-worldview-zone-enabled";
 const DEFAULT_WORLDVIEW_ZONE_ENABLED = { core: true, locked: false, active: true, other: true };
+const EYE_CARE_KEY = "ui-eye-care-mode";
+const THEME_KEY = "ui-theme";
+
+/** 主题预设（仅 eyeCareMode=true 时生效；default=保持原版浅色 UI + 白底正文） */
+export type Theme = "default" | "warm-apricot" | "forest-dark" | "slate-blue" | "milk-tea" | "mint";
 
 export interface UiSlice {
   activeModule: NavTarget; activeExtraId: string | null;
@@ -15,6 +20,12 @@ export interface UiSlice {
   /** 画布四象限勾选状态 */
   worldviewZoneEnabled: Record<string, boolean>;
   setWorldviewZoneEnabled: (z: Record<string, boolean>) => void;
+  /** 护眼模式总开关（持久化）；关闭时所有护眼配置不生效 */
+  eyeCareMode: boolean;
+  setEyeCareMode: (v: boolean) => void;
+  /** 主题预设（仅 eyeCareMode=true 时生效） */
+  theme: Theme;
+  setTheme: (v: Theme) => void;
   navigateTo: (t: NavTarget, extraId?: string) => void;
   setOutlineSection: (s: OutlineSection) => void;
   setOverviewSection: (s: OverviewSection) => void;
@@ -38,6 +49,15 @@ export const createUiSlice: StateCreator<AppStore, [], [], UiSlice> = (set) => (
   manuscriptSection: "inspirations",
   drawerOpen: true, drawerWidth: 420, navCollapsed: false, settingsOpen: false,
   worldviewZoneEnabled: { ...DEFAULT_WORLDVIEW_ZONE_ENABLED, ...getJSONSync(WORLDVIEW_ZONE_KEY, {}) },
+  eyeCareMode: (() => {
+    const v = getJSONSync<boolean>(EYE_CARE_KEY, false);
+    return v === true;
+  })(),
+  theme: (() => {
+    const v = getJSONSync<Theme>(THEME_KEY, "warm-apricot");
+    const valid: Theme[] = ["default", "warm-apricot", "forest-dark", "slate-blue", "milk-tea", "mint"];
+    return valid.includes(v) ? v : "warm-apricot";
+  })(),
   navigateTo: (target, extraId) => set({ activeModule: target, activeExtraId: extraId ?? null }),
   setOutlineSection: (outlineSection) => set({ outlineSection }),
   setOverviewSection: (overviewSection) => set({ overviewSection }),
@@ -49,6 +69,14 @@ export const createUiSlice: StateCreator<AppStore, [], [], UiSlice> = (set) => (
   setWorldviewZoneEnabled: (worldviewZoneEnabled) => {
     setJSONSync(WORLDVIEW_ZONE_KEY, worldviewZoneEnabled);
     set({ worldviewZoneEnabled });
+  },
+  setEyeCareMode: (eyeCareMode) => {
+    setJSONSync(EYE_CARE_KEY, eyeCareMode);
+    set({ eyeCareMode });
+  },
+  setTheme: (theme) => {
+    setJSONSync(THEME_KEY, theme);
+    set({ theme });
   },
   customModules: [], navItems: [], dynamicPages: {},
   addCustomModule: (mod) => set((s) => ({ customModules: [...s.customModules, mod] })),

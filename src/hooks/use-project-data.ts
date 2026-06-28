@@ -28,11 +28,13 @@ export function useProjectBootstrap() {
       const pid = currentProject.id;
       // Rust 端 project.db 与前端 writingModule 的 plot-chapters 是不同数据源
       // 优先从 localStorage 计算完成度（浏览器/EXE 均可用）
-      const terms = getJSONSync("novel-workbench-mock", {} as any).worldTerms?.filter((t: any) => t.project_id === pid)?.length || 0;
-      const chars = getJSONSync("novel-workbench-mock", {} as any).characters?.filter((c: any) => c.project_id === pid)?.length || 0;
+      // 读取一次 novel-workbench-mock 复用，避免重复 JSON.parse
+      const mockStore = getJSONSync("novel-workbench-mock", {} as any);
+      const terms = mockStore.worldTerms?.filter((t: any) => t.project_id === pid)?.length || 0;
+      const chars = mockStore.characters?.filter((c: any) => c.project_id === pid)?.length || 0;
       const segs = getJSONSync(`plot-segments-${pid}`, [] as any[]);
       const chaps = loadAllChapters(pid);
-      const beatCards = getJSONSync("novel-workbench-mock", {} as any).beatCards;
+      const beatCards = mockStore.beatCards;
       const chapIds = new Set(chaps.map((c: any) => c.id));
       const beats = (beatCards || []).filter((b: any) => chapIds.has(b.chapter_id)).length;
       const progress = {
@@ -47,10 +49,9 @@ export function useProjectBootstrap() {
 
   useEffect(() => {
     // EXE 模式：先预暖 localStorage（从 SQLite 读回），再迁移（localStorage → SQLite）
+    // 迁移内部已通过 setSync 更新 _sqliteCache，无需二次全量预暖
     prewarmFromSqlite().then(() => {
       return migrateLocalStorageToSqlite();
-    }).then(() => {
-      return prewarmFromSqlite();
     }).then(() => {
       // 迁移完成后刷新数据
       refresh();
@@ -58,6 +59,12 @@ export function useProjectBootstrap() {
       const store = useAppStore.getState();
       store.setCharacterZoneEnabled?.({ ...store.characterZoneEnabled, ...getJSONSync("ui-character-zone-enabled", {}) });
       store.setWorldviewZoneEnabled?.({ ...store.worldviewZoneEnabled, ...getJSONSync("ui-worldview-zone-enabled", {}) });
+      // 重载护眼模式状态（eyeCareMode + theme），否则 EXE 重启后护眼配置丢失
+      const savedEyeCare = getJSONSync<boolean>("ui-eye-care-mode", false);
+      store.setEyeCareMode?.(savedEyeCare === true);
+      const savedTheme = getJSONSync<string>("ui-theme", "warm-apricot");
+      const validThemes: string[] = ["default", "warm-apricot", "forest-dark", "slate-blue", "milk-tea", "mint"];
+      if (validThemes.includes(savedTheme)) store.setTheme?.(savedTheme as any);
     }).catch((e) => {
       reportDiagnostic("error", "项目启动数据预热/迁移失败", { error: String(e) });
       refresh();

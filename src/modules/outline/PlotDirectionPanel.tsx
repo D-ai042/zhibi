@@ -10,6 +10,7 @@ import { useAppStore } from "@/stores/app-store";
 import PlotStoryNode, { type PlotSegment, type PlotStoryNodeData } from "@/modules/plot-direction/PlotStoryNode";
 import { uuid } from "@/lib/uuid";
 import { getJSONSync, setJSONSync } from "@/lib/storage";
+import { reportDiagnostic } from "@/lib/diagnostics";
 
 // ===== storage =====
 function sk(pid: string) { return "plot-segments-" + pid; }
@@ -200,6 +201,15 @@ export function PlotDirectionPanel() {
   const load = useCallback(() => {
     if (!currentProject) return;
     const segs = loadSegments(currentProject.id);
+    // ★ 诊断：记录 pid、segment 数量、localStorage 命中情况
+    const segKey = sk(currentProject.id);
+    const segInLocal = localStorage.getItem(segKey) !== null;
+    reportDiagnostic("warn", "[剧情走向] load 触发", {
+      pid: currentProject.id?.slice(0, 8),
+      segs: segs.length,
+      segInLocal,
+      firstSeg: segs[0] ? { id: segs[0].id?.slice(0, 8), type: segs[0].type, title: segs[0].title } : null,
+    });
     const savedPos = loadPositions(currentProject.id);
     // 按明暗配对计算默认位置：第 N 个明线和第 N 个暗线共享同一 X
     const brightOrder: string[] = [];
