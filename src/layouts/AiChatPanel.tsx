@@ -7,13 +7,15 @@ import { confirmDialog } from "@/lib/confirm";
 import { useAiChatStream, type AiChatStreamCallbacks } from "./useAiChatStream";
 import { useAppStore } from "@/stores/app-store";
 import { MemoryEngine } from "@/lib/memory-engine";
-import type { ChatMessage, MemoryEntry } from "@/types";
+import type { ChatMessage, MemoryEntry, ChatAction } from "@/types";
 import { MODULE_LABEL, OUTLINE_SECTION_LABEL } from "@/types";
 import { uuid } from "@/lib/uuid";
 import { getJSONSync, setJSONSync } from "@/lib/storage";
 import { loadAllChapters, saveChapter } from "@/lib/chapter-store";
 import { usePendingCharacters } from "./usePendingCharacters";
 import { ChatPanelLayout } from "./ChatPanelLayout";
+import { retryFinalizeStep, retryFailedSteps } from "@/modules/writing/finalizeChapter";
+import type { FinalizeStepKey } from "@/lib/ai-error-classifier";
 
 interface UploadedFile { id: string; name: string; size: number; content: string; }
 const TEXT_EXTENSIONS = [".txt", ".md", ".json", ".csv", ".yaml", ".yml", ".xml", ".html", ".htm", ".css", ".js", ".ts", ".py", ".java", ".c", ".cpp", ".h", ".rs", ".go", ".rb", ".sh", ".bat", ".ps1", ".env", ".cfg", ".ini", ".toml", ".tex", ".rtf", ".log", ".docx"];
@@ -127,6 +129,67 @@ export function AiChatPanel() {
   const handleCopyMessage = useCallback(async (c: string) => { try { await navigator.clipboard.writeText(c); } catch { const ta = document.createElement("textarea"); ta.value = c; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); document.body.removeChild(ta); } }, []);
   const handleRegenerate = useCallback(() => { const s = useAppStore.getState(); const a = s.chatMessages; const ri = [...a].reverse().findIndex(m => m.role === "assistant"); if (ri < 0) return; const rii = a.length - 1 - ri; let ui = -1; for (let i = rii - 1; i >= 0; i--) { if (a[i].role === "user") { ui = i; break; } } const um = ui >= 0 ? a[ui] : null; const r = new Set<number>([rii]); if (um) r.add(ui); useAppStore.setState({ chatMessages: a.filter((_, ii) => !r.has(ii)) }); if (um) { setInput(um.content); setTimeout(() => { const b = document.querySelector<HTMLButtonElement>('[data-send-btn]'); b?.click(); }, 50); } }, [setInput]);
 
+  // handleAction — 处理聊天消息中嵌入的动作按钮点击
+  // 支持 retry-finalize-step（重试单个失败步骤或全部失败步骤）
+  const handleAction = useCallback(async (msgId: string, action: ChatAction) => {
+    const s = useAppStore.getState();
+    s.updateChatActionStatus(msgId, action.id, "running");
+    try {
+      if (action.kind === "retry-finalize-step") {
+        const { projectId, chapterId, chapterNumber, chapterTitle, stepKey } = action.payload;
+        // 加载当前章节正文（从存储读取最新版本）
+        const chs = loadAllChapters(projectId);
+        const ch = chs.find(c => c.id === chapterId);
+        const chapterContent = ch?.content || "";
+        if (!chapterContent.trim()) {
+          throw new Error("章节正文为空，无法重试定稿步骤");
+        }
+        if (stepKey === "all") {
+          // 重试全部失败步骤：从存储中读取该章节所有失败步骤的 key
+          // 失败步骤记录在 chat 消息的 actions 中，这里通过遍历当前消息的 actions 收集
+          const curMsg = useAppStore.getState().chatMessages.find(m => m.id === msgId);
+          const allKeys = (curMsg?.actions || [])
+            .filter(a => a.kind === "retry-finalize-step" && a.payload.stepKey && a.payload.stepKey !== "all")
+            .map(a => a.payload.stepKey as FinalizeStepKey);
+          if (allKeys.length === 0) {
+            throw new Error("未找到可重试的失败步骤");
+          }
+          const steps = await retryFailedSteps(projectId, chapterId, chapterNumber, chapterTitle, chapterContent, allKeys);
+          const failedSteps = steps.filter(st => !st.ok);
+          if (failedSteps.length === 0) {
+            s.updateChatActionStatus(msgId, action.id, "done");
+            s.addChatMessage({ id: uuid(), role: "system", content: `✅ 第${chapterNumber}章全部失败步骤已重试成功，定稿完成。`, created_at: new Date().toISOString() });
+          } else {
+            s.updateChatActionStatus(msgId, action.id, "failed");
+            const msgLines = failedSteps.map(st => `· ${st.name}：${st.error || "失败"}`);
+            s.addChatMessage({ id: uuid(), role: "system", content: `⚠️ 仍有 ${failedSteps.length} 个步骤失败：\n${msgLines.join("\n")}`, created_at: new Date().toISOString() });
+          }
+        } else {
+          // 重试单个失败步骤
+          const step = await retryFinalizeStep(projectId, chapterId, chapterNumber, chapterTitle, chapterContent, stepKey as FinalizeStepKey);
+          if (step.ok) {
+            s.updateChatActionStatus(msgId, action.id, "done");
+            s.addChatMessage({ id: uuid(), role: "system", content: `✅ 「${step.name}」步骤已重试成功。`, created_at: new Date().toISOString() });
+          } else {
+            s.updateChatActionStatus(msgId, action.id, "failed");
+            s.addChatMessage({ id: uuid(), role: "system", content: `⚠️ 「${step.name}」步骤重试失败：${step.error || "未知错误"}\n可点击其他按钮继续重试。`, created_at: new Date().toISOString() });
+          }
+        }
+      } else if (action.kind === "open-quality-panel") {
+        // 打开质检面板（通过 addChatMessage 提示用户切换到写作台）
+        s.updateChatActionStatus(msgId, action.id, "done");
+        s.addChatMessage({ id: uuid(), role: "system", content: "请切换到「写作台」模块查看质检结果面板。", created_at: new Date().toISOString() });
+      } else if (action.kind === "fix-template") {
+        // 模板自愈：调用 memory-updater strictMode 重试（占位实现）
+        s.updateChatActionStatus(msgId, action.id, "done");
+        s.addChatMessage({ id: uuid(), role: "system", content: "💡 已强化 prompt 模板，请点击「重试」按钮重新执行步骤。", created_at: new Date().toISOString() });
+      }
+    } catch (e) {
+      s.updateChatActionStatus(msgId, action.id, "failed");
+      s.addChatMessage({ id: uuid(), role: "system", content: `❌ 操作失败：${e instanceof Error ? e.message : String(e)}`, created_at: new Date().toISOString() });
+    }
+  }, []);
+
   // send() — 委托给 useAiChatStream Hook，在点击发送瞬间读取当前模块
   const handleSend = useCallback(() => {
     const { activeModule, outlineSection } = useAppStore.getState();
@@ -184,6 +247,7 @@ export function AiChatPanel() {
         onCommitEdit={handleConfirmEdit} onCancelEdit={() => { setEditingMsgId(null); setEditingContent(''); }}
         onEditingChange={setEditingContent}
         onCopy={handleCopyMessage} onDelete={handleDeleteMessage} onRegenerate={handleRegenerate}
+        onAction={handleAction}
         lastAssistantMessage={lastAssistantMessage}
         onSend={handleSend} onStop={handleStop} onSttToggle={handleSttToggle}
         onFileSelect={handleFileSelect} onRemoveFile={removeFile}

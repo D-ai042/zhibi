@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { BookMarked, Save, Shield, Palette, FileText, Sparkles, MessageCircle } from "lucide-react";
 import { useAppStore } from "@/stores/app-store";
 import { api } from "@/lib/api";
@@ -12,6 +12,12 @@ type TabId = "style" | "rules" | "voices" | "summary";
 export function StoryBibleModule() {
     const { currentProject } = useAppStore();
     const [activeTab, setActiveTab] = useState<TabId>("style");
+    // ★ Tab keep-alive：访问过的 tab 常驻 DOM，切换 tab 时不卸载 Editor，
+    // 避免每次切回都重新跑 useEffect 加载 IPC（内容丢失的根因）。
+    const [visitedTabs, setVisitedTabs] = useState<Set<TabId>>(() => new Set([activeTab]));
+    useEffect(() => {
+        setVisitedTabs(prev => prev.has(activeTab) ? prev : new Set([...prev, activeTab]));
+    }, [activeTab]);
     if (!currentProject) return <div className="flex h-full items-center justify-center text-sm text-slate-400">请先打开一个作品</div>;
     return (
         <div className="flex h-full flex-col bg-slate-50">
@@ -28,10 +34,26 @@ export function StoryBibleModule() {
                 <TabButton active={activeTab === "summary"} icon={<FileText className="h-4 w-4" />} label="上下文编辑器" onClick={() => setActiveTab("summary")} />
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto p-4">
-                {activeTab === "style" && <StyleGuideEditor projectId={currentProject.id} />}
-                {activeTab === "rules" && <BibleRulesEditor projectId={currentProject.id} />}
-                {activeTab === "voices" && <CharacterVoiceEditor projectId={currentProject.id} />}
-                {activeTab === "summary" && <ContextEditor projectId={currentProject.id} />}
+                {visitedTabs.has("style") && (
+                    <div className={activeTab === "style" ? "" : "hidden"}>
+                        <StyleGuideEditor projectId={currentProject.id} />
+                    </div>
+                )}
+                {visitedTabs.has("rules") && (
+                    <div className={activeTab === "rules" ? "" : "hidden"}>
+                        <BibleRulesEditor projectId={currentProject.id} />
+                    </div>
+                )}
+                {visitedTabs.has("voices") && (
+                    <div className={activeTab === "voices" ? "" : "hidden"}>
+                        <CharacterVoiceEditor projectId={currentProject.id} />
+                    </div>
+                )}
+                {visitedTabs.has("summary") && (
+                    <div className={activeTab === "summary" ? "" : "hidden"}>
+                        <ContextEditor projectId={currentProject.id} />
+                    </div>
+                )}
             </div>
         </div>
     );
@@ -88,7 +110,8 @@ function StyleGuideEditor({ projectId }: { projectId: string }) {
     const [extracting, setExtracting] = useState(false);
     const [selectedChapterForExtract, setSelectedChapterForExtract] = useState("");
 
-    const extractableChapters = getVolumeGroupedChapterOptions(projectId);
+    // ★ useMemo 包裹：避免每次 render（输入框敲字）都触发 loadAllChapters 的 N+2 次同步读 + N 次 JSON.parse
+    const extractableChapters = useMemo(() => getVolumeGroupedChapterOptions(projectId), [projectId]);
 
     useEffect(() => {
         try {
@@ -373,7 +396,8 @@ function CharacterVoiceEditor({ projectId }: { projectId: string }) {
     const [newVoice, setNewVoice] = useState("");
     const [selectedChapter, setSelectedChapter] = useState("");
 
-    const extractableChapters = getVolumeGroupedChapterOptions(projectId);
+    // ★ useMemo 包裹：避免每次 render（输入框敲字）都触发 loadAllChapters 的 N+2 次同步读 + N 次 JSON.parse
+    const extractableChapters = useMemo(() => getVolumeGroupedChapterOptions(projectId), [projectId]);
 
     useEffect(() => {
         try { const p = getJSONSync(`novel-workbench-voices-${projectId}`, null); if (p) setEntries(Array.isArray(p) ? p : [{ char: "默认", voice: p }]); } catch { setEntries([]); }

@@ -1,4 +1,5 @@
 // ChapterTree.tsx — 章节树组件（T6 拆分，JSX 原样从 WritingModule 提取）
+import { memo } from "react";
 import { Plus, FileText, Trash2 } from "lucide-react";
 import { confirmDialog } from "@/lib/confirm";
 
@@ -33,7 +34,7 @@ interface ChapterTreeProps {
     onAddChapter: (volId: string) => void;
 }
 
-export function ChapterTree(props: ChapterTreeProps) {
+export const ChapterTree = memo(function ChapterTree(props: ChapterTreeProps) {
     const {
         sidebarWidth, selectMode, storeSelIds, selIdSet, volumes, chapters,
         selectedChapterId, volCollapsed, showAddDlg, newChapterTitle,
@@ -183,4 +184,4 @@ export function ChapterTree(props: ChapterTreeProps) {
             </aside>
         </>
     );
-}
+});

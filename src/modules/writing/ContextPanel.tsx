@@ -1,4 +1,5 @@
 // ContextPanel.tsx — 上下文预览面板（T6 拆分，JSX 原样提取）
+import { memo } from "react";
 import type { ChapterSummary, BeatCard } from "@/types";
 
 const colLabel: Record<string, string> = {
@@ -18,7 +19,7 @@ export interface ContextPanelProps {
     styleTone: string;
 }
 
-export function ContextPanel({
+export const ContextPanel = memo(function ContextPanel({
     collapsed, onToggle,
     summaries, beatCards, characters,
     prevContent, worldRules,
@@ -133,4 +134,4 @@ export function ContextPanel({
             )}
         </aside>
     );
-}
+});

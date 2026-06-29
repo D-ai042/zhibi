@@ -16,7 +16,10 @@ import { ChapterTree } from "./ChapterTree";
 import { ChapterEditor } from "./ChapterEditor";
 import { ContextPanel } from "./ContextPanel";
 import { useAiWriting } from "./useAiWriting";
-import { finalizeChapter } from "./finalizeChapter";
+import { finalizeChapter, type FinalizeResult } from "./finalizeChapter";
+import { getStoredQualityCheck } from "@/lib/quality-checker";
+import { classifyAiError, getFixSuggestion } from "@/lib/ai-error-classifier";
+import type { ChatAction } from "@/types";
 
 interface PlotSegment { id: string; project_id: string; type: "bright" | "dark"; title: string; characters: string; location: string; time: string; event: string; }
 
@@ -47,10 +50,12 @@ export function WritingModule() {
     const [rebaseProgress, setRebaseProgress] = useState<{ current: number; total: number } | null>(null);
     /** ★ 定稿中状态：防止重复点击定稿按钮 */
     const [finalizing, setFinalizing] = useState(false);
-    const selIdSet = new Set(storeSelIds);
+    // ★ useMemo：避免每次 render 都重建 Set（storeSelIds 不变时复用）
+    const selIdSet = useMemo(() => new Set(storeSelIds), [storeSelIds]);
     const [volCollapsed, setVolCollapsed] = useState<Record<string, boolean>>({});
     const editorRef = useRef<HTMLDivElement>(null);
-    const [fontSize, setFontSize] = useState<number>(getJSONSync("editor-font-size", 16));
+    // ★ useState 惰性初始化：避免每次 render 都求值 getJSONSync（只有首次 mount 使用结果）
+    const [fontSize, setFontSize] = useState<number>(() => getJSONSync("editor-font-size", 16));
     const insertLockRef = useRef(false);
     const _ignoreNextInput = useRef(false);
     const editingContentRef = useRef(editingContent); editingContentRef.current = editingContent;
@@ -200,10 +205,13 @@ export function WritingModule() {
     }, [pid]);
 
     const _skipNextChapterEffect = useRef(false);
+    // ★ chapters ref：让切章节 effect 只依赖 selectedChapterId，避免 chapters 数组引用变化（重命名/删除任意章节）
+    // 触发 effect 重跑导致当前章未保存正文被覆盖丢失 + 5 次冗余 IPC。
+    const chaptersRef = useRef(chapters); chaptersRef.current = chapters;
     useEffect(() => {
         if (_skipNextChapterEffect.current) { _skipNextChapterEffect.current = false; return; }
-        if (selectedChapterId && pid) { const ch = chapters.find(c => c.id === selectedChapterId); if (ch) { const indent = "\u3000\u3000"; const raw = ch.content ?? ""; const content = raw.length === 0 ? indent : raw.startsWith(indent) ? raw : indent + raw; setEditingContent(content); savedContentRef.current = content; setIsDirty(false); setSelectionRange(null); const stale = detectStaleAhead(pid, ch.number); setStaleInfo(stale.count > 0 ? stale : null); setTimeout(() => syncEditorHTML(content), 0); loadCtx(pid, ch.number, selectedChapterId, chapters); } }
-    }, [selectedChapterId, chapters]);
+        if (selectedChapterId && pid) { const ch = chaptersRef.current.find(c => c.id === selectedChapterId); if (ch) { const indent = "\u3000\u3000"; const raw = ch.content ?? ""; const content = raw.length === 0 ? indent : raw.startsWith(indent) ? raw : indent + raw; setEditingContent(content); savedContentRef.current = content; setIsDirty(false); setSelectionRange(null); const stale = detectStaleAhead(pid, ch.number); setStaleInfo(stale.count > 0 ? stale : null); setTimeout(() => syncEditorHTML(content), 0); loadCtx(pid, ch.number, selectedChapterId, chaptersRef.current); } }
+    }, [selectedChapterId, pid]);
 
     const [ctxSummaries, setCtxSummaries] = useState<ChapterSummary[]>([]);
     const [ctxBeatCards, setCtxBeatCards] = useState<BeatCard[]>([]);
@@ -268,15 +276,104 @@ export function WritingModule() {
 
     const handleFinalize = useCallback(async () => {
         if (!pid || !selectedChapter || !selectedChapterId || finalizing) return;
+        // ★ 质检前置拦截：未质检 / 已 stale / 有 error 时阻止定稿
+        const stored = getStoredQualityCheck(pid, selectedChapter.number);
+        if (!stored) {
+            useAppStore.getState().addChatMessage({
+                id: uuid(), role: "system",
+                content: "⚠️ 请先执行质检，质检通过后再定稿。点击编辑器「执行质检」按钮。",
+                created_at: new Date().toISOString(),
+            });
+            return;
+        }
+        const errs = (stored.checks || []).filter(c => c.severity === "error").length;
+        if (errs > 0) {
+            useAppStore.getState().addChatMessage({
+                id: uuid(), role: "system",
+                content: `⚠️ 质检有 ${errs} 个错误未解决，请先修复错误或忽略误判后再定稿。`,
+                created_at: new Date().toISOString(),
+            });
+            return;
+        }
         setFinalizing(true);
         try {
             saveContent();
-            const result = await finalizeChapter(pid, selectedChapterId, selectedChapter.number, selectedChapter.title, editingContent);
-            if (!result.ok) { const failedSteps = result.steps.filter(s => !s.ok); const msg = failedSteps.map(s => `· ${s.name}：${s.error || "失败"}`).join("\n"); useAppStore.getState().addChatMessage({ id: uuid(), role: "system", content: `⚠️ 定稿部分步骤失败：\n${msg}`, created_at: new Date().toISOString() }); }
+            const result: FinalizeResult = await finalizeChapter(pid, selectedChapterId, selectedChapter.number, selectedChapter.title, editingContent);
+            if (!result.ok) {
+                const failedSteps = result.steps.filter(s => !s.ok);
+                const msgLines = failedSteps.map(s => `· ${s.name}：${s.error || "失败"}`);
+                // 为每个失败步骤生成 ChatAction 修复按钮
+                const actions: ChatAction[] = failedSteps.map(s => ({
+                    id: uuid(),
+                    label: `重试「${s.name}」`,
+                    kind: "retry-finalize-step" as const,
+                    payload: {
+                        projectId: pid,
+                        chapterId: selectedChapterId,
+                        chapterNumber: selectedChapter.number,
+                        chapterTitle: selectedChapter.title,
+                        stepKey: s.key,
+                        errorType: classifyAiError(s.error),
+                    },
+                    status: "pending" as const,
+                }));
+                // 附加"全部重试"动作
+                if (failedSteps.length > 1) {
+                    actions.push({
+                        id: uuid(),
+                        label: "全部重试",
+                        kind: "retry-finalize-step",
+                        payload: {
+                            projectId: pid,
+                            chapterId: selectedChapterId,
+                            chapterNumber: selectedChapter.number,
+                            chapterTitle: selectedChapter.title,
+                            stepKey: "all",
+                        },
+                        status: "pending",
+                    });
+                }
+                useAppStore.getState().addChatMessage({
+                    id: uuid(), role: "system",
+                    content: `⚠️ 定稿部分步骤失败：\n${msgLines.join("\n")}\n\n点击下方按钮重试对应步骤，或选择「全部重试」：`,
+                    created_at: new Date().toISOString(),
+                    actions,
+                });
+                // 对 format 类错误附修复建议
+                for (const s of failedSteps) {
+                    const et = classifyAiError(s.error);
+                    const sug = getFixSuggestion(et);
+                    if (sug && sug.autoFixable) {
+                        useAppStore.getState().addChatMessage({
+                            id: uuid(), role: "system",
+                            content: `💡 ${s.name}：${sug.description}`,
+                            created_at: new Date().toISOString(),
+                        });
+                    }
+                }
+            } else {
+                useAppStore.getState().addChatMessage({
+                    id: uuid(), role: "system",
+                    content: `✅ 第${selectedChapter.number}章定稿完成。`,
+                    created_at: new Date().toISOString(),
+                });
+            }
         } finally {
             setFinalizing(false);
         }
     }, [pid, selectedChapter, selectedChapterId, editingContent, saveContent, finalizing]);
+
+    // ★ ChapterTree/ContextPanel 的 props 回调用 useCallback 包裹，配合 memo 避免每按键重渲染。
+    // 注意：依赖 chapters/storeSelIds 的回调在这些值变化时仍会重建，但 editingContent 变化时不会重建。
+    const onResizeStartCb = useCallback((e: React.MouseEvent) => { e.preventDefault(); resizeStartRef.current = { startX: e.clientX, startW: sidebarWidthRef.current }; resizingRef.current = true; document.body.style.cursor = 'col-resize'; document.body.style.userSelect = 'none'; }, []);
+    const onCancelSelectCb = useCallback(() => { setChapterSelectMode(false); storeSetSelIds([]); }, [setChapterSelectMode, storeSetSelIds]);
+    const onVolCollapseToggleCb = useCallback((colKey: string) => setVolCollapsed(p => ({ ...p, [colKey]: !(p[colKey]) })), []);
+    const onShowAddDlgCb = useCallback((volId: string | null) => { setShowAddDlg(volId); if (volId) setNewChapterTitle(""); }, []);
+    const onSelectAllInVolumeCb = useCallback((vid: string, allSel: boolean) => { const vc = chaptersRef.current.filter(c => c.volumeSegmentId === vid); const cur = new Set(storeSelIds); if (allSel) vc.forEach(c => cur.delete(c.id)); else vc.forEach(c => cur.add(c.id)); storeSetSelIds(Array.from(cur)); }, [storeSelIds, storeSetSelIds]);
+    const onSelectToggleCb = useCallback((chId: string) => { const cur = new Set(storeSelIds); if (cur.has(chId)) cur.delete(chId); else cur.add(chId); storeSetSelIds(Array.from(cur)); }, [storeSelIds, storeSetSelIds]);
+    const onStartRenameCb = useCallback((chId: string, title: string) => { setRenameText(title); setRenamingId(chId); }, []);
+    const onCommitRenameCb = useCallback((chId: string) => { renameChapter(chId, renameText); setRenamingId(null); }, [renameChapter, renameText]);
+    const onCancelRenameCb = useCallback(() => setRenamingId(null), []);
 
     return (
         <div className="flex h-full">
@@ -285,15 +382,15 @@ export function WritingModule() {
                 volumes={volumes} chapters={chapters} selectedChapterId={selectedChapterId}
                 volCollapsed={volCollapsed} showAddDlg={showAddDlg} newChapterTitle={newChapterTitle}
                 renameText={renameText} renamingId={renamingId} nextChapterNumber={nextChapterNumber}
-                onResizeStart={e => { e.preventDefault(); resizeStartRef.current = { startX: e.clientX, startW: sidebarWidth }; resizingRef.current = true; document.body.style.cursor = 'col-resize'; document.body.style.userSelect = 'none'; }}
-                onReadToAI={handleReadToAI} onCancelSelect={() => { setChapterSelectMode(false); storeSetSelIds([]); }}
-                onVolCollapseToggle={(colKey) => setVolCollapsed(p => ({ ...p, [colKey]: !(p[colKey]) }))}
-                onShowAddDlg={(volId) => { setShowAddDlg(volId); if (volId) setNewChapterTitle(""); }}
+                onResizeStart={onResizeStartCb}
+                onReadToAI={handleReadToAI} onCancelSelect={onCancelSelectCb}
+                onVolCollapseToggle={onVolCollapseToggleCb}
+                onShowAddDlg={onShowAddDlgCb}
                 onNewChapterTitleChange={setNewChapterTitle} onChapterSelect={setSelectedChapterId}
-                onSelectAllInVolume={(vid, allSel) => { const vc = chapters.filter(c => c.volumeSegmentId === vid); const cur = new Set(storeSelIds); if (allSel) vc.forEach(c => cur.delete(c.id)); else vc.forEach(c => cur.add(c.id)); storeSetSelIds(Array.from(cur)); }}
-                onSelectToggle={(chId) => { const cur = new Set(storeSelIds); if (cur.has(chId)) cur.delete(chId); else cur.add(chId); storeSetSelIds(Array.from(cur)); }}
-                onStartRename={(chId, title) => { setRenameText(title); setRenamingId(chId); }} onRenameTextChange={setRenameText}
-                onCommitRename={(chId) => { renameChapter(chId, renameText); setRenamingId(null); }} onCancelRename={() => setRenamingId(null)}
+                onSelectAllInVolume={onSelectAllInVolumeCb}
+                onSelectToggle={onSelectToggleCb}
+                onStartRename={onStartRenameCb} onRenameTextChange={setRenameText}
+                onCommitRename={onCommitRenameCb} onCancelRename={onCancelRenameCb}
                 onDeleteChapter={deleteChapter} onAddChapter={addChapter}
             />
             {selectedChapter && (

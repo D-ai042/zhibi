@@ -72,6 +72,8 @@ export interface AppStore {
     persistChat: () => void; loadChat: (projectId: string) => void;
     addChatMessage: (m: ChatMessage) => void; appendChatMessages: (msgs: ChatMessage[]) => void;
     clearChat: () => void;
+    /** 更新聊天消息中嵌入动作按钮的状态（用于失败步骤修复按钮的 running/done/failed 切换） */
+    updateChatActionStatus: (msgId: string, actionId: string, status: "pending" | "running" | "done" | "failed") => void;
     setDeepseekStatus: (s: "ok" | "offline" | "error" | "unknown") => void;
     setApiConfig: (c: ApiConfig) => void;
     // ---- misc (kept in app-store.ts) ----

@@ -48,6 +48,11 @@ export interface MemoryUpdateInput {
     chapterTitle: string;
     chapterContent: string;
     characters: string[];
+    /**
+     * 严格模式：true 时强化 prompt 模板，要求 AI 严格按格式输出。
+     * 用于模板自愈场景——当普通模式因格式错误失败时，自动重试使用 strictMode。
+     */
+    strictMode?: boolean;
 }
 
 export interface MemoryUpdateResult {
@@ -144,7 +149,8 @@ ${chapterContent.slice(0, 3000)}\n...\n${chapterContent.slice(-3000)}
 }
 
 async function analyzeChapterViaAI(
-    projectId: string, chapterNumber: number, chapterTitle: string, chapterContent: string
+    projectId: string, chapterNumber: number, chapterTitle: string, chapterContent: string,
+    strictMode: boolean = false
 ): Promise<AiChapterAnalysis> {
     // 收集上下文
     let knownCharacters = "";
@@ -175,10 +181,19 @@ async function analyzeChapterViaAI(
         knownCharacters, knownStorylines, prevSummary
     );
 
+    // strictMode 强化 system_hint：明确要求格式标记必须存在
+    const systemHint = strictMode
+        ? "【严格模式】你是一个严谨的文学分析助手。必须严格按以下格式输出，禁止任何额外文字：\n"
+            + "首先输出标记 ---CHAPTER_ANALYSIS---，然后输出 JSON 对象，最后输出 ---END_CHAPTER_ANALYSIS---。\n"
+            + "JSON 字段必须完整：summary, key_characters, key_locations, advanced_storylines, "
+            + "planted_foreshadow, character_states, storyline_progress, character_snapshots。\n"
+            + "若某字段无数据，输出空数组 [] 或空字符串 \"\"。禁止省略标记或字段。"
+        : "你是一个严谨的文学分析助手。只输出指定 JSON 格式，不要额外文字。";
+
     const res = await api.aiComplete({
         action: "chat", entity_type: "chapter", entity_id: projectId,
         extra: {
-            system_hint: "你是一个严谨的文学分析助手。只输出指定 JSON 格式，不要额外文字。",
+            system_hint: systemHint,
             user_message: prompt, history: [], context: "",
         },
     });
@@ -189,7 +204,10 @@ async function analyzeChapterViaAI(
 
     const m = res.content.match(/---CHAPTER_ANALYSIS---\s*([\s\S]*?)\s*---END_CHAPTER_ANALYSIS---/);
     if (!m) {
-        throw new Error("AI 未按指定格式输出分析结果，请重试");
+        // strictMode 下仍失败：抛出更明确的格式错误便于上层分类
+        throw new Error(strictMode
+            ? "AI 未按严格模式格式输出（缺少 ---CHAPTER_ANALYSIS--- / ---END_CHAPTER_ANALYSIS--- 标记）"
+            : "AI 未按指定格式输出分析结果，请重试");
     }
 
     try {
@@ -214,13 +232,13 @@ async function analyzeChapterViaAI(
 export async function updateMemory(
     input: MemoryUpdateInput
 ): Promise<MemoryUpdateResult> {
-    const { projectId, chapterNumber, chapterTitle, chapterContent } = input;
+    const { projectId, chapterNumber, chapterTitle, chapterContent, strictMode } = input;
 
-    // 内容哈希检测 — 上次分析后内容没变则跳过
+    // 内容哈希检测 — 上次分析后内容没变则跳过（strictMode 下强制重分析以支持自愈重试）
     const contentHash = simpleHash(chapterContent);
     const lastHashKey = `chapter-hash-${projectId}-${chapterNumber}`;
     const lastHash = getJSONSync(lastHashKey, "");
-    if (lastHash === contentHash) {
+    if (!strictMode && lastHash === contentHash) {
         return {
             summary: "（内容未变更，跳过分析）",
             characterChanges: [], storylineProgress: [],
@@ -228,8 +246,8 @@ export async function updateMemory(
         };
     }
 
-    // AI 分析本章
-    const analysis = await analyzeChapterViaAI(projectId, chapterNumber, chapterTitle, chapterContent);
+    // AI 分析本章（strictMode 透传给 analyzeChapterViaAI 强化 prompt）
+    const analysis = await analyzeChapterViaAI(projectId, chapterNumber, chapterTitle, chapterContent, strictMode);
 
     // 保存 contentHash
     setJSONSync(lastHashKey, contentHash);

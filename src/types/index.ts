@@ -217,6 +217,26 @@ export interface ChatMessage {
   tags?: string[];
   /** 思考过程（DeepSeek reasoning_content） */
   thinking?: string;
+  /** 结构化动作按钮（用于失败步骤修复等） */
+  actions?: ChatAction[];
+}
+
+/** 聊天消息中嵌入的动作按钮 */
+export interface ChatAction {
+  id: string;
+  label: string;
+  kind: "retry-finalize-step" | "open-quality-panel" | "fix-template";
+  payload: {
+    projectId: string;
+    chapterId: string;
+    chapterNumber: number;
+    chapterTitle: string;
+    /** 失败步骤 key；"all" 表示重试全部失败步骤 */
+    stepKey?: string;
+    errorType?: string;
+  };
+  /** 状态：pending(可点击) | running(执行中) | done(完成) | failed(失败) */
+  status?: "pending" | "running" | "done" | "failed";
 }
 
 /** 短期记忆条目（对话摘要压缩） */

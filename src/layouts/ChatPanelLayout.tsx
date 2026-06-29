@@ -3,7 +3,7 @@ import { useEffect } from "react";
 import { Sparkles, FileText, Trash2, Square, Mic, MicOff, Paperclip, Send, X } from "lucide-react";
 import { renderMarkdown } from "@/lib/markdown";
 import { confirmDialog } from "@/lib/confirm";
-import type { ChatMessage, MemoryEntry, WorldTerm } from "@/types";
+import type { ChatMessage, ChatAction, MemoryEntry, WorldTerm } from "@/types";
 import { ChatMessageBubble } from "./ChatMessageBubble";
 import { CharacterApplyButton } from "./CharacterApplyButton";
 import type { PendingState } from "./usePendingCharacters";
@@ -48,6 +48,8 @@ interface ChatPanelLayoutProps {
     onCopy: (c: string) => void;
     onDelete: (id: string) => void;
     onRegenerate: () => void;
+    /** 处理消息中嵌入的动作按钮点击（用于失败步骤修复等） */
+    onAction?: (msgId: string, action: ChatAction) => void;
     lastAssistantMessage: () => ChatMessage | null;
     onSend: () => void;
     onStop: () => void;
@@ -74,7 +76,7 @@ export function ChatPanelLayout(props: ChatPanelLayoutProps) {
         setPendingTerms, setPendingEdges, setPendingChars, setPendingCharEdges, setPendingRemoveEdges, setPendingSnapshots,
         chatContainerRef, bottomRef, fileInputRef, stt, sttLoading, contextHint,
         onClearChat, onToggleMemory, onStartEdit, onCommitEdit, onCancelEdit, onEditingChange,
-        onCopy, onDelete, onRegenerate,
+        onCopy, onDelete, onRegenerate, onAction,
         onSend, onStop, onSttToggle, onFileSelect, onRemoveFile,
         onInsertTerms, onInsertCharacters, onInsertPlot, onInsertChapters, onInsertText,
         onToggleChapterSelect, onRemoveLast, onSave,
@@ -97,7 +99,8 @@ export function ChatPanelLayout(props: ChatPanelLayoutProps) {
                     <ChatMessageBubble key={m.id} msg={m} isSystem={m.role === 'system'} editingMsgId={editingMsgId} editingContent={editingContent}
                         onStartEdit={(id, content) => { onStartEdit(id, content); }}
                         onCommitEdit={onCommitEdit} onCancelEdit={onCancelEdit}
-                        onEditingChange={onEditingChange} onCopy={onCopy} onDelete={onDelete} onRegenerate={onRegenerate} />
+                        onEditingChange={onEditingChange} onCopy={onCopy} onDelete={onDelete} onRegenerate={onRegenerate}
+                        onAction={onAction} />
                 ))}
                 {loading && (
                     <div className="flex justify-start"><div className="max-w-[92%]">

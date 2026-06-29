@@ -1,24 +1,18 @@
 // ChapterEditor.tsx — 正文编辑器组件（T6 拆分，JSX 原样从 WritingModule 提取）
-import { useEffect, useRef, useState } from "react";
-import { Plus, Minus, Sparkles, AlignLeft, Undo2, Redo2, CheckCircle, ShieldCheck, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Plus, Minus, Sparkles, AlignLeft, Undo2, Redo2, CheckCircle, ShieldCheck, X, RefreshCw } from "lucide-react";
 import { useAppStore } from "@/stores/app-store";
 import { getJSONSync, setJSONSync } from "@/lib/storage";
+import { runQualityCheckForChapter, simpleHash as computeContentHash, type StoredQualityCheck } from "@/lib/quality-checker";
 
 /** 质检条目类型（与 quality-checker.ts QualityCheckItem 保持一致；这里用结构类型避免循环依赖） */
 interface QualityCheckItem {
-    type: "bible" | "character" | "foreshadow" | "plot_logic";
+    type: "bible" | "character" | "foreshadow" | "plot_logic" | "timeline";
     severity: "pass" | "warning" | "error";
     message: string;
     detail: string;
     quote?: string;
     location?: string;
-}
-
-/** LogStore 中按章节号存储的质检结果 */
-interface StoredQualityCheck {
-    checkedAt: string;
-    passed: boolean;
-    checks: QualityCheckItem[];
 }
 
 /** 跳转目标（来自 app-store.qualityJumpTarget） */
@@ -95,6 +89,7 @@ const TYPE_LABEL: Record<QualityCheckItem["type"], string> = {
     character: "角色性格",
     foreshadow: "伏笔回收",
     plot_logic: "剧情逻辑",
+    timeline: "时间线",
 };
 
 const SEVERITY_STYLE: Record<QualityCheckItem["severity"], string> = {
@@ -125,14 +120,18 @@ export function ChapterEditor(props: ChapterEditorProps) {
     const [storedCheck, setStoredCheck] = useState<StoredQualityCheck | null>(null);
     /** 已忽略的质检项 key 集合（作者判断为误判） */
     const [dismissedKeys, setDismissedKeys] = useState<Set<string>>(new Set());
+    /** 质检进行中状态（独立质检按钮触发） */
+    const [checking, setChecking] = useState(false);
+    /** 质检错误信息（用于按钮旁提示） */
+    const [checkError, setCheckError] = useState<string>("");
     // 防止 editingContent 变化重复触发同一次 bump 跳转
     const lastJumpBumpRef = useRef(0);
     // 临时高亮的段落元素引用，便于移除 class
     const highlightedElRef = useRef<HTMLElement | null>(null);
     const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-    // 读取本章质检结果 + 已忽略项（章节切换/质检面板打开/定稿完成时刷新）
-    // ★ finalizing 作为依赖：定稿完成（true→false）时触发重新读取质检结果
+    // 读取本章质检结果 + 已忽略项（章节切换/质检面板打开/定稿完成/质检完成时刷新）
+    // ★ finalizing/checking 作为依赖：状态变化时触发重新读取质检结果
     useEffect(() => {
         if (!projectId || !selectedChapter) { setStoredCheck(null); setDismissedKeys(new Set()); return; }
         try {
@@ -147,7 +146,7 @@ export function ChapterEditor(props: ChapterEditorProps) {
             setStoredCheck(null);
             setDismissedKeys(new Set());
         }
-    }, [projectId, selectedChapter?.number, showQualityPanel, finalizing]);
+    }, [projectId, selectedChapter?.number, showQualityPanel, finalizing, checking]);
 
     // 清理高亮
     const clearHighlight = () => {
@@ -265,6 +264,51 @@ export function ChapterEditor(props: ChapterEditorProps) {
     const effectiveChecks = storedCheck?.checks.filter(c => !dismissedKeys.has(checkItemKey(c))) || [];
     const errorCount = effectiveChecks.filter(c => c.severity === "error").length;
     const warningCount = effectiveChecks.filter(c => c.severity === "warning").length;
+    // 当前正文哈希，与质检时的 contentHash 比对判断是否 stale
+    const currentContentHash = useMemo(() => computeContentHash(editingContent || ""), [editingContent]);
+    const isStale = hasQualityResult && storedCheck?.contentHash !== undefined && storedCheck.contentHash !== currentContentHash;
+
+    // 独立质检：触发 AI 质检并持久化结果
+    const handleRunCheck = async () => {
+        if (!projectId || !selectedChapter || checking || finalizing) return;
+        const content = editingContent || "";
+        if (!content.trim()) {
+            setCheckError("正文为空，无法质检");
+            return;
+        }
+        setChecking(true);
+        setCheckError("");
+        try {
+            const result = await runQualityCheckForChapter({
+                projectId,
+                chapterId: (selectedChapter as any)?.id || "",
+                chapterNumber: selectedChapter.number,
+                chapterContent: content,
+            });
+            // checking→false 会触发 useEffect 重新读取 storedCheck
+            const errs = result.checks.filter(c => c.severity === "error").length;
+            const warns = result.checks.filter(c => c.severity === "warning").length;
+            // 通知用户
+            useAppStore.getState().addChatMessage({
+                id: Math.random().toString(36).slice(2),
+                role: "system",
+                content: errs > 0
+                    ? `质检完成：${errs} 个错误、${warns} 个警告。点击编辑器「质检」按钮查看详情。`
+                    : warns > 0
+                        ? `质检完成：${warns} 个警告。点击编辑器「质检」按钮查看详情。`
+                        : "✅ 质检通过，可以定稿。",
+                created_at: new Date().toISOString(),
+            });
+            // 自动打开结果面板（首次质检或有错误时）
+            if (errs > 0 || warns > 0 || !hasQualityResult) {
+                setShowQualityPanel(true);
+            }
+        } catch (e) {
+            setCheckError(e instanceof Error ? e.message : String(e));
+        } finally {
+            setChecking(false);
+        }
+    };
 
     return (
         <div className="flex flex-1 flex-col min-w-0">
@@ -313,6 +357,16 @@ export function ChapterEditor(props: ChapterEditorProps) {
                         <Redo2 className="h-3.5 w-3.5" />
                     </button>
                     <button onClick={onSave} className={`rounded-lg px-3 py-1.5 text-xs text-white ${isDirty ? "bg-amber-500 hover:bg-amber-600" : "bg-slate-300 cursor-default"}`}>保存</button>
+                    {/* ★ 重新质检按钮（定稿按钮左侧）：触发 AI 质检，覆盖现有结果 */}
+                    <button type="button"
+                        onClick={handleRunCheck}
+                        disabled={!selectedChapter || checking || finalizing || !String(editingContent ?? '').trim()}
+                        className="flex items-center gap-1 rounded-lg px-3 py-1.5 text-xs text-white bg-violet-600 hover:bg-violet-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                        title={hasQualityResult ? "重新执行质检（覆盖现有结果）" : "执行质检"}
+                    >
+                        <RefreshCw className={`h-3.5 w-3.5 ${checking ? "animate-spin" : ""}`} />
+                        {checking ? "质检中..." : hasQualityResult ? "重新质检" : "执行质检"}
+                    </button>
                     <button type="button" onClick={onFinalize} disabled={finalizing}
                         className={`flex items-center gap-1 rounded-lg px-3 py-1.5 text-xs text-white ${finalizing ? "bg-emerald-400 cursor-wait" : "bg-emerald-600 hover:bg-emerald-700"}`}>
                         <CheckCircle className="h-3.5 w-3.5" />{finalizing ? "定稿中..." : "定稿"}
@@ -323,22 +377,43 @@ export function ChapterEditor(props: ChapterEditorProps) {
                     <button type="button" onClick={onAutoFormat} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50" title="自动排版段落缩进">
                         <AlignLeft className="h-3.5 w-3.5" />
                     </button>
-                    {/* ★ 质检按钮：常驻显示。未定稿（无质检结果）时灰色不可点；定稿后根据反馈显示颜色 */}
+                    {/* ★ 质检按钮：常驻显示。
+                        - 未质检：紫色，点击触发首次质检
+                        - 已质检全通过：绿色 + ✓
+                        - 已质检仅 warning：橙色 + {n}警
+                        - 已质检有 error：红色 + {n}错
+                        - 正文已修改（stale）：按钮加橙色圆点提示重检
+                        点击行为：已有结果时打开/关闭面板；无结果时触发首次质检 */}
                     <button type="button"
-                        onClick={() => { if (hasQualityResult) setShowQualityPanel(true); }}
-                        disabled={!hasQualityResult}
-                        className={`flex items-center gap-1 rounded-lg px-3 py-1.5 text-xs ${
-                            hasQualityResult
+                        onClick={() => {
+                            if (checking || finalizing) return;
+                            if (!hasQualityResult) {
+                                handleRunCheck();
+                            } else {
+                                setShowQualityPanel(!showQualityPanel);
+                            }
+                        }}
+                        disabled={checking || finalizing}
+                        className={`relative flex items-center gap-1 rounded-lg px-3 py-1.5 text-xs ${
+                            checking ? "bg-violet-400 cursor-wait text-white"
+                            : hasQualityResult
                                 ? `text-white ${errorCount > 0 ? "bg-red-600 hover:bg-red-700" : warningCount > 0 ? "bg-amber-500 hover:bg-amber-600" : "bg-emerald-600 hover:bg-emerald-700"}`
-                                : "text-slate-400 bg-slate-200 cursor-not-allowed"
+                                : "bg-violet-600 hover:bg-violet-700 text-white"
                         }`}
-                        title={hasQualityResult ? "查看质检结果并跳转修复" : "定稿后显示质检结果"}>
+                        title={
+                            checking ? "质检中..."
+                            : isStale ? "正文已修改，建议重新质检"
+                            : hasQualityResult ? "查看质检结果并跳转修复"
+                            : "执行质检"
+                        }>
                         <ShieldCheck className="h-3.5 w-3.5" />
                         质检
                         {hasQualityResult && errorCount > 0 && <span className="ml-1 rounded-full bg-white/30 px-1.5 text-[10px]">{errorCount}错</span>}
                         {hasQualityResult && errorCount === 0 && warningCount > 0 && <span className="ml-1 rounded-full bg-white/30 px-1.5 text-[10px]">{warningCount}警</span>}
                         {hasQualityResult && errorCount === 0 && warningCount === 0 && <span className="ml-1 rounded-full bg-white/30 px-1.5 text-[10px]">✓</span>}
+                        {isStale && !checking && <span className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-orange-500 ring-2 ring-white" title="正文已修改" />}
                     </button>
+                    {checkError && <span className="text-xs text-red-500 ml-1" title={checkError}>!</span>}
                     <div className="flex items-stretch rounded-lg border border-slate-200 overflow-hidden" title={`正文字体 ${fontSize}px`}>
                         <button type="button" onClick={() => onFontSizeChange(Math.max(fontSize - 1, 12))}
                             className="flex items-center justify-center px-1 py-1.5 text-xs text-slate-600 hover:bg-slate-100"><Minus className="h-3.5 w-3.5" /></button>
@@ -374,6 +449,15 @@ export function ChapterEditor(props: ChapterEditorProps) {
                                     <X className="h-4 w-4" />
                                 </button>
                             </div>
+                            {isStale && (
+                                <div className="flex items-center justify-between gap-2 border-b border-orange-200 bg-orange-50 px-4 py-1.5 text-xs text-orange-800">
+                                    <span>⚠️ 正文已修改，质检结果可能已过时</span>
+                                    <button type="button" onClick={handleRunCheck} disabled={checking || finalizing}
+                                        className="rounded bg-orange-600 px-2 py-0.5 text-[11px] text-white hover:bg-orange-700 disabled:opacity-40">
+                                        {checking ? "重检中..." : "重新质检"}
+                                    </button>
+                                </div>
+                            )}
                             <div className="space-y-2 p-3">
                                 {storedCheck.checks.map((c, i) => {
                                     const isDismissed = dismissedKeys.has(checkItemKey(c));

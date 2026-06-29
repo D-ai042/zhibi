@@ -1,7 +1,7 @@
-﻿// ChatMessageBubble.tsx — 聊天消息气泡组件（T7：从 AiChatPanel 提取）
-import { Copy, Edit3, RotateCcw, Trash2, X } from "lucide-react";
+// ChatMessageBubble.tsx — 聊天消息气泡组件（T7：从 AiChatPanel 提取）
+import { Copy, Edit3, RotateCcw, Trash2, X, RefreshCw } from "lucide-react";
 import { renderMarkdown } from "@/lib/markdown";
-import type { ChatMessage } from "@/types";
+import type { ChatMessage, ChatAction } from "@/types";
 
 interface Props {
   msg: ChatMessage;
@@ -15,17 +15,47 @@ interface Props {
   onCopy: (content: string) => void;
   onDelete: (id: string) => void;
   onRegenerate: () => void;
+  /** 点击消息中嵌入的动作按钮 */
+  onAction?: (msgId: string, action: ChatAction) => void;
 }
 
-export function ChatMessageBubble({ msg, isSystem, editingMsgId, editingContent, onStartEdit, onCancelEdit, onEditingChange, onCommitEdit, onCopy, onDelete, onRegenerate }: Props) {
+export function ChatMessageBubble({ msg, isSystem, editingMsgId, editingContent, onStartEdit, onCancelEdit, onEditingChange, onCommitEdit, onCopy, onDelete, onRegenerate, onAction }: Props) {
   const isEditing = editingMsgId === msg.id;
   const html = renderMarkdown(msg.content || "");
+  const hasActions = msg.actions && msg.actions.length > 0;
 
   if (isSystem) {
     return (
-      <div className="flex justify-center py-1">
+      <div className="flex flex-col items-center py-1">
         <div className="rounded-lg bg-slate-100 px-3 py-1.5 text-xs text-slate-500 max-w-[85%]"
           dangerouslySetInnerHTML={{ __html: html }} />
+        {hasActions && (
+          <div className="mt-1.5 flex flex-wrap items-center justify-center gap-1.5 max-w-[85%]">
+            {msg.actions!.map(a => {
+              const running = a.status === "running";
+              const done = a.status === "done";
+              const failed = a.status === "failed";
+              return (
+                <button key={a.id} type="button"
+                  disabled={running || done}
+                  onClick={() => onAction?.(msg.id, a)}
+                  className={`flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] transition-colors ${
+                    done ? "bg-emerald-100 text-emerald-700 cursor-default"
+                    : failed ? "bg-red-100 text-red-700 hover:bg-red-200"
+                    : running ? "bg-violet-100 text-violet-700 cursor-wait"
+                    : "bg-violet-600 text-white hover:bg-violet-700"
+                  }`}
+                  title={a.label}
+                >
+                  {running ? <RefreshCw className="h-3 w-3 animate-spin" />
+                    : done ? "✓"
+                    : <RefreshCw className="h-3 w-3" />}
+                  {a.label}
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
     );
   }

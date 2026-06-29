@@ -13,6 +13,8 @@ export interface WritingStateSlice {
   addChatMessage: (m: ChatMessage) => void;
   appendChatMessages: (msgs: ChatMessage[]) => void;
   clearChat: () => void;
+  /** 更新聊天消息中嵌入动作按钮的状态 */
+  updateChatActionStatus: (msgId: string, actionId: string, status: "pending" | "running" | "done" | "failed") => void;
   setDeepseekStatus: (s: "ok" | "offline" | "error" | "unknown") => void;
   setApiConfig: (c: ApiConfig) => void;
 }
@@ -90,4 +92,14 @@ export const createWritingStateSlice: StateCreator<AppStore, [], [], WritingStat
   addChatMessage: (m) => { set((s) => ({ chatMessages: [...s.chatMessages, m] })); setTimeout(() => get().persistChat(), 0); },
   appendChatMessages: (msgs2) => { set((s) => ({ chatMessages: [...s.chatMessages, ...msgs2] })); setTimeout(() => get().persistChat(), 0); },
   clearChat: () => { set({ chatMessages: [] }); setTimeout(() => get().persistChat(), 0); },
+  updateChatActionStatus: (msgId, actionId, status) => {
+    set((s) => ({
+      chatMessages: s.chatMessages.map(m =>
+        m.id === msgId
+          ? { ...m, actions: m.actions?.map(a => a.id === actionId ? { ...a, status } : a) }
+          : m
+      ),
+    }));
+    setTimeout(() => get().persistChat(), 0);
+  },
 });

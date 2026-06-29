@@ -1,4 +1,4 @@
-import { startTransition, useCallback, lazy, Suspense, type ReactNode } from "react";
+import { startTransition, useCallback, useEffect, lazy, Suspense, useState } from "react";
 import { AppShell } from "@/layouts/AppShell";
 import { SettingsModal } from "@/components/settings/SettingsModal";
 import { WelcomeScreen } from "@/components/welcome/WelcomeScreen";
@@ -55,33 +55,63 @@ class ErrorBoundary extends Component<{ children: React.ReactNode }, { hasError:
 
 function ModuleRouter() {
   const { activeModule, activeExtraId, customModules } = useAppStore();
-  let content: ReactNode;
 
-  if (activeModule === "overview") content = <OverviewModule />;
-  else if (activeModule === "outline") content = <OutlineModule />;
-  else if (activeModule === "beats" || activeModule === "writing") content = <WritingModule />;
-  else if (activeModule === "story-bible") content = <StoryBibleModule />;
-  else if (activeModule === "manuscript") content = <ManuscriptModule />;
-  else if (activeModule === "material") content = <MaterialModule />;
-  else if (activeModule === "tutorial") content = <TutorialModule />;
-  else if (activeModule === "custom") {
-    const mod = customModules.find((m) => m.id === activeExtraId);
-    if (mod) content = <CustomModuleRenderer mod={mod} />;
-  } else if (activeModule === "dynamic" && activeExtraId) {
-    content = <DynamicPageRenderer pageId={activeExtraId} />;
-  }
+  // ★ Keep-alive 路由：访问过的模块常驻 DOM，通过 `hidden` class 切换显示。
+  // 切换路由时组件不卸载，useState/useRef 全部保留，避免重挂载导致的 IPC 重加载和正文闪烁。
+  // 首次访问某个模块时才触发 React.lazy 加载其 chunk（保留代码分割）。
+  const [visited, setVisited] = useState<Set<string>>(() => new Set([activeModule]));
+  useEffect(() => {
+    setVisited((prev) => (prev.has(activeModule) ? prev : new Set([...prev, activeModule])));
+  }, [activeModule]);
 
-  if (!content) {
-    content = (
-      <div className="flex h-full items-center justify-center text-slate-400">
-        <div className="text-center">
-          <p className="text-sm">未找到该页面</p>
-          <p className="mt-1 text-xs">请在右侧 AI 对话中让 AI 创建一个新页面</p>
+  const show = (key: string) => (activeModule === key ? "h-full" : "hidden");
+
+  return (
+    <div className="h-full">
+      {visited.has("overview") && (
+        <div className={show("overview")}><OverviewModule /></div>
+      )}
+      {visited.has("outline") && (
+        <div className={show("outline")}><OutlineModule /></div>
+      )}
+      {(visited.has("beats") || visited.has("writing")) && (
+        <div className={activeModule === "beats" || activeModule === "writing" ? "h-full" : "hidden"}>
+          <WritingModule />
         </div>
-      </div>
-    );
-  }
-  return content;
+      )}
+      {visited.has("story-bible") && (
+        <div className={show("story-bible")}><StoryBibleModule /></div>
+      )}
+      {visited.has("manuscript") && (
+        <div className={show("manuscript")}><ManuscriptModule /></div>
+      )}
+      {visited.has("material") && (
+        <div className={show("material")}><MaterialModule /></div>
+      )}
+      {visited.has("tutorial") && (
+        <div className={show("tutorial")}><TutorialModule /></div>
+      )}
+
+      {/* 动态模块/自定义页面：实例数量动态，保留条件渲染（不走 keep-alive） */}
+      {activeModule === "custom" && (() => {
+        const mod = customModules.find((m) => m.id === activeExtraId);
+        return mod ? <CustomModuleRenderer mod={mod} /> : null;
+      })()}
+      {activeModule === "dynamic" && activeExtraId && (
+        <DynamicPageRenderer pageId={activeExtraId} />
+      )}
+
+      {/* 未找到页面兜底 */}
+      {!["overview", "outline", "beats", "writing", "story-bible", "manuscript", "material", "tutorial", "custom", "dynamic"].includes(activeModule) && (
+        <div className="flex h-full items-center justify-center text-slate-400">
+          <div className="text-center">
+            <p className="text-sm">未找到该页面</p>
+            <p className="mt-1 text-xs">请在右侧 AI 对话中让 AI 创建一个新页面</p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default function App() {
